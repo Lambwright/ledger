@@ -1,0 +1,18 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ledger-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "frontend", "run", "dev"],
+      "port": 5173
+    },
+    {
+      "name": "ledger-portfolio",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "portfolio", "run", "dev"],
+      "port": 5174,
+      "url": "http://localhost:5174"
+    }
+  ]
+}

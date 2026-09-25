@@ -1,0 +1,1356 @@
+/* LEDGER — visual language matched to PUNCH (the Einbau house style):
+   warm near-black ground, cream text, Oswald display / Inter body /
+   JetBrains Mono for numbers & labels, marigold accent, rust for danger,
+   4px radius everywhere. */
+
+:root {
+  color-scheme: dark;
+
+  --font-display: 'Oswald', 'Segoe UI', sans-serif;
+  --font-body: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', Menlo, monospace;
+
+  --bg: #1e1c1a;
+  --surface: #2a2724;
+  --surface-2: #26221d;
+  --border: #3a3733;
+  --border-soft: #3a352c;
+  --border-input: #4a473f;
+
+  --ink: #f1ece1;
+  --ink-dim: #c9c0ac;
+  --ink-soft: #b8af9e;
+  --ink-muted: #8a8375;
+  --ink-faint: #5c5850; /* PUNCH's --text-tertiary — darker than ink-muted, for truly de-emphasized text */
+
+  --accent: #e2871a;
+  --accent-on: #1e1c1a;
+  --accent-dark: #b56a14; /* PUNCH's --accent-dark — hover/pressed states */
+  --accent-tint: rgba(226, 135, 26, 0.08);
+
+  --danger: #c1401c;
+  --danger-tint: rgba(193, 64, 28, 0.1);
+  --success: #5b8c5a;
+  --success-tint: rgba(91, 140, 90, 0.12);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  background-image: radial-gradient(circle at 20% 15%, rgba(226, 135, 26, 0.05), transparent 45%);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+.ledger {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 20px 16px 32px;
+}
+
+/* Standalone/popped-out only (App.jsx adds this class when !EMBEDDED) — the
+   embedded sidebar stays at the narrow width above on purpose, but that same
+   480px cap left a popped-out browser window mostly empty margin either
+   side. Content itself is still single-column (nothing here reflows into a
+   grid), just given real room instead of being squeezed into a phone-width
+   column on a full window — Ben's ask 2026-09-15. */
+.ledger-wide {
+  max-width: 900px;
+  padding: 28px 32px 40px;
+}
+
+.ledger.has-actionbar { padding-bottom: 92px; }
+
+/* ---- header ---- */
+
+.ledger-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.ledger-logo {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 28px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+.ledger-subtitle {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.mode-badge {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 3px;
+  align-self: center;
+}
+
+.mode-tm { background: var(--accent-tint); color: var(--accent); }
+.mode-fixed_price { background: rgba(107, 122, 140, 0.16); color: #9fb0c4; }
+.mode-non_billable { background: var(--danger-tint); color: #e8a08a; }
+
+.refresh-btn {
+  align-self: center;
+  background: none;
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  color: var(--ink-dim);
+  width: 22px;
+  height: 22px;
+  line-height: 1;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0;
+}
+.refresh-btn:hover:not(:disabled) { color: var(--ink); border-color: var(--ink-dim); }
+.refresh-btn:disabled { opacity: 0.4; cursor: default; }
+
+.locked-contract {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--ink-dim);
+}
+.locked-contract-hint {
+  font-size: 9px;
+  opacity: 0.7;
+}
+
+.ledger-tagline {
+  font-size: 9px;
+  font-style: italic;
+  color: var(--ink-muted);
+  opacity: 0.5;
+  margin-bottom: 18px;
+}
+
+/* ---- project row (standalone only) ---- */
+
+.project-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.project-row input {
+  flex: 1;
+  padding: 7px 9px;
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.project-row input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* ---- context / banners ---- */
+
+.context-note {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  color: var(--ink-dim);
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  padding: 7px 10px;
+  margin-bottom: 12px;
+}
+
+.context-note strong { color: var(--ink); }
+
+.banner {
+  padding: 10px 12px;
+  border-radius: 4px;
+  margin-bottom: 16px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.banner-error {
+  background: var(--danger-tint);
+  border: 1px solid var(--danger);
+  color: #e8a08a;
+}
+
+.banner-success {
+  background: var(--success-tint);
+  border: 1px solid var(--success);
+  color: #9fd39e;
+}
+
+.banner-success a,
+.banner-success a:visited {
+  color: #9fd39e;
+  font-weight: 600;
+}
+
+.banner-warning {
+  background: rgba(107, 122, 140, 0.14);
+  border: 1px solid #6b7a8c;
+  color: #9fb0c4;
+}
+
+.grouping-disclaimer {
+  margin-bottom: 0;
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.loading, .empty {
+  font-family: var(--font-mono);
+  color: var(--ink-muted);
+  padding: 40px 0;
+  text-align: center;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+}
+
+/* ---- tabs ---- */
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 10px;
+  margin-bottom: -1px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+
+.tab:hover { color: var(--ink-dim); }
+
+.tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.tab-count {
+  display: inline-block;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--border);
+  color: var(--ink-dim);
+  font-size: 10px;
+  text-align: center;
+}
+
+.tab.active .tab-count { background: var(--accent-tint); color: var(--accent); }
+
+/* ---- ticket list ---- */
+
+.list-hint {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  color: var(--ink-muted);
+  margin-bottom: 8px;
+}
+
+.select-all-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.select-all-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-dim);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.ticket-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ticket-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: border-color 0.12s ease;
+}
+
+.ticket-card:hover { border-color: var(--border-input); }
+
+.ticket-card.checked {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+  background: var(--accent-tint);
+}
+
+.ticket-card.readonly .ticket-amount { color: var(--ink-dim); }
+
+.ticket-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ticket-card.readonly .ticket-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.ticket-check {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.ticket-check input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.ticket-number {
+  flex: 1;
+  /* PUNCH reserves Oswald for exactly one branding moment (the wordmark
+     itself) — everything else that isn't body prose uses JetBrains Mono,
+     which is what actually gives PUNCH its dashboard/terminal personality.
+     This used to be --font-display, making every single card header as
+     heavy as the logo. */
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+.ticket-amount {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.ticket-description {
+  color: var(--ink-soft);
+  font-size: 12px;
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ticket-meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  color: var(--ink-muted);
+  margin-top: 6px;
+}
+
+/* ---- unlinked-timecard warning ---- */
+
+.unlinked-warning {
+  color: #e8a08a;
+  font-weight: 600;
+  font-size: 11px;
+  line-height: 1.4;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.no-timecard-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--danger);
+}
+
+/* ---- line items ---- */
+
+.line-items {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.line-item {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+  font-size: 12px;
+  align-items: baseline;
+}
+
+/* Direct cost line items (Ben's ask 2026-09-22, per-line billing) get a
+   leading checkbox column .line-item doesn't have — same 3 trailing columns,
+   just with one more up front rather than overloading .line-item's fixed
+   3-column template. */
+.line-item-check {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 8px;
+  font-size: 12px;
+  align-items: baseline;
+}
+
+.line-item-detail {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-muted);
+}
+
+.line-item-amount {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--ink);
+}
+
+/* ---- action bar (multi-select billing) ---- */
+
+.action-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  max-width: 480px;
+  margin: 0 auto;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+  background: var(--surface-2);
+  border-top: 1px solid var(--border-soft);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Standalone/popped-out — same reasoning as .ledger-wide itself: the 480px
+   width and 70vh height caps were tuned for the narrow embedded sidebar,
+   where this floating bar is a thin sliver by necessity. In a full popped-out
+   window it should match the page's own width and get more breathing room
+   before it has to scroll internally. */
+.ledger-wide .action-bar {
+  max-width: 900px;
+  max-height: 85vh;
+}
+
+.action-bar-summary {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+/* ---- billing overlay (confirm settings + progress) ----
+   Deliberately fills the ENTIRE iframe — no max-width cap like the rest of
+   the app. The side panel itself is narrow and LEDGER can't make Procore
+   widen it, but this is real content (a contract picker, rate overrides, a
+   progress log) that shouldn't be squeezed into a corner sliver. Ben's ask
+   2026-09-14: "should take over the whole screen." */
+.billing-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+
+.billing-overlay-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  /* See .ticket-number — Oswald stays reserved for the one wordmark moment. */
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink);
+  flex: 0 0 auto;
+}
+
+.billing-overlay-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.billing-overlay-footer {
+  flex: 0 0 auto;
+  padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--border-soft);
+  background: var(--surface-2);
+}
+
+.overlay-close {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  width: 26px;
+  height: 26px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.overlay-close:hover { color: var(--accent); border-color: var(--accent); }
+
+.rate-override-default {
+  color: var(--ink-muted);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.action-bar-summary strong { color: var(--accent); }
+
+.action-bar-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.action-bar-field select,
+.action-bar-field input[type="text"],
+.action-bar-field input[type="date"] {
+  flex: 1;
+  max-width: 65%;
+  background: var(--bg);
+  color: var(--ink-dim);
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  padding: 5px 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+/* Bolded, orange-underlined section headers on the settings overlay (Ben's
+   ask 2026-09-22) — separates T&M / Direct Cost / (future) Commitment fields
+   so it's clear which source a given field applies to. */
+.settings-section-header {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink);
+  padding-bottom: 4px;
+  margin-top: 4px;
+  border-bottom: 2px solid var(--accent);
+}
+
+.rate-overrides {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rate-overrides-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.rate-overrides-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rate-override-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.rate-override-field input {
+  width: 72px;
+  background: var(--bg);
+  color: var(--ink-dim);
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  padding: 5px 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.billing-period-field { align-items: flex-start; }
+
+.new-period-inputs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.new-period-inputs input[type="date"] {
+  background: var(--bg);
+  color: var(--ink-dim);
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.new-period-inputs span {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-muted);
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+}
+
+/* Real navigation (go back a screen, jump to history) reads as a proper
+   button instead of a half-hidden text link (Ben's ask 2026-09-24) — .link-btn
+   stays as-is for lighter-weight inline actions (Full details, Open in
+   Procore) where a bordered button would be too heavy. */
+.nav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  padding: 5px 10px;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.nav-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Pairs a .nav-btn with trailing page-description text (Ben's ask
+   2026-09-24: these used to render with zero gap, mashed into one run-on
+   string — "‹ Change actionGenerate Invoice — pick items to bill"). */
+.list-hint-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.preview-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+/* Standalone/popped-out (.ledger-wide, App.jsx's own settings/preview
+   screens — the dedicated PreviewEditPopout window already had its own
+   max-height:none override) has real vertical room; the 260px cap forced a
+   tiny scrolling box near the top of a tall window while the rest sat empty.
+   Ben's ask 2026-09-22: "spread our wings... take up more of the page." */
+.ledger-wide .preview-lines {
+  max-height: none;
+}
+
+.preview-line {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.preview-line-desc {
+  width: 100%;
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 3px 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.preview-line-desc:hover,
+.preview-line-desc:focus {
+  border-color: var(--border-input);
+  background: var(--bg-elevated, var(--bg));
+}
+
+.preview-line-nums {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-muted);
+}
+
+.preview-line-nums input {
+  width: 64px;
+  background: var(--bg);
+  color: var(--ink-dim);
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.preview-line-amount {
+  margin-left: auto;
+  color: var(--ink-dim);
+  font-weight: 700;
+}
+
+.preview-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* The pop-out preview window (PreviewEditPopout.jsx) has real vertical room,
+   unlike the sidebar's capped-height scrolling list. */
+.preview-lines-popout {
+  max-height: none;
+}
+
+.popout-actions {
+  margin-top: 16px;
+}
+
+.progress-log {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 10px;
+  /* Fills the rest of the overlay instead of being capped at a small fixed
+     height (Ben's ask 2026-09-15: "a tiny little pane" while a real push is
+     running) — .billing-overlay is already position:fixed/inset:0 (the
+     whole screen), so this flex-grow genuinely uses all of it, not just a
+     slightly bigger box. */
+  flex: 1 1 auto;
+  min-height: 140px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.progress-line {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--ink-dim);
+}
+
+.progress-line:last-child { color: var(--accent); }
+
+.contract-select {
+  background: var(--surface-2);
+  color: var(--ink-dim);
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  padding: 3px 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  max-width: 100%;
+}
+
+.action-bar-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.action-bar-buttons .generate-btn,
+.action-bar-buttons .draft-btn {
+  flex: 1;
+}
+
+.action-bar-buttons .cancel-btn {
+  flex: 0 0 auto;
+}
+
+.generate-btn, .draft-btn, .cancel-btn {
+  border-radius: 4px;
+  padding: 9px 12px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.generate-btn {
+  background: var(--accent);
+  color: var(--accent-on);
+  border: 1px solid var(--accent);
+}
+
+.draft-btn {
+  background: transparent;
+  color: var(--ink-soft);
+  border: 1px solid var(--border);
+}
+
+.cancel-btn {
+  background: transparent;
+  color: var(--ink-muted);
+  border: 1px solid transparent;
+}
+
+.cancel-btn:hover { color: var(--ink-soft); }
+
+.generate-btn:disabled, .draft-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.generate-btn:not(:disabled):hover { filter: brightness(1.08); }
+
+.draft-btn:not(:disabled):hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ---- open-in-procore link ---- */
+
+.ticket-links {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 12px;
+}
+
+.ticket-links a,
+.ticket-links button {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.ticket-links a:hover,
+.ticket-links button:hover { color: var(--accent); }
+
+.ticket-links .undo-link:first-of-type { margin-left: auto; }
+.ticket-links .undo-link:hover { color: var(--danger); }
+.ticket-links .undo-link:disabled { opacity: 0.5; cursor: default; color: var(--ink-muted); }
+.ticket-links .undo-link-danger { color: var(--danger); }
+
+/* ---- details disclosure (IDs, for power users) ---- */
+
+.details {
+  margin-top: 20px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.details > summary {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  cursor: pointer;
+  list-style: none;
+}
+
+.details > summary::-webkit-details-marker { display: none; }
+.details > summary::before { content: '▸ '; }
+.details[open] > summary::before { content: '▾ '; }
+
+.details-grid {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.details-grid dt { color: var(--ink-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.details-grid dd { margin: 0; color: var(--ink-dim); word-break: break-all; }
+
+.mode-select {
+  background: var(--bg);
+  color: var(--ink-dim);
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  max-width: 100%;
+}
+
+.mode-select:disabled { opacity: 0.6; }
+
+/* ---- ticket/direct-cost detail (full-page popout — TicketDetailPopout.jsx,
+   DirectCostDetailPopout.jsx). The old backdrop+dialog shell (.modal-backdrop,
+   .modal, .modal-head, .modal-title, .modal-close) was replaced 2026-09-15 by
+   a plain page layout and left dead in this file until now — removed. */
+
+.modal-body { padding: 14px; }
+
+.modal-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  color: var(--ink-muted);
+  margin-bottom: 10px;
+}
+
+.chip {
+  background: var(--accent-tint);
+  color: var(--accent);
+  border-radius: 3px;
+  padding: 1px 6px;
+  text-transform: uppercase;
+}
+
+.modal-desc {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  margin: 0 0 14px;
+  white-space: pre-wrap;
+}
+
+.modal-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.modal-line {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 10px;
+}
+
+.modal-line.is-billed { opacity: 0.6; }
+
+.modal-line-main {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.modal-line-worker { color: var(--ink); font-weight: 500; }
+.modal-line-amount { font-family: var(--font-mono); font-weight: 700; color: var(--ink); }
+
+.modal-line-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
+  color: var(--ink-muted);
+}
+
+.modal-line-class { color: var(--ink-soft); }
+
+.tag {
+  text-transform: uppercase;
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+.tag-billed { background: var(--success-tint); color: #9fd39e; }
+.tag-draft { background: rgba(201, 162, 39, 0.14); color: #d8bd6a; }
+.tag-open { background: var(--accent-tint); color: var(--accent); }
+.tag-written-off { background: var(--danger-tint); color: #e08a6f; }
+.tag-budgeted { background: rgba(184, 175, 158, 0.14); color: var(--ink-soft); }
+
+.modal-attachments {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.modal-section-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.modal-attachments a {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+
+.modal-attachments a:hover { color: var(--accent); }
+
+.modal-totals {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.modal-totals > div {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+  color: var(--ink-muted);
+}
+
+.modal-totals strong { color: var(--ink-dim); }
+
+.modal-total-grand {
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.modal-total-grand span { color: var(--ink); text-transform: uppercase; }
+.modal-total-grand strong { color: var(--accent); }
+
+.modal-procore-link {
+  display: inline-block;
+  margin-top: 14px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  text-decoration: none;
+}
+
+.modal-procore-link:hover { color: var(--accent); }
+
+/* ---- labour-from-a-subcontract warning (Ben's ask 2026-09-24) ---- */
+
+.labour-flag {
+  color: var(--danger);
+  font-weight: 700;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.cm-disposition-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.cm-disposition-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.cm-disposition-buttons .draft-btn { flex: 1; }
+
+.warn-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.warn-modal {
+  background: var(--surface);
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+  width: 100%;
+  max-width: 420px;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  gap: 12px;
+}
+
+.warn-modal-title {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--danger);
+}
+
+.warn-modal-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink);
+}
+
+.warn-modal-lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.warn-modal-lines li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px 8px;
+  padding: 6px 8px;
+  background: var(--danger-tint);
+  border-radius: 4px;
+}
+
+.warn-modal-amount { font-family: var(--font-mono); color: var(--ink); }
+
+.warn-modal-hint {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: #e8a08a;
+}
+
+.warn-modal-buttons {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.warn-btn-ok, .warn-btn-proceed {
+  border-radius: 4px;
+  padding: 9px 16px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+  color: #fff;
+}
+
+.warn-btn-ok { background: var(--success); border: 1px solid var(--success); }
+.warn-btn-proceed { background: var(--danger); border: 1px solid var(--danger); }
+.warn-btn-ok:hover, .warn-btn-proceed:hover { filter: brightness(1.1); }
+
+/* ---- landing (Ben's ask 2026-09-24): two rows of wide buttons ---- */
+
+.landing-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  width: 100%;
+}
+
+.landing-grid .landing-btn {
+  padding: 22px 12px;
+  font-size: 12px;
+}
+
+/* ---- Review Project rollup ---- */
+
+.rollup {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  overflow-x: auto;
+}
+
+.rollup table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.rollup th, .rollup td {
+  padding: 5px 6px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.rollup thead th {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  font-weight: 500;
+}
+
+.rollup tbody th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--ink-dim);
+}
+
+.rollup td { font-family: var(--font-mono); color: var(--ink); }
+
+.rollup .rollup-total th, .rollup .rollup-total td {
+  border-top: 1px solid var(--border);
+  font-weight: 700;
+}
+
+.rollup-note {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--ink-muted);
+}
+
+/* ---- Project Settings (2026-09-24) ---- */
+
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 24px;
+}
+
+.settings-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-muted);
+}
+
+.settings-buttons { margin-top: 8px; }
+
+/* ---- "Already Billed" (Ben's ask 2026-09-25): green, listed first ---- */
+
+.billed-btn {
+  border-radius: 4px;
+  padding: 9px 12px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+  background: var(--success);
+  color: #fff;
+  border: 1px solid var(--success);
+}
+
+.billed-btn:not(:disabled):hover { filter: brightness(1.1); }
+.billed-btn:disabled { opacity: 0.5; cursor: default; }
+.cm-disposition-buttons .billed-btn { flex: 1; }
+.action-bar-buttons .billed-btn { flex: 0 0 auto; }
+
+.tag-outside { background: var(--success-tint); color: #9fd39e; margin-left: 4px; }
+
+.cm-disposition-scope { font-size: 11px; color: var(--ink-muted); }

@@ -1,0 +1,550 @@
+{
+  "company_id": "562949953508586",
+  "company_name": "Einbau",
+  "test_project_id": "562949954996998",
+  "last_updated": "2026-09-24",
+  "test_project_name": "000_000_1 - Test Project 1",
+  "endpoints": [
+    {
+      "name": "Get company",
+      "method": "GET",
+      "path": "/rest/v1.0/companies/{company_id}",
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Sanity check for OAuth + Procore-Company-Id header. Confirms 562949953508586 = Einbau."
+    },
+    {
+      "name": "List companies (token scope check)",
+      "method": "GET",
+      "path": "/rest/v1.0/companies",
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Company-level reads work fine — confirms auth/company id are correct."
+    },
+    {
+      "name": "Get project",
+      "method": "GET",
+      "path": "/rest/v1.0/projects/{project_id}",
+      "status_code": 400,
+      "verification": "path_confirmed_permission_denied",
+      "notes": "Returned 'Missing Project or Company ID' — this specific bare endpoint may need extra query params beyond just the path id; not a priority endpoint, deprioritized in favor of the actual T&M/DC/commitment endpoints below."
+    },
+    {
+      "name": "List T&M Entries (Procore UI calls these 'T&M Tickets')",
+      "method": "GET",
+      "path": "/rest/v1.0/projects/{project_id}/time_and_material_entries",
+      "status_code": 200,
+      "verification": "verified",
+      "corrects_intake_sheet": "ledger_intake.xlsx assumed '/rest/v1.0/projects/{id}/time_and_material_tickets' — that path doesn't exist. The real Procore API resource is 'time_and_material_entries', even though every UI label and API field description calls it a 'T&M ticket'.",
+      "notes": "Verified live 2026-09-04 after fixing the LEDGER user's project-level permissions. Real response includes nested change_event, company_signee_party/customer_signee_party (both with employee_id, work_classification), time_and_material_entry_attachments (file URLs). No labour hours/line-item breakdown in this response — that's the separate line_items sub-resource (not yet tested).",
+      "docs_url": "https://developers.procore.com/reference/rest/time-and-material-entry"
+    },
+    {
+      "name": "List Direct Costs",
+      "method": "GET",
+      "path": "/rest/v1.0/projects/{project_id}/direct_costs",
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live 2026-09-04 — returned [] (this test project has no direct costs yet, consistent with Ben's note that the test project is incomplete). Path/permission both confirmed good; need a project with real direct cost data to see the actual shape."
+    },
+    {
+      "name": "List Project Users (Procore UI sometimes calls these 'employees')",
+      "method": "GET",
+      "path": "/rest/v1.0/projects/{project_id}/users",
+      "query_params": {
+        "filters[employee]": true
+      },
+      "status_code": 200,
+      "verification": "verified",
+      "corrects_intake_sheet": "ledger_intake.xlsx assumed '/rest/v1.0/projects/{id}/employees' — wrong resource name. Real resource is 'users', filtered with filters[employee]=true.",
+      "notes": "Returned real Einbau people (Ben Wright, Alfonso Lopez, Peter Dyck, Warren Wagler, etc.) plus their vendor/company. IMPORTANT: this confirms the LEDGER app's permission gap is NOT 'no project access at all' — Directory-type reads work fine. The gap is specifically Financial Management tools (see below).",
+      "docs_url": "https://developers.procore.com/reference/rest/project-users"
+    },
+    {
+      "name": "List Commitment Contracts",
+      "method": "GET",
+      "path": "/rest/v2.0/companies/{company_id}/projects/{project_id}/commitment_contracts",
+      "status_code": 200,
+      "verification": "verified",
+      "corrects_intake_sheet": "ledger_intake.xlsx assumed '/rest/v1.0/projects/{id}/commitment_contracts'. The real endpoint is v2.0, BETA, and nested under BOTH /companies/{company_id}/ AND /projects/{project_id}/ — not just projects like every v1.0 resource. The old unversioned '/rest/v1.0/commitments' list endpoint is deprecated (2021).",
+      "notes": "Verified live 2026-09-04 — returned {\"data\": []} (empty, this test project has no commitments yet). IMPORTANT: unlike every v1.0 endpoint tested so far, this v2.0 response wraps results in a top-level \"data\" key rather than returning a bare array — code reading this endpoint needs to unwrap it differently.",
+      "docs_url": "https://developers.procore.com/reference/rest/commitment-contracts"
+    },
+    {
+      "name": "List Timesheets",
+      "method": "GET",
+      "path": "/rest/v1.0/projects/{project_id}/timesheets",
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Path was correct all along — the empty-body 403 really was a permission gap, just a SEPARATE one from Financial Management ('Timesheets' is its own tool in Procore's permission template, distinct from T&M/Direct Costs/Commitments; had to be granted separately). Verified live 2026-09-04 with real data: each timesheet has nested timecard_entries with cost_code (full_code, long_name), approval_status, billable flag, created_by. This is the core data source for timecard reconciliation state in LEDGER's schema."
+    },
+    {
+      "name": "List Commitments (Work Order + Purchase Order Contracts) — v1.0",
+      "method": "GET",
+      "path": "/rest/v1.0/commitments",
+      "query_params": {
+        "project_id": "{project_id}"
+      },
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live 2026-09-24. Bare array. The v1.0 list items carry NO dollar total, only {id, number, status, executed, created_at, private, vendor:{id}}. Prefer the v2.0 list below, which includes grand_total."
+    },
+    {
+      "name": "List Commitment Contracts — v2.0 (has totals)",
+      "method": "GET",
+      "path": "/rest/v2.0/companies/{company_id}/projects/{project_id}/commitment_contracts",
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live 2026-09-24 with real data (earlier empty result was just an empty project). Response is wrapped as {data:[...]}. Each item includes grand_total, type, status, executed, number, and title, so one call covers the whole project. PAGINATED: default page size is 10 (a 21-line commitment's line_items came back with only 10). Walk ?page=N&per_page=100 until a short page (see fetchAllV2Pages in app.js). vendor is {id} only, with no name, in both the list and the single-commitment show endpoint (commitment_contracts/{id}, also verified)."
+    },
+    {
+      "name": "List Project Vendors (directory)",
+      "method": "GET",
+      "path": "/rest/v1.0/projects/{project_id}/vendors",
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live 2026-09-24. Bare array with id, name, and company. Used to resolve commitment vendor ids to names in a single call."
+    },
+    {
+      "name": "List Commitment Contract Line Items — v2.0 (has budget codes)",
+      "method": "GET",
+      "path": "/rest/v2.0/companies/{company_id}/projects/{project_id}/commitment_contracts/{commitment_id}/line_items",
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live 2026-09-24, response wrapped as {data:[...]}. Each line carries wbs_code {id, flat_code e.g. '49-04-01.L', description} plus wbs_code_id: the budget code a Prime CO line needs, with no lookup required. v1.0 /work_order_contracts/{id}/line_items also returns wbs_code, and additionally line_item_type {code:'L', base_type:'labor'}, which is the structural labour detector. Einvoice line descriptions embed 'Timecard #<n>', where <n> equals a T&M timecard's timecard_entry_id (confirmed: 6 of 21 lines on test SC-000_000_1-002 matched T&M timecards). Line origin_id is null, so the timecard link currently exists only in description text."
+    },
+    {
+      "name": "Show Commitment (detail, nested line_items)",
+      "method": "GET",
+      "path": "/rest/v1.0/commitments/{commitment_id}",
+      "query_params": {
+        "project_id": "{project_id}"
+      },
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live 2026-09-24. Includes type (WorkOrderContract/PurchaseOrderContract), grand_total, total_payments, percentage_paid, vendor.company, and a nested line_items array. CAUTION: these nested lines OMIT wbs_code (they carry only cost_code + line_item_type), even though the commitment has budget codes. Use the v2.0 line_items endpoint for budget codes instead. Some PurchaseOrderContract lines have no cost_code or description at all (seen on test project PO-000_000_1-001/002/003). The Work Order Contract lines Einvoice creates are one line per subcontractor timecard, e.g. 'Test Worker 1 - 2026-08-24 (Timecard #...)'."
+    },
+    {
+      "name": "List Requisitions (Subcontractor Invoices) for a commitment",
+      "method": "GET",
+      "path": "/rest/v1.0/requisitions",
+      "query_params": {
+        "project_id": "{project_id}",
+        "filters[commitment_id]": "{commitment_id}"
+      },
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live 2026-09-24 (the earlier 403 was the since-fixed permission gap). Bare array; empty = the sub hasn't invoiced this commitment yet. LEDGER uses non-empty vs. empty as its only 'real invoice exists' signal (hasRealRequisition → is_estimated). Requisition detail (v1.0 and v1.1) exposes COMMITMENT-LEVEL summary totals only, with NO per-line breakdown. Procore's own UI gets its per-line Schedule of Values from an internal, session-authenticated route (/{project}/project/commitments/work_order_contracts/{id}/requisitions, no /rest/ prefix) that a public API client can't reach. Ruled out 2026-09-24 (all 404 or param ignored): /schedule_of_values, include=line_items, view=extended, v2.0 nested requisition line_items, /requisition_line_items, /subcontractor_invoices/{id}.",
+      "docs_url": "https://developers.procore.com/reference/rest/requisitions-subcontractor-invoices"
+    },
+    {
+      "name": "Show first Prime Contract",
+      "method": "GET",
+      "path": "/rest/v1.0/prime_contract",
+      "query_params": {
+        "project_id": "{project_id}"
+      },
+      "status_code": 404,
+      "verification": "path_confirmed_no_data",
+      "corrects_intake_sheet": "ledger_intake.xlsx assumed '/rest/v1.0/projects/{id}/prime_contract' (project_id in the path). The real endpoint is '/rest/v1.0/prime_contract' with project_id as a QUERY parameter, not nested under /projects/{id}/.",
+      "notes": "Returned clean JSON {\"errors\":\"Not found\"} — path is correct, this test project just has no Prime Contract set up yet. Use plural /rest/v1.0/prime_contracts for more than one contract on a project (untested).",
+      "docs_url": "https://developers.procore.com/reference/rest/prime-contracts"
+    },
+    {
+      "name": "List Change Events",
+      "method": "GET",
+      "path": "/rest/v1.1/change_events",
+      "query_params": {
+        "project_id": "{project_id}"
+      },
+      "status_code": 200,
+      "verification": "verified",
+      "corrects_intake_sheet": "Real endpoint is v1.1 (not v1.0), NOT nested under /projects/{id}/ — project_id is a query param, same pattern as prime_contract.",
+      "notes": "Verified live with rich real data — 4 change events on the test project. CE #004 was auto-generated from T&M Ticket #1 (description literally embeds a link to the ticket). Each change_item carries separate cost_impact (what Einbau pays) and revenue_impact (what's billed to the client) plus a budget_code (Cost Code + Cost Type segments) — this is exactly LEDGER's cost/sell/margin model, already live in Procore's own data. One labour line: 24 hrs @ $80/hr = $1,920 revenue, matching the labour rate table default exactly.",
+      "docs_url": "https://developers.procore.com/reference/rest/change-events"
+    },
+    {
+      "name": "List Prime Change Orders",
+      "method": "GET",
+      "path": "/rest/v1.0/projects/{project_id}/prime_change_orders",
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live — returned [] (none on this project yet). Normal v1.0 project-nested pattern, no surprises.",
+      "docs_url": "https://developers.procore.com/reference/rest/prime-change-orders"
+    },
+    {
+      "name": "List Payment Applications (Owner Invoices)",
+      "method": "GET",
+      "path": "/rest/v1.0/prime_contracts/{prime_contract_id}/payment_applications",
+      "query_params": {
+        "project_id": "{project_id}"
+      },
+      "verification": "doc_confirmed_untested",
+      "corrects_intake_sheet": "ledger_intake.xlsx assumed 'POST /rest/v1.0/projects/{id}/invoices' with no prerequisite. The real resource nests under a PRIME CONTRACT, not the project directly — requires a prime_contract_id. STRUCTURAL IMPLICATION: a project needs an actual Prime Contract to exist before Invoices/Payment Applications can be created or listed. Our test project has no Prime Contract yet (confirmed earlier — 'Not found'), so this couldn't be tested live.",
+      "notes": "Untested — needs a project with a real Prime Contract to verify. Important for LEDGER's T&M auto-invoice flow: must confirm/create the Prime Contract before attempting to create a draft invoice.",
+      "docs_url": "https://developers.procore.com/reference/rest/payment-applications-owner-invoices"
+    },
+    {
+      "name": "List Time and Material Timecards (the LABOUR line items for a T&M Entry)",
+      "method": "GET",
+      "path": "/rest/v1.0/projects/{project_id}/time_and_material_timecards",
+      "status_code": 200,
+      "verification": "verified",
+      "corrects_intake_sheet": "There is no '/time_and_material_entries/{id}/line_items' sub-resource (tried it, real 404). Procore splits T&M line items by TYPE into separate top-level project resources instead — Timecards (labour) is one; there are likely separate Equipment/Material/Other resources too (not yet found). Each timecard carries time_and_material_entry: {id} linking it back to its parent ticket, and timecard_entry_id.",
+      "notes": "Verified live — labour timecards, each with work_classification, timecard_time_type.time_type ('Regular Time' / 'Overtime' — real strings, NOT the lowercase 'regular'/'overtime' the intake sheet's labour rate table assumed). CONFIRMED 2026-09-04 — THE CRITICAL RECONCILIATION KEY: Ben deliberately attached the same 6 timesheet entries to two different T&M tickets (entries 562949954407719 and 562949954407733) to test this. Each ticket got its own separate T&M-side timecard record (different top-level 'id'), but the 'timecard_entry_id' field — the pointer to the ORIGINAL Timesheet entry — was IDENTICAL across both tickets for all 6 records. Procore raised no warning/error when the same timesheet was double-attached. This answers the intake sheet's #1 open question definitively: yes, T&M tickets do record the source timesheet id (timecard_entry_id), and no, Procore does not prevent reuse — LEDGER's billing_records table must check timecard_entry_id against everything already billed before allowing a T&M ticket to be billed, since Procore provides zero protection against this itself.",
+      "docs_url": "https://developers.procore.com/reference/rest/time-and-material-timecard"
+    },
+    {
+      "name": "Create Change Event",
+      "method": "POST",
+      "path": "/rest/v1.1/change_events",
+      "query_params": {
+        "project_id": "{project_id}"
+      },
+      "verification": "doc_confirmed_untested",
+      "notes": "Body: {change_event: {number, title, description, scope, status: {id}, change_type: {id}, change_reason: {id}, change_items: [...]}}. Required: status, scope. status.id must be a real Change Event status id for the company or returns 400 (see List Change Event Statuses below for valid ids). This is the endpoint LEDGER should call directly to build its own T&M-to-CE push (see README architecture note) rather than relying on Procore's native push + patching afterward.",
+      "docs_url": "https://developers.procore.com/reference/rest/change-events"
+    },
+    {
+      "name": "Update Change Event",
+      "method": "PATCH",
+      "path": "/rest/v1.1/change_events/{id}",
+      "query_params": {
+        "project_id": "{project_id}"
+      },
+      "verification": "doc_confirmed_untested",
+      "notes": "Body: {change_event: {change_items: [{id, description, cost_impact, revenue_impact, budget_impact, deleted}, ...], attachments: [...]}}. Can update or soft-delete (deleted:true) individual line items by id.",
+      "docs_url": "https://developers.procore.com/reference/rest/change-events"
+    },
+    {
+      "name": "List Change Event Statuses",
+      "method": "GET",
+      "path": "/rest/v1.0/change_event/statuses",
+      "query_params": {
+        "project_id": "{project_id}"
+      },
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live. Real statuses for this company: Open (562949953739902, default for new CEs), Closed (562949953739903), Void (562949953739904), Pending (562949953739905). Need the 'Open' id when LEDGER creates a Change Event directly.",
+      "docs_url": "https://developers.procore.com/reference/rest/change-event-statuses"
+    },
+    {
+      "name": "List Change Types",
+      "method": "GET",
+      "path": "/rest/v1.0/change_types",
+      "query_params": {
+        "company_id": "{company_id}"
+      },
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live — 6 real types incl. 'T&M Contract Extension' (id 562949953866992, abbreviation 'T&M') which is almost certainly the correct change_type for LEDGER's T&M-sourced change events specifically, as distinct from 'Allowance'/'Owner Change'/'Transfer'/'Contingency'/'TBD'.",
+      "docs_url": "https://developers.procore.com/reference/rest/change-types"
+    },
+    {
+      "name": "List Cost Codes",
+      "method": "GET",
+      "path": "/rest/v1.0/cost_codes",
+      "query_params": {
+        "project_id": "{project_id}"
+      },
+      "status_code": 200,
+      "verification": "verified",
+      "corrects_intake_sheet": "Not project-nested in the path — project_id is a query param, same pattern as several other endpoints found today.",
+      "notes": "Verified live — full hierarchical CSI-style cost code tree (parent/child via 'parent.id'). This is what change_items' budget_code.segment_items reference — LEDGER needs this list to correctly assign cost codes when constructing its own Change Event line items.",
+      "docs_url": "https://developers.procore.com/reference/rest/cost-codes"
+    },
+    {
+      "name": "List Direct Costs",
+      "method": "GET",
+      "path": "/rest/v1.0/projects/{project_id}/direct_costs",
+      "query_params": {
+        "filters[direct_cost_type]": "payroll (optional)"
+      },
+      "verification": "verified_via_production_pa_flow",
+      "notes": "Source: Ben's 'Payroll Direct Cost Generator' Power Automate flow (production, in real use before TALLY) — not a fresh guess. Same path already GET-verified live earlier today too."
+    },
+    {
+      "name": "Create Direct Cost (header)",
+      "method": "POST",
+      "path": "/rest/v1.0/projects/{project_id}/direct_costs",
+      "verification": "verified_live_2026-09-04",
+      "corrects_intake_sheet": "CRITICAL GOTCHA, confirmed via real production use: the request body wrapper key is \"item\", NOT \"direct_cost\" as Procore's own docs say. Procore's API rejects \"direct_cost\" — this was 'discovered through trial and error' per Ben's flow journal. Don't trust the official docs' wrapper name for this one endpoint.",
+      "notes": "Body: {item: {direct_cost_type: 'payroll', status: 'approved', direct_cost_date, payment_date, received_date, employee_id, vendor_id, description}}. employee_id = the Procore user id (bridged from Resource Planning's procore_person_id, not the RP uuid itself). vendor_id for Einbau-as-vendor (used for payroll DCs): 562949959021641. RE-VERIFIED LIVE 2026-09-04 with direct_cost_type 'expense' instead of 'payroll' -- 'item' wrapper confirmed still correct today, header created and grand_total updated correctly ($250) once a line item was added. Took effect immediately, no approval-workflow gate like the Prime Change Order side had -- DCs are pure cost data, not client-billable on their own."
+    },
+    {
+      "name": "List Direct Cost line items (project-wide, not per-DC)",
+      "method": "GET",
+      "path": "/rest/v1.0/projects/{project_id}/direct_costs/line_items",
+      "verification": "verified_via_production_pa_flow",
+      "notes": "Returns ALL line items across every Direct Cost on the project in one flat list — not nested per DC id. Used in the PA flow for duplicate-timecard detection by string-searching descriptions for an embedded '[TC:<timecard_entry_id>]' tag. LEDGER should do this properly with a real billing_records.timecard_entry_id field/query instead of text-matching, but this confirms the same anti-double-billing need was already hit and worked around operationally."
+    },
+    {
+      "name": "Create Direct Cost line item",
+      "method": "POST",
+      "path": "/rest/v1.0/projects/{project_id}/direct_costs/{direct_cost_id}/line_items",
+      "verification": "verified_via_production_pa_flow",
+      "notes": "Body wrapper is \"line_item\" (this one DOES match the docs, unlike the header). Body: {line_item: {wbs_code_id, description, quantity, unit_cost, uom}}. wbs_code_id = the PROJECT-scoped cost code id (see cost codes entry above re: project vs standard_cost_code_id split). Real rate multiplier logic used by Einbau's payroll costing: Overtime = base wage x1.5, Double Time = base wage x2, Regular = base wage x1 — matches the labour_rates table's time_type tiers conceptually, though this is the COST side (what Einbau pays) via Workforce Planning's hourly_wage field, separate from LEDGER's owned BILL/sell rate table."
+    },
+    {
+      "name": "List Budget Line Items",
+      "method": "GET",
+      "path": "/rest/v1.0/budget_line_items",
+      "query_params": {
+        "project_id": "{project_id}"
+      },
+      "verification": "verified_via_production_pa_flow",
+      "notes": "Source: Ben's 'Procore Budget Importer' PA flow. Flat, not project-nested in the path. Used for duplicate-cost-code detection before importing boilerplate budget lines."
+    },
+    {
+      "name": "Create Budget Line Item",
+      "method": "POST",
+      "path": "/rest/v1.0/budget_line_items",
+      "verification": "verified_via_production_pa_flow",
+      "notes": "Body: {project_id, budget_line_item: {cost_code_id, line_item_type_id, description, quantity, unit_cost, original_budget_amount}}. Selects between a 'T&M' cost-code template list and a 'Contract' one based on project_template.id (T&M template id: 562949955172601). CORRECTION per Ben (2026-09-04): this split exists purely to keep the T&M template's WBS lean (fewer cost codes) vs the Contract template carrying the full WBS catalog — it is NOT a reliable general signal for LEDGER's T&M-vs-Fixed-Price detection. Contract type remains the primary signal; project_template can agree with it ~99% of the time as a secondary cross-check, but should never be the sole/deciding factor, and a PM override must always be available regardless of what either signal says."
+    },
+    {
+      "name": "Create Prime Change Order",
+      "method": "POST",
+      "path": "/rest/v1.0/projects/{project_id}/prime_change_orders",
+      "verification": "doc_confirmed_untested",
+      "notes": "Body: {change_order: {contract_id, title, description, status, number, ...}}. Required: contract_id (the Prime Contract). Untested live — no Prime Contract on the test project yet. Real statuses: draft/pricing/not_pricing/pending/revised/proceeding/not_proceeding/pending_billable/no_charge/approved/rejected/void.",
+      "docs_url": "https://developers.procore.com/reference/rest/prime-change-orders"
+    },
+    {
+      "name": "Create Prime Change Order Line Item",
+      "method": "POST",
+      "path": "/rest/v2.0/companies/{company_id}/projects/{project_id}/prime_change_orders/{prime_change_order_id}/line_items",
+      "verification": "doc_confirmed_untested",
+      "notes": "v2.0, company+project scoped, same pattern as Commitment Contracts. Body: {description, quantity, unit_cost, uom, wbs_code_id (required), amount, tax_code_id}. No direct field to reference a source change_event_line_item on create — LEDGER re-supplies the same values (description with real name, cost code, quantity, rate) it already computed for the Change Event line rather than a pointer/convert reference. GET with view=extended does surface a change_event_line_item field for traceability on reads.",
+      "docs_url": "https://developers.procore.com/reference/rest/prime-change-order-line-items"
+    },
+    {
+      "name": "Create Payment Application (Owner Invoice)",
+      "method": "POST",
+      "path": "/rest/v1.0/prime_contracts/{prime_contract_id}/payment_applications",
+      "verification": "doc_confirmed_untested",
+      "notes": "Body: {project_id, payment_application: {commitment_billing_period_id, period_start, period_end, billing_date, invoice_number, status}}. IMPORTANT DEPENDENCY: requires a commitment_billing_period_id — a Billing Period must already exist on the Prime Contract before an invoice can be created. Real statuses: draft/under_review/revise_and_resubmit/approved — LEDGER should always create as 'draft' per the original spec. NO line_items in the create body — the invoice's actual billable amounts (g703 rows) are derived automatically from the Prime Contract's Schedule of Values, which only updates when a Prime Change Order gets approved into it. So the real chain is one step longer than 'CE to CO to Invoice': T&M Ticket (signed) -> LEDGER builds Change Event -> LEDGER creates Prime Change Order (adds to SOV) -> Billing Period exists/created -> LEDGER creates draft Payment Application.",
+      "docs_url": "https://developers.procore.com/reference/rest/payment-applications-owner-invoices"
+    },
+    {
+      "name": "List Payment Applications (flat, project-scoped)",
+      "method": "GET",
+      "path": "/rest/v1.0/payment_applications",
+      "query_params": {
+        "project_id": "{project_id}"
+      },
+      "verification": "doc_confirmed_untested",
+      "notes": "Simpler alternative to the prime_contracts-nested list when you just need a project's invoices without already knowing the prime_contract_id. Show/Delete single: /rest/v1.0/payment_applications/{id}?project_id=... (Delete is BETA)."
+    },
+    {
+      "name": "List Prime Contracts",
+      "method": "GET",
+      "path": "/rest/v1.0/prime_contracts",
+      "query_params": {
+        "project_id": "{project_id}"
+      },
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live 2026-09-04 — required a separate permission bump on the LEDGER user (the 'Prime Contracts' tool) beyond what T&M/Direct Costs/Commitments needed. IMPORTANT: before that fix, this endpoint (and the singular /prime_contract, and the v2.0 beta list) all returned EMPTY (200) or a soft 'Item not found' (404) instead of the structured 403 every other permission gap gave — looks identical to 'no contracts exist' unless you already know better. All contracts on this project came back private:true, which may also be relevant to the visibility gap. 3 real contracts confirmed on the test project once fixed."
+    },
+    {
+      "name": "Create WBS Codes (Cost Code x Cost Type combos)",
+      "method": "GET (search)",
+      "path": "/rest/v1.0/projects/{project_id}/work_breakdown_structure/wbs_codes",
+      "query_params": {
+        "query": "<search term>"
+      },
+      "status_code": 200,
+      "verification": "verified",
+      "corrects_intake_sheet": "CRITICAL: wbs_code_id on Change Event / Prime Change Order / Direct Cost line items is NOT the plain Cost Code id from GET /cost_codes. It's a separate combined Cost-Code-x-Cost-Type entity. Posting a plain cost_codes id fails with 'Budget Code was not found.'",
+      "notes": "Verified live — searching 'query=49-04' found the existing combo '49-04-01.L' (Time and Material - REGULAR TIME.Labor), id 562951682873166, used successfully as wbs_code_id on a real Prime Change Order line item (amount auto-calculated correctly: 24hrs x $80 = $1920). A given Cost Code's own 'line_item_types' array (on the /cost_codes response) may be empty even when a valid WBS combo already exists elsewhere for it — search wbs_codes directly rather than trusting that array. Haven't yet confirmed how to CREATE a new combo if the one LEDGER needs doesn't exist yet on a given project — needs a follow-up check.",
+      "docs_url": "https://developers.procore.com/reference/rest/codes"
+    },
+    {
+      "name": "Update Prime Change Order status — BLOCKED, workflow-gated",
+      "method": "PATCH",
+      "path": "/rest/v1.0/projects/{project_id}/prime_change_orders/{id}",
+      "status_code": 422,
+      "verification": "verified_blocked_by_design",
+      "notes": "LOAD-BEARING FINDING, UPDATED: tried to PATCH status from draft to approved directly. Procore rejected it: {\"message\":\"The status of this Prime Contract Change Order cannot be changed because it is set via workflow.\"} — a workflow was attached to this project's contracts (project template default, Ben didn't realize it was still active — Einbau doesn't intentionally use workflows). Once Ben disabled the workflow, the SAME PATCH call succeeded immediately: status -> approved, reviewed_at auto-stamped, and the contract's revised_contract_amount/approved_change_orders updated for real. CONCLUSION: for Einbau specifically (no active workflows), a direct 'Approve CO' button in LEDGER's own sidebar can call this endpoint directly — no redirect to Procore needed. But design it to attempt-then-gracefully-fall-back: catch the workflow-gated 422 specifically and fall back to 'open in Procore for manual approval' if a workflow is ever re-enabled, or for any future multi-tenant customer who does use real approval workflows."
+    },
+    {
+      "name": "List Billing Periods",
+      "method": "GET",
+      "path": "/rest/v1.0/projects/{project_id}/billing_periods",
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live. Statuses: open | closed. Fields: start_date, end_date, due_date, position."
+    },
+    {
+      "name": "Create Payment Application — FULL PIPELINE VERIFIED LIVE END TO END",
+      "method": "POST",
+      "path": "/rest/v1.0/prime_contracts/{prime_contract_id}/payment_applications",
+      "status_code": 201,
+      "verification": "verified",
+      "notes": "Verified live 2026-09-04 as the final step of a complete real T&M billing pipeline test (signed T&M ticket -> LEDGER-built Change Event -> LEDGER-built + approved Prime Change Order -> Billing Period -> this). g703 (line items) populate AUTOMATICALLY from the contract's real Schedule of Values, no line items needed in the create body. New CO line items land at 0% billed by default (normal AIA progress-billing behavior) -- see the dedicated line item update endpoint below to actually claim them."
+    },
+    {
+      "name": "Update Payment Application Line Item",
+      "method": "PATCH",
+      "path": "/rest/v1.0/prime_contracts/{prime_contract_id}/payment_application_line_items/{id}",
+      "status_code": 200,
+      "verification": "verified",
+      "corrects_intake_sheet": "Do NOT try to update g703 by nesting it inside the parent payment_application PATCH body -- tried that first, it silently no-ops (200 OK, no actual change). Must use this dedicated line-item endpoint instead.",
+      "notes": "Body: {project_id, payment_application_line_item: {work_completed_this_period: '1920.00', ...}}. Verified live -- successfully claimed a new T&M line item at 100% ($1,920) on a draft invoice. GOTCHA: on an amount-based contract (accounting_method: 'amount'), sending work_completed_this_period_quantity alongside the amount is REJECTED ('Quantity update not allowed on amount accounting contract') -- amount-based contracts take dollars only, no quantity field. On a UNIT-based contract, omitting the quantity field is instead REJECTED ('Quantity is required') -- check accounting_method first, LEDGER also retries the other shape as a fallback.",
+      "docs_url": "https://developers.procore.com/reference/rest/payment-application-owner-invoice-line-items"
+    },
+    {
+      "name": "Get Payment Application detail (the g703 continuation sheet)",
+      "method": "GET",
+      "path": "/rest/v1.0/payment_applications/{id}",
+      "query_params": {
+        "project_id": "{project_id}"
+      },
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Backfilled 2026-09-18, discovered live 2026-09-14. Full invoice detail including the g703 array (AIA continuation sheet) -- each row: id, added_from_source ('contract' | 'change_order'), added_from_source_id, scheduled_value, scheduled_quantity, scheduled_unit_price, description_of_work. A project with billing history has MANY rows sharing a cost code across different COs over time -- filter to added_from_source before matching by amount. RESOLVED, two separate causes found: (1) 2026-09-22, a real timing race -- Procore's backend needs real wall-clock time (~58s observed) after CO approval before a brand-new invoice's g703 reflects it; fixed with a polling loop. (2) 2026-09-23, confirmed live: added_from_source_id does NOT reliably equal the CO's own `id` -- on a real unit-accounting contract it equaled the CO's `legacy_package_id` field instead. Matching on `id` alone silently found zero rows despite correct data being present the whole time. Fix: match against both `id` and `legacy_package_id`. Old 'not a timing race, not root-caused' framing (this note, pre-2026-09-23) is superseded by (2) -- that WAS what was happening in at least some of those cases."
+    },
+    {
+      "name": "List Payment Applications for a Prime Contract (invoice numbering scan)",
+      "method": "GET",
+      "path": "/rest/v1.0/prime_contracts/{prime_contract_id}/payment_applications",
+      "query_params": {
+        "project_id": "{project_id}",
+        "per_page": "300"
+      },
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Backfilled 2026-09-18, discovered live 2026-09-14. Returns id/invoice_number/status per invoice on that contract. LEDGER scans every contract on a project for the biggest purely-numeric invoice_number and suggests +1 (nextInvoiceNumber in app.js)."
+    },
+    {
+      "name": "Get Prime Change Order detail",
+      "method": "GET",
+      "path": "/rest/v1.0/projects/{project_id}/prime_change_orders/{id}",
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Backfilled 2026-09-18, discovered live 2026-09-17. Fields incl. status, executed (bool), contract_id, grand_total, title, number. Confirmed a CO can be status:'approved', executed:true with a correct grand_total while its linked Change Event never leaves 'Open' status -- the two objects' lifecycles are independent; approving/executing a CO does NOT auto-transition its CE."
+    },
+    {
+      "name": "Get Prime Change Order line items",
+      "method": "GET",
+      "path": "/rest/v2.0/companies/{company_id}/projects/{project_id}/prime_change_orders/{id}/line_items",
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Backfilled 2026-09-18, discovered live 2026-09-17. Per line: id, description, amount, quantity, unit_cost, uom, wbs_code: {id, flat_code, description}, wbs_code_id."
+    },
+    {
+      "name": "Get Change Event detail",
+      "method": "GET",
+      "path": "/rest/v1.1/change_events/{id}",
+      "query_params": {
+        "project_id": "{project_id}"
+      },
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Backfilled 2026-09-18, discovered live 2026-09-17. status: {id, name, mapped_to_status}. Every LEDGER-created CE observed stays 'Open'/'open' indefinitely, including ones whose CO is long since approved+executed."
+    },
+    {
+      "name": "Get Prime Contract's own line_items (STATIC base SOV, not the live continuation sheet)",
+      "method": "GET",
+      "path": "/rest/v2.0/companies/{company_id}/projects/{project_id}/prime_contracts/{id}/line_items",
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Backfilled 2026-09-18, discovered live 2026-09-17. Returns the contract's ORIGINAL bid-scope lines only. Confirmed on a contract with 2 already-executed COs (fully reflected in revised_contract_amount and in existing invoices' g703): this endpoint still showed only the single original line, nothing CO-driven. Do NOT use this to check whether a CO's impact has landed -- use the payment_application g703 array instead."
+    },
+    {
+      "name": "Get Direct Cost line items (real multi-line shape)",
+      "method": "GET",
+      "path": "/rest/v1.0/projects/{project_id}/direct_costs/{id}/line_items",
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Backfilled 2026-09-18, discovered live 2026-09-17. Per line: id, amount (this line's own dollar value), cost_code: {id, name, full_code, budgeted}, wbs_code: {id, flat_code, description}, description, line_item_type: {id, name, code}, quantity, unit_cost, uom, total_amount, extended_amount. Confirmed live with a real 3-line-item DC ($100+$50+$500). The DC header's own amount/grand_total field stays in sync with the sum of its line items (confirmed after adding new lines to an existing DC) but can be transiently null in the same request cycle a brand-new line was just added, before settling -- exact settle timing not measured. UPDATE 2026-09-22: re-checked the SAME DC 5 days later -- header amount was STILL null, not just transient. Per-line DC billing now sums real line amounts directly instead of trusting the header. Also confirmed: line item ids are stable/globally unique (3 real ids, no collisions), plain flat array response, no pagination metadata seen (only tested at 3 lines)."
+    },
+    {
+      "name": "Create Billing Period",
+      "method": "POST",
+      "path": "/rest/v1.0/projects/{project_id}/billing_periods",
+      "status_code": 201,
+      "verification": "verified",
+      "notes": "Backfilled 2026-09-18, discovered live 2026-09-14. Body: {billing_period: {start_date, end_date, due_date}}. LEDGER always supplies due_date (defaults it to end_date when the caller doesn't give one) -- whether Procore itself requires due_date or accepts its absence has not actually been tested bare."
+    },
+    {
+      "name": "List Company Projects",
+      "method": "GET",
+      "path": "/rest/v1.0/projects",
+      "query_params": {
+        "company_id": "{company_id}"
+      },
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live 2026-09-24. Bare array. Includes stage (name string) + project_stage {id,name}, city, state_code, project_region_id, sector, active, created_at, total_value, estimated_value. Does NOT include departments or office; those are only on the project show endpoint."
+    },
+    {
+      "name": "Show Project (departments, office, region)",
+      "method": "GET",
+      "path": "/rest/v1.0/projects/{project_id}",
+      "query_params": {
+        "company_id": "{company_id}"
+      },
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live 2026-09-24. Adds departments [{id,name}], office {id,name,city,division}, project_region {id,name}, project_type {name}, project_stage {name}. company_id query param is required (400 without it)."
+    },
+    {
+      "name": "List Project Regions",
+      "method": "GET",
+      "path": "/rest/v1.0/companies/{company_id}/project_regions",
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live 2026-09-24. [{id,name}], e.g. Einbau GTA / Muskoka / Alberta / British Columbia / Saskatchewan / Manitoba. /rest/v1.0/project_regions?company_id= 404s, and /companies/{id}/departments 404s (read departments from Show Project instead)."
+    },
+    {
+      "name": "Prime Contract totals (for % invoiced)",
+      "method": "GET",
+      "path": "/rest/v1.0/prime_contracts",
+      "query_params": {
+        "project_id": "{project_id}"
+      },
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live 2026-09-24. Each contract carries revised_contract_amount, owner_invoices_amount (total invoiced to the owner), total_payments, percentage_paid, outstanding_balance, approved_change_orders, draft_change_orders_amount. % invoiced = owner_invoices_amount / revised_contract_amount, with no invoice-level fetch needed."
+    },
+    {
+      "name": "Budget Views + summary/detail rows",
+      "method": "GET",
+      "path": "/rest/v1.0/budget_views?project_id={project_id}, /rest/v1.0/budget_views/{view_id}/summary_rows?project_id={project_id}, /rest/v1.0/budget_views/{view_id}/detail_rows?project_id={project_id}",
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live 2026-09-24. summary_rows returns ONE project-total row; every column (custom calculated ones included) is keyed by its display name. Einbau reporting view: \"Procore Standard Budget (Custom Reporting View)\" id 562949953553505. Only lines ADDED to the budget count. /budget_views/{id}/budget_columns 404s."
+    },
+    {
+      "name": "Webhook resources + hooks",
+      "method": "GET",
+      "path": "/rest/v1.0/webhooks/resources?project_id={project_id} (or company_id), /rest/v1.0/webhooks/hooks?company_id={company_id}",
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live 2026-09-24. Project scope lists 96 resources, including Direct Costs, Direct Cost Line Items, Payment Applications, Contract Payments, Prime Contracts (+Line Items), Change Events, Potential Change Orders, Change Order Packages/Requests, Budget Line Items/Changes/Modifications, Work Order + Purchase Order Contracts (+Line Items), Timecard Entries. NO Requisitions (sub invoices) resource. Company scope lists 25 company-record resources (Projects, Project Stages, Departments, Offices...). Existing company hooks: Power Automate (id 8378313) and qbo-dashboard.smoothlink.net (id 186829). Do not modify those."
+    }
+  ],
+  "rate_limit": {
+    "discovered": "2026-09-14",
+    "limit": "25 requests per rolling 60-second window",
+    "scope": "shared across the ENTIRE Connector app + company, not per-user or per-project",
+    "headers": [
+      "x-rate-limit-limit",
+      "x-rate-limit-remaining",
+      "x-rate-limit-reset (unix timestamp)"
+    ],
+    "notes": "LEDGER paces itself by reading these headers directly (throttleForRateLimit in worker/src/app.js) and on an actual 429 waits for the real x-rate-limit-reset time rather than a blind fixed delay."
+  },
+  "docs_site_categories_seen": [
+    "Company Admin",
+    "Construction Financials",
+    "Core",
+    "Platform - Developer Tools",
+    "Preconstruction",
+    "Procore Helix",
+    "Project Management",
+    "Resource Management"
+  ]
+}

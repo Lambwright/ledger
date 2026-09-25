@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.wrangler/
+
+# Secrets and local env — never committed. The sidebar's VITE_* values and the
+# portfolio's build vars go in GitHub/Cloudflare settings instead.
+.env
+.env.*
+.dev.vars
+
+# Local Claude Code session state (the root launch.json is fine to share).
+**/.claude/*
+!/.claude/launch.json

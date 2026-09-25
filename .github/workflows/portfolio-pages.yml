@@ -1,0 +1,53 @@
+name: Deploy portfolio/ to GitHub Pages
+
+# The company-level portfolio page → https://lambwright.github.io/ledger/
+# (same deploy pattern as HELM). The Procore sidebar (frontend/) and the
+# Worker (worker/) deploy to Cloudflare separately and aren't touched here.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "portfolio/**"
+      - ".github/workflows/portfolio-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: portfolio/package-lock.json
+      - run: npm ci
+        working-directory: portfolio
+      - run: npm run build
+        working-directory: portfolio
+        env:
+          VITE_AUTH_API: ${{ vars.VITE_AUTH_API }}
+          VITE_WORKER_URL: ${{ vars.VITE_WORKER_URL }}
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: portfolio/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
