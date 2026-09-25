@@ -251,9 +251,9 @@ export async function runScheduled(env, { maxRefreshes = 4 } = {}) {
 export async function verifyEinbauUser(request, env) {
   const auth = request.headers.get('Authorization') || '';
   if (!auth.startsWith('Bearer ')) return null;
-  const base = env.EINBAU_AUTH_URL || 'https://auth.ben-a90.workers.dev';
   try {
-    const res = await fetch(`${base}/auth/verify`, {
+    // Service binding, not fetch(): worker → *.workers.dev is blocked (error 1042).
+    const res = await env.AUTH_WORKER.fetch('https://auth.ben-a90.workers.dev/auth/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: auth },
       body: '{}'

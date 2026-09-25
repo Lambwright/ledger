@@ -1,3 +1,11 @@
 name = "ledger"
 main = "src/index.js"
 compatibility_date = "2026-09-04"
+
+# Einbau ID login check (portfolio page). A plain fetch() from one worker to
+# another *.workers.dev URL on this account is blocked (Cloudflare error 1042),
+# so auth-worker is reached through a service binding instead — same as
+# tally-worker and punch-worker.
+[[services]]
+binding = "AUTH_WORKER"
+service = "auth"
