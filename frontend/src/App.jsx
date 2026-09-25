@@ -2394,7 +2394,7 @@ export default function App() {
                                     : `Applies to all ${openLines.length} open line${openLines.length === 1 ? '' : 's'} — tick lines to narrow it`}
                                 </div>
                                 <div className="cm-disposition-buttons">
-                                  <button className="billed-btn" onClick={() => startDisposition('already_billed', cardScope)}>
+                                  <button className={action === 'review' ? 'billed-btn' : 'draft-btn'} onClick={() => startDisposition('already_billed', cardScope)}>
                                     Already Billed
                                   </button>
                                   <button className="draft-btn" onClick={() => startDisposition('budgeted', cardScope)}>
@@ -2490,17 +2490,20 @@ export default function App() {
                 <strong>{checkedCount}</strong> item{checkedCount === 1 ? '' : 's'} · {money(checkedTotal)}
               </div>
               <div className="action-bar-buttons">
-                {(isBillingAction || action === 'review') && (
-                  <>
-                    <button className="billed-btn" onClick={() => startDisposition('already_billed')}>Already Billed</button>
-                    <button className={action === 'review' ? 'draft-btn' : 'cancel-btn'} onClick={() => startDisposition('budgeted')}>Mark as Budgeted</button>
-                    <button className={action === 'review' ? 'draft-btn' : 'cancel-btn'} onClick={() => startDisposition('writeoff')}>Write Off</button>
-                  </>
-                )}
+                {/* Billing flows lead with Configure; the dispositions are
+                    secondary there. Review Project has no billing, so
+                    Already Billed leads (green) instead — Ben, 2026-09-25. */}
                 {action !== 'review' && (
                   <button className={action === 'invoice' ? 'generate-btn' : 'draft-btn'} onClick={() => setConfiguring(true)}>
                     Configure →
                   </button>
+                )}
+                {(isBillingAction || action === 'review') && (
+                  <>
+                    <button className={action === 'review' ? 'billed-btn' : 'cancel-btn'} onClick={() => startDisposition('already_billed')}>Already Billed</button>
+                    <button className={action === 'review' ? 'draft-btn' : 'cancel-btn'} onClick={() => startDisposition('budgeted')}>Mark as Budgeted</button>
+                    <button className={action === 'review' ? 'draft-btn' : 'cancel-btn'} onClick={() => startDisposition('writeoff')}>Write Off</button>
+                  </>
                 )}
               </div>
             </div>
