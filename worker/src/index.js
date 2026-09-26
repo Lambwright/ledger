@@ -20,7 +20,7 @@ import {
   listPendingTickets, ticketDetail, generateInvoice, pushToDraftCO, previewBilling,
   setProjectBillingMode, getProjectSettings, saveProjectSettings, setProjectRates, listPrimeContracts, listBillingPeriods, nextInvoiceNumber, revertToUnbilled, revertDirectCost,
   listPendingDirectCosts, directCostLineDetail, previewDirectCostBilling, generateDirectCostInvoice, pushDirectCostToDraftCO,
-  previewCombinedBilling, generateCombinedInvoice, pushCombinedToDraftCO, writeOffRecords, markAsBudgeted, markAsAlreadyBilled,
+  previewCombinedBilling, generateCombinedInvoice, generateStandaloneInvoice, pushCombinedToDraftCO, writeOffRecords, markAsBudgeted, markAsAlreadyBilled,
   invoiceExistingChangeOrder,
   listCommitments, commitmentLineDetail, previewCommitmentReconciliation, reconcileCommitment, previewCommitmentBilling, generateCommitmentInvoice, pushCommitmentToDraftCO,
   revertCommitment
@@ -252,7 +252,7 @@ async function handleStreamingCombinedAction(env, body) {
     action, tenant_id, project_id, entry_ids, direct_cost_ids, direct_cost_line_ids, commitment_ids, commitment_line_ids, user_id,
     prime_contract_id, confirm_unlinked, group_by, rate_overrides, edited_tm_lines,
     markup_percent, cm_markup_percent, dc_group_by, edited_dc_lines, cm_group_by, edited_cm_lines,
-    title, billing_period_id, new_billing_period, invoice_number, billing_date
+    title, billing_period_id, new_billing_period, invoice_number, billing_date, standalone
   } = body;
   const haveEntries = [entry_ids, direct_cost_ids, direct_cost_line_ids, commitment_ids, commitment_line_ids]
     .some(a => Array.isArray(a) && a.length > 0);
@@ -263,7 +263,8 @@ async function handleStreamingCombinedAction(env, body) {
       if (!tenant_id || !project_id || !haveEntries) {
         throw new Error('tenant_id, project_id, and at least one T&M ticket, direct cost, or commitment are required');
       }
-      const fn = action === 'generate_combined_invoice' ? generateCombinedInvoice : pushCombinedToDraftCO;
+      // standalone: a new Prime Contract per invoice instead of a CO (generateStandaloneInvoice).
+      const fn = action === 'generate_combined_invoice' ? (standalone ? generateStandaloneInvoice : generateCombinedInvoice) : pushCombinedToDraftCO;
       const result = await fn(env, {
         tenantId: tenant_id, projectId: project_id,
         entryIds: entry_ids || [], directCostIds: direct_cost_ids || [], directCostLineIds: direct_cost_line_ids || [],

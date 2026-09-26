@@ -4035,6 +4035,205 @@ export async function generateCombinedInvoice(env, {
 }
 
 // ============================================================
+// Standalone invoice (Ben's ask 2026-09-26: "new Prime Contract per
+// invoice"). For costs that don't belong on the main contract as a Change
+// Order, e.g. pass-through materials: LEDGER creates a brand-new Prime
+// Contract ("Pass-Thru Invoicing - Materials to Sep 26") whose Schedule of
+// Values IS the selected costs, approves it, and invoices it at 100%. Same
+// sources, markup, grouping and preview as the CO flow (computeCombinedSources),
+// but no Change Event or Change Order at all.
+//
+// Verified live on Test Project 1, 2026-09-26: v2.0 POST prime_contracts
+// (status must be capitalised, "Draft"; the number auto-increments); v2.0
+// POST .../line_items takes amount + wbs_code_id only on an amount-based
+// contract (quantity/unit_cost/uom are rejected); v2.0 PATCH to Approved +
+// executed; the new invoice's g703 rows are there IMMEDIATELY (added_from_source
+// 'contract', added_from_source_id = the contract id), unlike a CO's, which
+// takes up to a minute; v2.0 DELETE removes the contract (used for rollback).
+// The owner (vendor) and contractor are copied from the project's main
+// contract, so the invoice goes to the same client.
+// ============================================================
+
+function standaloneLineDescription(line) {
+  // An amount-based contract has no quantity/rate fields, so T&M hours and
+  // rates go in the description instead.
+  if (line.hours != null && line.rate != null) {
+    return `${line.description} (${line.hours} hrs @ ${Number(line.rate).toFixed(2)})`;
+  }
+  return line.description;
+}
+
+function defaultStandaloneTitle(label, billingDate) {
+  const d = new Date(`${billingDate}T12:00:00Z`);
+  const when = Number.isNaN(d.getTime())
+    ? billingDate
+    : d.toLocaleDateString('en-CA', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  return `Pass-Thru Invoicing - ${label} to ${when}`;
+}
+
+export async function generateStandaloneInvoice(env, {
+  tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [],
+  userId, primeContractId, confirmUnlinked, groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines,
+  cmGroupBy, editedCmLines, title, billingPeriodId, newBillingPeriod, invoiceNumber, billingDate, onProgress = () => {}
+}) {
+  if (!billingDate) {
+    throw new Error('billingDate is required');
+  }
+  const { tm, dc, cm } = await computeCombinedSources(env, {
+    tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds,
+    groupBy, rateOverrides, editedTmLines, confirmUnlinked, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, onProgress
+  });
+  const lines = [
+    ...(tm ? tm.coLines.map(l => ({ ...l, wbsCodeId: tm.wbsCodeIds[l.timeType] })) : []),
+    ...(dc ? dc.coLines : []),
+    ...(cm ? cm.coLines : [])
+  ];
+  const MAX_LINES = 35;
+  if (lines.length > MAX_LINES) {
+    throw new Error(`This selection needs ${lines.length} invoice lines — too many for one reliable build (limit ${MAX_LINES}). Bill fewer items at once.`);
+  }
+  const missingCode = lines.find(l => !l.wbsCodeId);
+  if (missingCode) throw new Error(`"${missingCode.description}" has no budget code, so it can't go on a contract. Fix it in Procore first.`);
+  const totalAmount = Math.round(lines.reduce((s, l) => s + l.amount, 0) * 100) / 100;
+  const label = [tm?.label, dc?.label, cm?.label].filter(Boolean).join(' + ');
+  const contractTitle = title?.trim() ? title.trim() : defaultStandaloneTitle(label, billingDate);
+
+  const billingPeriod = await findOrCreateBillingPeriod(env, projectId, billingPeriodId, newBillingPeriod);
+  onProgress({ message: `Billing period ready — id ${billingPeriod.id}` });
+
+  // The owner and contractor come from the project's main contract.
+  const v2 = `/rest/v2.0/companies/${env.PROCORE_COMPANY_ID}/projects/${projectId}/prime_contracts`;
+  const sourceId = primeContractId || await findBillableContract(env, projectId);
+  const sourceRes = await requestWithRetry(env, 'GET', `${v2}/${sourceId}`, null, onProgress);
+  if (sourceRes.status !== 200) throw new Error(`Couldn't read the main Prime Contract to copy its owner: ${sourceRes.status}`);
+  const source = sourceRes.data?.data || {};
+  if (!source.vendor?.id) throw new Error(`Prime Contract "${source.title || sourceId}" has no owner set, so there's no client to invoice.`);
+
+  const createRes = await requestWithRetry(env, 'POST', v2, {
+    title: contractTitle,
+    description: `LEDGER-generated standalone invoice: ${label}`,
+    status: 'Draft',
+    accounting_method: 'amount',
+    vendor_id: Number(source.vendor.id),
+    ...(source.contractor?.id ? { contractor_id: Number(source.contractor.id) } : {}),
+    private: source.private !== false
+  }, onProgress);
+  if (createRes.status !== 201) throw new Error(`Failed to create the Prime Contract: ${createRes.status} ${JSON.stringify(createRes.data)}`);
+  const contract = createRes.data.data;
+  const contractId = contract.id;
+  onProgress({ message: `Prime Contract #${contract.number} created — "${contractTitle}"`, contractId });
+
+  // Anything that fails before the invoice exists deletes the contract again.
+  async function rollback(reason) {
+    onProgress({ message: `${reason} — removing the new Prime Contract…` });
+    const del = await requestWithRetry(env, 'DELETE', `${v2}/${contractId}`, null, onProgress);
+    return del.status === 200 || del.status === 204;
+  }
+
+  let invoice;
+  try {
+    let added = 0;
+    for (const line of lines) {
+      const res = await requestWithRetry(env, 'POST', `${v2}/${contractId}/line_items`, {
+        description: standaloneLineDescription(line),
+        amount: String(line.amount),
+        wbs_code_id: String(line.wbsCodeId)
+      }, onProgress);
+      await throttleForRateLimit(res.headers, onProgress);
+      if (res.status !== 201) throw new Error(`Failed to add "${line.description}": ${res.status} ${JSON.stringify(res.data)}`);
+      added++;
+      onProgress({ message: `Added line ${added}/${lines.length}: ${line.description} — ${line.amount.toLocaleString()}` });
+    }
+
+    const approveRes = await requestWithRetry(env, 'PATCH', `${v2}/${contractId}`, { status: 'Approved', executed: true }, onProgress);
+    if (approveRes.status !== 200) throw new Error(`Failed to approve the Prime Contract: ${approveRes.status} ${JSON.stringify(approveRes.data)}`);
+    onProgress({ message: 'Prime Contract approved' });
+
+    const finalInvoiceNumber = invoiceNumber ? String(invoiceNumber) : String(await nextInvoiceNumber(env, { projectId }));
+    const invoiceRes = await requestWithRetry(env, 'POST', `/rest/v1.0/prime_contracts/${contractId}/payment_applications`, {
+      project_id: Number(projectId),
+      payment_application: {
+        commitment_billing_period_id: billingPeriod.id,
+        period_start: billingPeriod.start_date,
+        period_end: billingPeriod.end_date,
+        billing_date: billingDate,
+        invoice_number: finalInvoiceNumber,
+        status: 'draft'
+      }
+    }, onProgress);
+    if (invoiceRes.status !== 201) throw new Error(`Failed to create the invoice: ${invoiceRes.status} ${JSON.stringify(invoiceRes.data)}`);
+    invoice = invoiceRes.data;
+  } catch (e) {
+    const removed = await rollback('Failed before the invoice was created');
+    throw new Error(`${e.message} ${removed ? '(the new Prime Contract was removed — nothing left behind)' : '(COULD NOT remove the new Prime Contract — delete it in Procore)'}`);
+  }
+  onProgress({ message: `Invoice ${invoice.invoice_number} created`, invoiceId: invoice.id, invoiceNumber: invoice.invoice_number });
+
+  // Claim every line at 100%. The rows were there immediately in testing; a
+  // couple of short retries cover a slow day.
+  let rows = [];
+  for (const wait of [0, 3000, 5000, 10000]) {
+    if (wait) await sleep(wait);
+    const shown = await requestWithRetry(env, 'GET', `/rest/v1.0/payment_applications/${invoice.id}?project_id=${projectId}`, null, onProgress);
+    rows = shown.status === 200
+      ? (shown.data.g703 || []).filter(r => r.added_from_source === 'contract' && String(r.added_from_source_id) === String(contractId))
+      : [];
+    if (rows.length >= lines.length) break;
+  }
+  const claimedIds = new Set();
+  let claimedCount = 0;
+  const failedLines = [];
+  for (const line of lines) {
+    const row = rows.find(r => !claimedIds.has(r.id) && Math.abs(Number(r.scheduled_value) - line.amount) < 0.01);
+    if (!row) { failedLines.push(line.description); continue; }
+    claimedIds.add(row.id);
+    const r = await requestWithRetry(env, 'PATCH', `/rest/v1.0/prime_contracts/${contractId}/payment_application_line_items/${row.id}`, {
+      project_id: Number(projectId),
+      payment_application_line_item: { work_completed_this_period: Number(line.amount).toFixed(2) }
+    }, onProgress);
+    await throttleForRateLimit(r.headers, onProgress);
+    if (r.status === 200) claimedCount++;
+    else failedLines.push(line.description);
+  }
+  onProgress({
+    message: failedLines.length
+      ? `Claimed ${claimedCount} of ${lines.length} invoice line(s) — ${failedLines.length} still need 100% entered in Procore: ${failedLines.join('; ')}`
+      : `Claimed all ${claimedCount} invoice line(s) at 100%`
+  });
+
+  const dcRows = [...dcBillingRows(dc?.lineItems || []), ...commitmentBillingRows(cm?.lineItems || [])];
+  const tmLineItems = tm?.lineItems || [];
+  await insertBillingRecordsBatch(env, [
+    ...tmLineItems.map(line => ({
+      tenantId, projectId, procoreRecordId: line.timecardEntryId,
+      invoiceId: String(invoice.id), invoiceNumber: invoice.invoice_number,
+      amount: line.amount, status: 'billed', reconciledBy: userId || 'ledger-system'
+    })),
+    ...dcRows.map(row => ({
+      ...row, tenantId, projectId, invoiceId: String(invoice.id), invoiceNumber: invoice.invoice_number,
+      status: 'billed', reconciledBy: userId || 'ledger-system'
+    }))
+  ]);
+  onProgress({ message: `Recorded ${tmLineItems.length + dcRows.length} item(s) as billed` });
+
+  return {
+    standalone: true,
+    contractId,
+    contractNumber: contract.number,
+    contractTitle,
+    invoiceId: invoice.id,
+    invoiceNumber: invoice.invoice_number,
+    totalAmount,
+    linesbilled: tmLineItems.length + dcRows.length,
+    ticketNumbers: (tm?.entries || []).map(e => e.number),
+    label: contractTitle,
+    claimedCount,
+    totalCoLines: lines.length,
+    unclaimedLines: failedLines
+  };
+}
+
+// ============================================================
 // Write-offs (Ben's ask 2026-09-17) — mark an unbilled T&M line or direct
 // cost as written off, with a reason, instead of pushing anything to Procore
 // at all. Pure LEDGER bookkeeping: no CE/CO/invoice ever gets created here,

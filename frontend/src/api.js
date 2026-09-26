@@ -382,9 +382,12 @@ export function previewCombinedBilling({ tenantId, projectId, entryIds, directCo
 
 export function generateCombinedInvoice({
   tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, userId, confirmUnlinked, primeContractId, groupBy, rateOverrides,
-  editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, title, billingPeriodId, newBillingPeriod, invoiceNumber, billingDate, onProgress
+  editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, title, billingPeriodId, newBillingPeriod, invoiceNumber, billingDate,
+  standalone, onProgress
 }) {
   return streamAction('generate_combined_invoice', {
+    // standalone (2026-09-26): invoice on a brand-new Prime Contract instead of a CO.
+    ...(standalone ? { standalone: true } : {}),
     tenant_id: tenantId, project_id: projectId, entry_ids: entryIds, direct_cost_ids: directCostIds, user_id: userId,
     ...(directCostLineIds?.length ? { direct_cost_line_ids: directCostLineIds } : {}),
     ...(commitmentIds?.length ? { commitment_ids: commitmentIds } : {}),

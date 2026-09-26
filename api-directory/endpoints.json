@@ -540,6 +540,46 @@
       "status_code": 200,
       "verification": "verified",
       "notes": "Verified live 2026-09-26 on KPS (17 DCs). Fields: id, amount, grand_total, direct_cost_type (invoice/expense/payroll), direct_cost_date, status, vendor_name, description, invoice_number, employee. Sum of grand_total (10,198.45) + sub-invoice amounts (178,522.24) = 188,720.69 = budget view 'Job to date costs' exactly, so any difference between source records and the budget view = cost on codes not added to the budget. Used by LEDGER portfolio 'source_records'."
+    },
+    {
+      "name": "Create Prime Contract — v2.0",
+      "method": "POST",
+      "path": "/rest/v2.0/companies/{company_id}/projects/{project_id}/prime_contracts",
+      "status_code": 201,
+      "verification": "verified",
+      "notes": "Verified live 2026-09-26 on Test Project 1 (standalone invoice build). v1.0 POST /rest/v1.0/prime_contracts returns an HTML 404 (not available), so use v2.0. Flat body (no wrapper): {title, description, status, accounting_method, vendor_id (the owner/client), contractor_id, private}. status must be capitalised: Draft | Out For Bid | Out For Signature | Approved | Complete | Terminated ('draft' is rejected 400). number auto-increments when omitted. Response wrapped {data:{...}}; v2.0 show GET .../prime_contracts/{id} returns vendor{id}, contractor{id}, accounting_method, executed, grand_total."
+    },
+    {
+      "name": "Create Prime Contract line item (SOV) — v2.0",
+      "method": "POST",
+      "path": "/rest/v2.0/companies/{company_id}/projects/{project_id}/prime_contracts/{id}/line_items",
+      "status_code": 201,
+      "verification": "verified",
+      "notes": "Verified live 2026-09-26. On an AMOUNT-based contract send {description, amount, wbs_code_id} only: quantity/unit_cost/uom are rejected with 'only supported on unit quantity holders'. Response {data:{id, amount, description, position, wbs_code{id,flat_code,description}, wbs_code_id}}."
+    },
+    {
+      "name": "Update / approve Prime Contract — v2.0",
+      "method": "PATCH",
+      "path": "/rest/v2.0/companies/{company_id}/projects/{project_id}/prime_contracts/{id}",
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live 2026-09-26. {status:'Approved', executed:true} approves it directly (no workflow on this company); also used to set contractor_id/description. grand_total then equals the sum of its SOV lines."
+    },
+    {
+      "name": "Delete Prime Contract — v2.0",
+      "method": "DELETE",
+      "path": "/rest/v2.0/companies/{company_id}/projects/{project_id}/prime_contracts/{id}",
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live 2026-09-26 on a Draft test contract with one SOV line: 200, then GET returns 404. LEDGER's standalone invoice uses it to roll back a half-built contract."
+    },
+    {
+      "name": "Invoice on a new Prime Contract — g703 timing",
+      "method": "GET",
+      "path": "/rest/v1.0/payment_applications/{id}?project_id={project_id}",
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live 2026-09-26: an invoice created on a freshly approved contract has its SOV rows in g703 IMMEDIATELY (added_from_source 'contract', added_from_source_id = the contract id), unlike Change Order rows, which can take ~1 minute. Claim each at 100% with PATCH /rest/v1.0/prime_contracts/{id}/payment_application_line_items/{row_id} {project_id, payment_application_line_item:{work_completed_this_period}} (amount only on an amount contract). Full LEDGER standalone run: TEST-PT-2 on test contract #6, $780, 3/3 lines claimed."
     }
   ],
   "rate_limit": {

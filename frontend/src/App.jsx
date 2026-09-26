@@ -247,6 +247,9 @@ export default function App() {
   // auto-generated label ("T&M #5 + 2 Direct Costs") as the actual title on
   // both the Change Event and Change Order. Empty means keep the default.
   const [coTitle, setCoTitle] = useState('');
+  // Standalone invoice (Ben's ask 2026-09-26): bill on a brand-new Prime
+  // Contract (e.g. pass-through materials) instead of a CO on the main one.
+  const [standalone, setStandalone] = useState(false);
 
   // Write-off settings (Ben's ask 2026-09-17) — no preview step, this is all
   // it needs before Confirm.
@@ -651,6 +654,7 @@ export default function App() {
   function backToLanding() {
     setAction(null);
     clearConfiguring();
+    setStandalone(false);
     // Found 2026-09-23 while wiring per-line write-off/budgeted: this used to
     // leave checkedIds/checkedDcIds/checkedDcLineIds untouched, silently
     // harmless only because write-off/budgeted never read checkedDcLineIds
@@ -987,6 +991,7 @@ export default function App() {
         fn({
           tenantId: TENANT_ID, projectId, entryIds, directCostIds, directCostLineIds, commitmentLineIds, userId, confirmUnlinked,
           primeContractId: contractId, groupBy, rateOverrides, markupPercent, cmMarkupPercent, dcGroupBy, cmGroupBy, title: coTitle, onProgress,
+          standalone: kind === 'invoice' && standalone,
           // Preview is mandatory (the settings screen's button only ever
           // leads to preview, never straight to this) — editedLines is
           // always the real, possibly-PM-edited lines by the time this runs.
@@ -1543,10 +1548,11 @@ export default function App() {
       {result && result.kind === 'invoice' && (
         <div className={`banner ${result.unclaimedLines?.length > 0 ? 'banner-warning' : 'banner-success'}`}>
           Invoice <strong>{result.invoiceNumber}</strong> created for {result.label}{' '}
+          {result.standalone && <>on new Prime Contract <strong>#{result.contractNumber}</strong>{' '}</>}
           ({money(result.totalAmount)}, {result.linesbilled} line{result.linesbilled === 1 ? '' : 's'}).
           {result.unclaimedLines?.length > 0 ? (
             <>
-              {' '}Only <strong>{result.claimedCount} of {result.totalCoLines}</strong> Change Order line(s) got claimed to 100%
+              {' '}Only <strong>{result.claimedCount} of {result.totalCoLines}</strong> {result.standalone ? 'invoice' : 'Change Order'} line(s) got claimed to 100%
               — the rest need it done by hand in Procore (likely rate-limited): {result.unclaimedLines.join('; ')}.
             </>
           ) : (
@@ -2608,6 +2614,22 @@ export default function App() {
                   <>
                     <div className="settings-section-header">General</div>
 
+                    {action === 'invoice' && (
+                      <label className="action-bar-field">
+                        <span>Invoice as</span>
+                        <select value={standalone ? 'standalone' : 'co'} onChange={e => setStandalone(e.target.value === 'standalone')}>
+                          <option value="co">Change Order on the Prime Contract</option>
+                          <option value="standalone">Standalone — its own new Prime Contract</option>
+                        </select>
+                      </label>
+                    )}
+                    {action === 'invoice' && standalone && (
+                      <div className="context-note">
+                        LEDGER creates a new Prime Contract for the same client with these items as its lines, approves it,
+                        and invoices it at 100%. Use it for costs that shouldn't sit on the main contract, like pass-through materials.
+                      </div>
+                    )}
+
                     {contracts.length > 1 && contractFromProcore ? (
                       <div className="action-bar-field">
                         <span>Prime Contract</span>
@@ -2618,7 +2640,7 @@ export default function App() {
                       </div>
                     ) : contracts.length > 1 && (
                       <label className="action-bar-field">
-                        <span>Prime Contract</span>
+                        <span>{action === 'invoice' && standalone ? 'Same client as' : 'Prime Contract'}</span>
                         <select
                           value={contractId || ''}
                           onChange={e => setContractId(e.target.value)}
@@ -2636,10 +2658,10 @@ export default function App() {
                         CO/Change Event name (e.g. "T&M #5 + 2 Direct Costs")
                         with something real. Left blank keeps the default. */}
                     <label className="action-bar-field">
-                      <span>CO / CE name (optional)</span>
+                      <span>{action === 'invoice' && standalone ? 'New Prime Contract title (optional)' : 'CO / CE name (optional)'}</span>
                       <input
                         type="text"
-                        placeholder="e.g. Kitchen Equipment Change Order"
+                        placeholder={action === 'invoice' && standalone ? 'Default: Pass-Thru Invoicing - <items> to <billing date>' : 'e.g. Kitchen Equipment Change Order'}
                         value={coTitle}
                         onChange={e => setCoTitle(e.target.value)}
                       />
