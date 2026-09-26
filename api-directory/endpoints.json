@@ -2,7 +2,7 @@
   "company_id": "562949953508586",
   "company_name": "Einbau",
   "test_project_id": "562949954996998",
-  "last_updated": "2026-09-24",
+  "last_updated": "2026-09-26",
   "test_project_name": "000_000_1 - Test Project 1",
   "endpoints": [
     {
@@ -134,7 +134,7 @@
       },
       "status_code": 200,
       "verification": "verified",
-      "notes": "Verified live 2026-09-24 (the earlier 403 was the since-fixed permission gap). Bare array; empty = the sub hasn't invoiced this commitment yet. LEDGER uses non-empty vs. empty as its only 'real invoice exists' signal (hasRealRequisition → is_estimated). Requisition detail (v1.0 and v1.1) exposes COMMITMENT-LEVEL summary totals only, with NO per-line breakdown. Procore's own UI gets its per-line Schedule of Values from an internal, session-authenticated route (/{project}/project/commitments/work_order_contracts/{id}/requisitions, no /rest/ prefix) that a public API client can't reach. Ruled out 2026-09-24 (all 404 or param ignored): /schedule_of_values, include=line_items, view=extended, v2.0 nested requisition line_items, /requisition_line_items, /subcontractor_invoices/{id}.",
+      "notes": "Verified live 2026-09-24 (the earlier 403 was the since-fixed permission gap). Bare array; empty = the sub hasn't invoiced this commitment yet. LEDGER uses non-empty vs. empty as its only 'real invoice exists' signal (hasRealRequisition → is_estimated). Requisition detail (v1.0 and v1.1) exposes COMMITMENT-LEVEL summary totals only, with NO per-line breakdown. Procore's own UI gets its per-line Schedule of Values from an internal, session-authenticated route (/{project}/project/commitments/work_order_contracts/{id}/requisitions, no /rest/ prefix) that a public API client can't reach. Ruled out 2026-09-24 (all 404 or param ignored): /schedule_of_values, include=line_items, view=extended, v2.0 nested requisition line_items, /requisition_line_items, /subcontractor_invoices/{id}. 2026-09-26 (portfolio drill-down, KPS Lloydminster 14 reqs): list ?project_id= alone returns ALL the project's requisitions (filters[commitment_id] optional). Fields: id, commitment_id, commitment_type (WorkOrderContract/PurchaseOrderContract), invoice_number, number (per-commitment sequence), billing_date, status, vendor_name, attachments, summary{current_payment_due, total_completed_and_stored_to_date, contract_sum_to_date, ...}. summary totals are CUMULATIVE per commitment; a single invoice's own amount = its total_completed_and_stored_to_date minus the previous requisition's on the same commitment (sums to 178,522.24 on KPS, matching budget view 'Subcontractor invoices'). current_payment_due is net of retainage.",
       "docs_url": "https://developers.procore.com/reference/rest/requisitions-subcontractor-invoices"
     },
     {
@@ -524,6 +524,22 @@
       "status_code": 200,
       "verification": "verified",
       "notes": "Verified live 2026-09-24. Project scope lists 96 resources, including Direct Costs, Direct Cost Line Items, Payment Applications, Contract Payments, Prime Contracts (+Line Items), Change Events, Potential Change Orders, Change Order Packages/Requests, Budget Line Items/Changes/Modifications, Work Order + Purchase Order Contracts (+Line Items), Timecard Entries. NO Requisitions (sub invoices) resource. Company scope lists 25 company-record resources (Projects, Project Stages, Departments, Offices...). Existing company hooks: Power Automate (id 8378313) and qbo-dashboard.smoothlink.net (id 186829). Do not modify those."
+    },
+    {
+      "name": "Prime contract payment applications (owner invoices) — list fields",
+      "method": "GET",
+      "path": "/rest/v1.0/prime_contracts/{prime_contract_id}/payment_applications?project_id={project_id}",
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live 2026-09-26 on KPS (PC #1 id 562949959548976, 11 invoices). One call per prime contract. Fields used: id, invoice_number, billing_date, period_start, period_end, status, total_amount_accrued_this_period (gross, pre-retainage), g702{current_payment_due (net of retainage), ...}, contract{id,title}. Summing total_amount_accrued_this_period across all PCs matched the budget view's 'Invoicing to Date' (241,463.70 on KPS)."
+    },
+    {
+      "name": "Direct costs list — reconciliation to budget view",
+      "method": "GET",
+      "path": "/rest/v1.0/projects/{project_id}/direct_costs?per_page=300",
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live 2026-09-26 on KPS (17 DCs). Fields: id, amount, grand_total, direct_cost_type (invoice/expense/payroll), direct_cost_date, status, vendor_name, description, invoice_number, employee. Sum of grand_total (10,198.45) + sub-invoice amounts (178,522.24) = 188,720.69 = budget view 'Job to date costs' exactly, so any difference between source records and the budget view = cost on codes not added to the budget. Used by LEDGER portfolio 'source_records'."
     }
   ],
   "rate_limit": {
