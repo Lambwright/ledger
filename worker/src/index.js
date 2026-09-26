@@ -18,7 +18,7 @@ import { procoreRequest } from './procore.js';
 import { dbQuery } from './db.js';
 import {
   listPendingTickets, ticketDetail, generateInvoice, pushToDraftCO, previewBilling,
-  setProjectBillingMode, getProjectSettings, saveProjectSettings, listPrimeContracts, listBillingPeriods, nextInvoiceNumber, revertToUnbilled, revertDirectCost,
+  setProjectBillingMode, getProjectSettings, saveProjectSettings, setProjectRates, listPrimeContracts, listBillingPeriods, nextInvoiceNumber, revertToUnbilled, revertDirectCost,
   listPendingDirectCosts, directCostLineDetail, previewDirectCostBilling, generateDirectCostInvoice, pushDirectCostToDraftCO,
   previewCombinedBilling, generateCombinedInvoice, pushCombinedToDraftCO, writeOffRecords, markAsBudgeted, markAsAlreadyBilled,
   invoiceExistingChangeOrder,
@@ -478,6 +478,18 @@ async function handleAction(env, body, ctx) {
     if (!tenant_id || !project_id || !settings) return json({ error: 'tenant_id, project_id and settings are required' }, 400);
     try {
       return json(await saveProjectSettings(env, { tenantId: tenant_id, projectId: project_id, userId: user_id, settings }), 200);
+    } catch (e) {
+      return json({ error: e.message }, 400);
+    }
+  }
+
+  // HANDOFF → LEDGER: set a project's T&M bill rates (only the time types
+  // given). See HANDOFF's README, "LEDGER: project T&M rates".
+  if (action === 'set_project_rates') {
+    const { tenant_id, project_id, user_id, rates } = body;
+    if (!tenant_id || !project_id || !rates) return json({ error: 'tenant_id, project_id and rates are required' }, 400);
+    try {
+      return json({ rates: await setProjectRates(env, { tenantId: tenant_id, projectId: project_id, userId: user_id, rates }) }, 200);
     } catch (e) {
       return json({ error: e.message }, 400);
     }

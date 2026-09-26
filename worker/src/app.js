@@ -682,6 +682,12 @@ export async function saveProjectSettings(env, { tenantId, projectId, userId, se
     [tenantId, projectId, ...values, actor]
   );
 
+  await writeRateOverrides(env, tenantId, projectId, rates, actor);
+  return getProjectSettings(env, { tenantId, projectId });
+}
+
+// null clears a time type back to the company rate; a number overrides it.
+async function writeRateOverrides(env, tenantId, projectId, rates, actor) {
   for (const [tt, rate] of Object.entries(rates)) {
     if (rate == null) {
       await dbQuery(
@@ -700,7 +706,23 @@ export async function saveProjectSettings(env, { tenantId, projectId, userId, se
       );
     }
   }
-  return getProjectSettings(env, { tenantId, projectId });
+}
+
+// Rates only (for HANDOFF, which sets a project's T&M rates at creation). Only
+// the time types present in `rates` are touched, unlike saveProjectSettings,
+// which saves the whole form and would clear a PM's other settings.
+export async function setProjectRates(env, { tenantId, projectId, userId, rates = {} }) {
+  const clean = {};
+  for (const [tt, v] of Object.entries(rates)) {
+    if (!RATE_TIME_TYPES.includes(tt)) throw new Error(`Unknown time type: ${tt} (expected ${RATE_TIME_TYPES.join(', ')})`);
+    if (v === null || v === '') { clean[tt] = null; continue; }
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0) throw new Error(`Invalid ${tt} rate: ${v}`);
+    clean[tt] = n;
+  }
+  if (Object.keys(clean).length === 0) throw new Error('rates is empty — pass at least one of ' + RATE_TIME_TYPES.join(', '));
+  await writeRateOverrides(env, tenantId, projectId, clean, userId || 'ledger-system');
+  return (await getProjectSettings(env, { tenantId, projectId })).rates;
 }
 
 // Normalizes the two shapes the router accepts — entry_id (single) or
