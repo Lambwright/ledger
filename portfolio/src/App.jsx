@@ -5,6 +5,8 @@ import Header from "./components/Header.jsx";
 import LoginScreen from "./components/LoginScreen.jsx";
 
 const PROCORE_ORIGIN = "https://us02.procore.com";
+// The full LEDGER app (same one as the Procore sidebar), opened standalone on a project.
+const LEDGER_APP = "https://ledger-sidebar.pages.dev";
 
 const money = (v) =>
   v == null ? "—" : Number(v).toLocaleString("en-CA", { style: "currency", currency: "CAD", maximumFractionDigits: 0 });
@@ -30,6 +32,7 @@ const COLUMNS = [
   { key: "stage", label: "Stage", sort: (p) => p.stage || "" },
   { key: "region", label: "Region", sort: (p) => p.region || "" },
   { key: "departments", label: "Department", sort: (p) => p.departments || "" },
+  { key: "unbilled_count", label: "Unbilled Records", num: true },
   { key: "revised_contract", label: "Contract", num: true },
   { key: "invoiced", label: "Invoiced", num: true },
   { key: "pct_invoiced", label: "% Invoiced", num: true },
@@ -63,7 +66,7 @@ export default function App() {
   const [region, setRegion] = useState("");
   const [dept, setDept] = useState("");
   const [showAll, setShowAll] = useState(false);
-  const [hideComplete, setHideComplete] = useState(false);
+  const [invoiceFilter, setInvoiceFilter] = useState(""); // "" | "open" | "done"
   const [sort, setSort] = useState({ key: "invoicing_remaining", dir: "desc" });
 
   const [openId, setOpenId] = useState(null);
@@ -128,7 +131,11 @@ export default function App() {
     const valueOf = col?.sort || ((p) => n(p[sort.key]));
     return projects
       .filter((p) => showAll || isReportable(p))
-      .filter((p) => !hideComplete || n(p.pct_invoiced) == null || n(p.pct_invoiced) < 100)
+      .filter((p) => {
+        if (!invoiceFilter) return true;
+        const done = n(p.pct_invoiced) != null && n(p.pct_invoiced) >= 100;
+        return invoiceFilter === "done" ? done : !done;
+      })
       .filter((p) => !stage || p.stage === stage)
       .filter((p) => !region || p.region === region)
       .filter((p) => !dept || String(p.departments || "").split(", ").includes(dept))
@@ -142,7 +149,7 @@ export default function App() {
         const cmp = va < vb ? -1 : va > vb ? 1 : 0;
         return sort.dir === "asc" ? cmp : -cmp;
       });
-  }, [projects, search, stage, region, dept, showAll, hideComplete, sort]);
+  }, [projects, search, stage, region, dept, showAll, invoiceFilter, sort]);
 
   const totals = useMemo(() => {
     const sum = (key) => visible.reduce((s, p) => s + (n(p[key]) || 0), 0);
@@ -160,6 +167,18 @@ export default function App() {
 
   const hiddenCount = projects.length - projects.filter(isReportable).length;
   const notLoaded = projects.filter((p) => !p.refreshed_at).length;
+
+  // Opening a project refreshes it from Procore (Ben's ask 2026-09-25) —
+  // skipped if it was refreshed in the last 2 minutes, to spare the rate limit.
+  function toggleOpen(p) {
+    if (openId === p.project_id) {
+      setOpenId(null);
+      return;
+    }
+    setOpenId(p.project_id);
+    const fresh = p.refreshed_at && p.counts_at && Date.now() - new Date(p.refreshed_at).getTime() < 2 * 60 * 1000;
+    if (!fresh && refreshingId !== p.project_id) refreshProject(p.project_id);
+  }
 
   function toggleSort(key) {
     setSort((s) => (s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "desc" }));
@@ -208,7 +227,11 @@ export default function App() {
             <option value="">All departments</option>
             {depts.map((s) => <option key={s}>{s}</option>)}
           </select>
-          <label className="filter-toggle"><input type="checkbox" checked={hideComplete} onChange={(e) => setHideComplete(e.target.checked)} /> Hide fully invoiced</label>
+          <select value={invoiceFilter} onChange={(e) => setInvoiceFilter(e.target.value)} aria-label="Invoicing">
+            <option value="">All invoicing</option>
+            <option value="open">Not fully invoiced</option>
+            <option value="done">Fully invoiced</option>
+          </select>
           <label className="filter-toggle" title="Overhead projects, projects without the Custom Reporting budget view, and projects not loaded yet">
             <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} /> Show {hiddenCount} hidden (no budget view or not loaded yet)
           </label>
@@ -241,7 +264,7 @@ export default function App() {
                 const noBudget = p.budget_status === "no_budget";
                 const isOpen = openId === p.project_id;
                 return [
-                  <tr key={p.project_id} className={`row-click${isOpen ? " row-open" : ""}`} onClick={() => setOpenId(isOpen ? null : p.project_id)}>
+                  <tr key={p.project_id} className={`row-click${isOpen ? " row-open" : ""}`} onClick={() => toggleOpen(p)}>
                     <td className="cell-name">
                       <div>{p.name}</div>
                       <div className="cell-sub">
@@ -254,6 +277,7 @@ export default function App() {
                     <td>{p.stage || "—"}</td>
                     <td>{p.region || "—"}</td>
                     <td>{p.departments || "—"}</td>
+                    <td className="num">{p.unbilled_count ?? "—"}</td>
                     <td className="num">{money(p.revised_contract)}</td>
                     <td className="num">{money(p.invoiced)}</td>
                     <td className="num">
@@ -281,9 +305,17 @@ export default function App() {
                             <dt>Subcontractor invoices</dt><dd>{money(p.sub_invoices)}</dd>
                             <dt>Committed costs</dt><dd>{money(p.committed_costs)}</dd>
                             <dt>Revised budget</dt><dd>{money(p.revised_budget)}</dd>
-                            <dt>Retainage</dt><dd>{money(p.retainage)}</dd>
-                            <dt>Office</dt><dd>{p.office || "—"}</dd>
                           </dl>
+                          <dl className="detail-grid">
+                            <dt>Unbilled records</dt><dd>{p.unbilled_count ?? "—"}</dd>
+                            <dt>Billed records</dt><dd>{p.billed_count ?? "—"}</dd>
+                            <dt>Budgeted records</dt><dd>{p.budgeted_count ?? "—"}</dd>
+                            <dt>Written off records</dt><dd>{p.written_off_count ?? "—"}</dd>
+                          </dl>
+                          <div className="cell-sub">
+                            Records are T&amp;M tickets, direct costs and commitments; one partly billed counts in more than one column.
+                            {p.counts_at ? ` Counted ${ago(p.counts_at)}.` : " Not counted yet."}
+                          </div>
                           {noBudget && (
                             <div className="detail-note">
                               This project's budget has no revised budget amount, so budgeted margin isn't meaningful yet. Costs on
@@ -293,12 +325,15 @@ export default function App() {
                           {p.refresh_error && <div className="detail-note detail-error">{p.refresh_error}</div>}
                           <div className="detail-actions">
                             <button
-                              className="btn btn-accent btn-sm"
+                              className="btn btn-ghost btn-sm"
                               disabled={refreshingId === p.project_id}
                               onClick={(e) => { e.stopPropagation(); refreshProject(p.project_id); }}
                             >
                               {refreshingId === p.project_id ? "Refreshing…" : "Refresh from Procore"}
                             </button>
+                            <a className="btn btn-accent btn-sm" href={`${LEDGER_APP}/?project_id=${p.project_id}`} target="_blank" rel="noreferrer">
+                              Open in LEDGER ↗
+                            </a>
                             <a className="btn btn-ghost btn-sm" href={`${PROCORE_ORIGIN}/${p.project_id}/project/home`} target="_blank" rel="noreferrer">
                               Open in Procore ↗
                             </a>

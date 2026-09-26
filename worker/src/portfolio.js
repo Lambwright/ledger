@@ -11,6 +11,7 @@
 
 import { procoreRequest } from './procore.js';
 import { dbQuery } from './db.js';
+import { listPendingTickets, listPendingDirectCosts, listCommitments } from './app.js';
 
 // Company-level budget view; resolved by name if a project doesn't have it.
 const REPORTING_VIEW_ID = '562949953553505';
@@ -33,6 +34,8 @@ const COLUMN_MAP = {
   budgeted_margin_pct: 'Budgeted Margin (%)',
   retainage: 'Retainage'
 };
+// Percent columns are recomputed from the summed totals — never summed.
+const PERCENT_COLUMNS = new Set(['pct_invoiced', 'margin_to_date_pct', 'budgeted_margin_pct']);
 
 // Stages that are finished — refreshed rarely, not on every sweep.
 const CLOSED_STAGES = ['Completed and Invoiced', 'Cancelled', 'Closed', 'Warranty Complete'];
@@ -81,11 +84,21 @@ export async function refreshProjectSnapshot(env, tenantId, projectId) {
   }
   const p = show.data;
   const summary = await fetchReportingSummary(env, projectId);
-  const row = summary.status === 200 && Array.isArray(summary.data) ? summary.data[0] || {} : null;
+  // summary_rows returns one row for the project itself plus one per sub job
+  // (KPS Lloydminster has 16) — the project's real totals are their sum, which
+  // matches the budget view's Grand Totals row exactly (verified 2026-09-25).
+  const rows = summary.status === 200 && Array.isArray(summary.data) && summary.data.length > 0 ? summary.data : null;
 
   const values = {};
-  for (const [col, label] of Object.entries(COLUMN_MAP)) values[col] = row ? num(row[label]) : null;
-  const budgetStatus = !row ? 'no_view' : (values.revised_budget ?? 0) === 0 ? 'no_budget' : 'ok';
+  for (const [col, label] of Object.entries(COLUMN_MAP)) {
+    if (PERCENT_COLUMNS.has(col)) continue;
+    values[col] = rows ? Math.round(rows.reduce((sum, r) => sum + (num(r[label]) || 0), 0) * 100) / 100 : null;
+  }
+  const pctOf = (part, whole) => (rows && whole ? Math.round((part / whole) * 10000) / 100 : null);
+  values.pct_invoiced = pctOf(values.invoiced, values.revised_contract);
+  values.margin_to_date_pct = pctOf(values.margin_to_date, values.invoiced);
+  values.budgeted_margin_pct = pctOf(values.budgeted_margin, values.revised_contract);
+  const budgetStatus = !rows ? 'no_view' : (values.revised_budget ?? 0) === 0 ? 'no_budget' : 'ok';
 
   const cols = Object.keys(COLUMN_MAP);
   const params = [
@@ -94,7 +107,7 @@ export async function refreshProjectSnapshot(env, tenantId, projectId) {
     p.project_region?.name || null, (p.departments || []).map(d => d.name).join(', ') || null,
     p.office?.name || null, p.city || null, p.state_code || null, p.active !== false, p.created_at || null,
     ...cols.map(c => values[c]),
-    budgetStatus, row ? null : `Budget view unavailable (${summary.status})`, startedAt
+    budgetStatus, rows ? null : `Budget view unavailable (${summary.status})`, startedAt
   ];
   const baseCols = ['name', 'project_number', 'stage', 'region', 'departments', 'office', 'city', 'state_code', 'active', 'procore_created_at'];
   const allCols = [...baseCols, ...cols, 'budget_status', 'refresh_error'];
@@ -110,6 +123,46 @@ export async function refreshProjectSnapshot(env, tenantId, projectId) {
     params
   );
   return Math.min(...[show.remaining, summary.remaining].filter(r => r != null), 999);
+}
+
+// Record counts (Ben's ask 2026-09-25): how many T&M tickets, direct costs and
+// commitments are unbilled / billed / budgeted / written off. A record partly
+// dispositioned counts in each bucket it has lines in — same as the sidebar's
+// Review Project tab counts.
+function countRecords(tickets, directCosts, commitments) {
+  const bucket = (data, countKey, full) =>
+    (data?.[full] || []).length + (data?.unbilled || []).filter(x => x.partialBilled && x[countKey] > 0).length;
+  const t = tickets || [];
+  return {
+    unbilled: t.filter(x => x.unbilledCount > 0).length + (directCosts?.unbilled || []).length + (commitments?.unbilled || []).length,
+    billed: t.filter(x => x.billedCount > 0).length + bucket(directCosts, 'billedLineCount', 'billed') + bucket(commitments, 'billedLineCount', 'billed'),
+    budgeted: t.filter(x => x.budgetedCount > 0).length + bucket(directCosts, 'budgetedLineCount', 'budgeted') + bucket(commitments, 'budgetedLineCount', 'budgeted'),
+    writtenOff: t.filter(x => x.writtenOffCount > 0).length + bucket(directCosts, 'writtenOffLineCount', 'writtenOff') + bucket(commitments, 'writtenOffLineCount', 'writtenOff')
+  };
+}
+
+export async function saveProjectCounts(env, tenantId, projectId, counts) {
+  const n = (v) => (Number.isInteger(v) && v >= 0 ? v : null);
+  await dbQuery(
+    env,
+    `insert into portfolio_projects (tenant_id, project_id, unbilled_count, billed_count, budgeted_count, written_off_count, counts_at)
+     values ($1, $2, $3, $4, $5, $6, now())
+     on conflict (tenant_id, project_id) do update set
+       unbilled_count = excluded.unbilled_count, billed_count = excluded.billed_count,
+       budgeted_count = excluded.budgeted_count, written_off_count = excluded.written_off_count, counts_at = now()`,
+    [tenantId, String(projectId), n(counts.unbilled), n(counts.billed), n(counts.budgeted), n(counts.writtenOff)]
+  );
+}
+
+// Dashboard drill-in: recount from the same lists the sidebar uses. ~8-10
+// Procore requests, so only on an explicit project open, never in the sweep.
+export async function refreshProjectCounts(env, tenantId, projectId) {
+  const [tm, dc, cm] = await Promise.all([
+    listPendingTickets(env, { tenantId, projectId }),
+    listPendingDirectCosts(env, { tenantId, projectId }).catch(() => null),
+    listCommitments(env, { tenantId, projectId }).catch(() => null)
+  ]);
+  await saveProjectCounts(env, tenantId, projectId, countRecords(tm.tickets, dc, cm));
 }
 
 // Sidebar use keeps busy projects current: refresh at most every 10 minutes.

@@ -290,6 +290,12 @@ export function saveProjectSettings({ tenantId, projectId, userId, settings }) {
   return callAction('save_project_settings', { tenant_id: tenantId, project_id: projectId, user_id: userId, settings });
 }
 
+// Sends this project's record counts to the company portfolio page — the
+// sidebar already has every list loaded, so this costs no Procore requests.
+export function saveProjectCounts({ tenantId, projectId, counts }) {
+  return callAction('save_portfolio_counts', { tenant_id: tenantId, project_id: projectId, counts });
+}
+
 export function listCommitments({ tenantId, projectId }) {
   return callAction('list_commitments', { tenant_id: tenantId, project_id: projectId });
 }

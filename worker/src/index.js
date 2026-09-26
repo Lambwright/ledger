@@ -26,7 +26,8 @@ import {
   revertCommitment
 } from './app.js';
 import {
-  handleProcoreWebhook, refreshIfStale, refreshProjectSnapshot, runScheduled, verifyEinbauUser, listPortfolio
+  handleProcoreWebhook, refreshIfStale, refreshProjectSnapshot, refreshProjectCounts, saveProjectCounts,
+  runScheduled, verifyEinbauUser, listPortfolio
 } from './portfolio.js';
 
 const CORS_HEADERS = {
@@ -308,6 +309,15 @@ async function handleGenericDb(env, body) {
 
 async function handleAction(env, body, ctx) {
   const { action } = body;
+
+  // The sidebar already has every list loaded — it sends its record counts
+  // here so the portfolio stays current at no extra Procore cost.
+  if (action === 'save_portfolio_counts') {
+    const { tenant_id, project_id, counts } = body;
+    if (!tenant_id || !project_id || !counts) return json({ error: 'tenant_id, project_id and counts are required' }, 400);
+    await saveProjectCounts(env, String(tenant_id), project_id, counts);
+    return json({ ok: true }, 200);
+  }
 
   if (action === 'revert_to_unbilled') {
     const { tenant_id, project_id, entry_id, include_billed, include_written_off, include_budgeted, include_billed_outside } = body;
@@ -663,6 +673,7 @@ async function handlePortfolio(request, env) {
   if (body.action === 'refresh_project') {
     if (!body.project_id) return json({ error: 'project_id is required' }, 400);
     await refreshProjectSnapshot(env, tenantId, body.project_id);
+    await refreshProjectCounts(env, tenantId, body.project_id);
     const rows = await dbQuery(env, 'select * from portfolio_projects where tenant_id = $1 and project_id = $2', [tenantId, String(body.project_id)]);
     return json({ project: rows[0] || null }, 200);
   }

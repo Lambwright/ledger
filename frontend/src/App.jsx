@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   listPendingTickets, listPendingDirectCosts, listPrimeContracts, listBillingPeriods, nextInvoiceNumber,
   previewCombinedBilling, generateCombinedInvoice, pushCombinedToDraftCO, getProjectSettings, saveProjectSettings, revertToUnbilled,
-  revertDirectCost, writeOffRecords, markAsBudgeted, markAlreadyBilled, directCostLineDetail, listCommitments, commitmentLineDetail, revertCommitment
+  revertDirectCost, writeOffRecords, markAsBudgeted, markAlreadyBilled, directCostLineDetail, listCommitments, commitmentLineDetail, revertCommitment, saveProjectCounts
 } from './api';
 import { connectProcoreSidePanel, isEmbedded } from './procore';
 
@@ -352,8 +352,8 @@ export default function App() {
     try {
       const [data, dcData, cmData, contractList, periodList, settings] = await Promise.all([
         listPendingTickets({ tenantId: TENANT_ID, projectId: pid }),
-        listPendingDirectCosts({ tenantId: TENANT_ID, projectId: pid }).catch(() => ({ unbilled: [], billed: [] })),
-        listCommitments({ tenantId: TENANT_ID, projectId: pid }).catch(() => ({ unbilled: [], billed: [], writtenOff: [], budgeted: [] })),
+        listPendingDirectCosts({ tenantId: TENANT_ID, projectId: pid }).catch(() => ({ unbilled: [], billed: [], failed: true })),
+        listCommitments({ tenantId: TENANT_ID, projectId: pid }).catch(() => ({ unbilled: [], billed: [], writtenOff: [], budgeted: [], failed: true })),
         listPrimeContracts({ projectId: pid }).catch(() => []),
         listBillingPeriods({ projectId: pid }).catch(() => []),
         getProjectSettings({ tenantId: TENANT_ID, projectId: pid }).catch(() => null)
@@ -1358,6 +1358,22 @@ export default function App() {
   const billedCm = withPartials(commitments?.billed, unbilledCm, 'billedLineCount', c => ({ ...c, billedAmount: c.billedLineAmount }));
   const writtenOffCm = withPartials(commitments?.writtenOff, unbilledCm, 'writtenOffLineCount', c => ({ ...c, writtenOffAmount: c.writtenOffLineAmount, reasonNotes: c.writeOffNotes }));
   const budgetedCm = withPartials(commitments?.budgeted, unbilledCm, 'budgetedLineCount', c => ({ ...c, budgetedAmount: c.budgetedLineAmount, reasonNotes: c.budgetedNotes }));
+
+  // Keep the company portfolio's record counts current. Skipped when a list
+  // failed to load, so a hiccup never overwrites real counts with zeros.
+  useEffect(() => {
+    if (!projectId || !tickets || !directCosts || !commitments || directCosts.failed || commitments.failed) return;
+    saveProjectCounts({
+      tenantId: TENANT_ID, projectId,
+      counts: {
+        unbilled: unbilledTickets.length + unbilledDc.length + unbilledCm.length,
+        billed: billedTickets.length + billedDc.length + billedCm.length,
+        budgeted: budgetedTickets.length + budgetedDc.length + budgetedCm.length,
+        writtenOff: writtenOffTickets.length + writtenOffDc.length + writtenOffCm.length
+      }
+    }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per data load
+  }, [tickets, directCosts, commitments]);
 
   const reviewHeader = (
     <>
