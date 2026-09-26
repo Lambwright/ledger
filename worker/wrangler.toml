@@ -9,3 +9,9 @@ compatibility_date = "2026-09-04"
 [[services]]
 binding = "AUTH_WORKER"
 service = "auth"
+
+# Portfolio refresh (worker/src/portfolio.js runScheduled): every minute, up to
+# 4 projects, stopping early whenever Procore reports <12 requests left so the
+# sidebar always has headroom. Needs the paid Workers plan (cron slots).
+[triggers]
+crons = ["* * * * *"]
