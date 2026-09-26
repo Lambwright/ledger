@@ -26,7 +26,7 @@ import {
   revertCommitment
 } from './app.js';
 import {
-  handleProcoreWebhook, refreshIfStale, refreshProjectSnapshot, refreshProjectCounts, saveProjectCounts,
+  handleProcoreWebhook, refreshIfStale, refreshProjectSnapshot, refreshProjectCounts, saveProjectCounts, projectSourceRecords,
   runScheduled, verifyEinbauUser, listPortfolio
 } from './portfolio.js';
 
@@ -318,6 +318,7 @@ async function handleAction(env, body, ctx) {
     await saveProjectCounts(env, String(tenant_id), project_id, counts);
     return json({ ok: true }, 200);
   }
+
 
   if (action === 'revert_to_unbilled') {
     const { tenant_id, project_id, entry_id, include_billed, include_written_off, include_budgeted, include_billed_outside } = body;
@@ -688,6 +689,10 @@ async function handlePortfolio(request, env) {
     await refreshProjectCounts(env, tenantId, body.project_id);
     const rows = await dbQuery(env, 'select * from portfolio_projects where tenant_id = $1 and project_id = $2', [tenantId, String(body.project_id)]);
     return json({ project: rows[0] || null }, 200);
+  }
+  if (body.action === 'source_records') {
+    if (!body.project_id) return json({ error: 'project_id is required' }, 400);
+    return json(await projectSourceRecords(env, tenantId, body.project_id), 200);
   }
   return json({ error: `unknown action: ${body.action}` }, 400);
 }

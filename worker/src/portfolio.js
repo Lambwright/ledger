@@ -165,6 +165,115 @@ export async function refreshProjectCounts(env, tenantId, projectId) {
   await saveProjectCounts(env, tenantId, projectId, countRecords(tm.tickets, dc, cm));
 }
 
+// Dashboard drill-down (Ben's ask 2026-09-26): the source records behind a
+// project's numbers — direct costs, subcontractor invoices (Requisitions) and
+// owner invoices — each with LEDGER's own billing status. Only loaded when a
+// PM asks (≈3 + one per Prime Contract requests). Verified on KPS Lloydminster:
+// all direct costs + all sub invoices = the budget view's Job-to-date cost to
+// the cent, so any difference is cost sitting outside the budget.
+export async function projectSourceRecords(env, tenantId, projectId) {
+  const [dcRes, reqRes, pcRes, ledgerRows, snapshot] = await Promise.all([
+    procoreGet(env, `/rest/v1.0/projects/${projectId}/direct_costs?per_page=300`),
+    procoreGet(env, `/rest/v1.0/requisitions?project_id=${projectId}&per_page=300`),
+    procoreGet(env, `/rest/v1.0/prime_contracts?project_id=${projectId}`),
+    dbQuery(
+      env,
+      `select record_type, procore_record_id, status, is_estimated from billing_records
+       where tenant_id = $1 and project_id = $2 and record_type in ('direct_cost', 'direct_cost_line', 'commitment_line')`,
+      [tenantId, String(projectId)]
+    ),
+    dbQuery(env, `select direct_costs, sub_invoices, invoiced from portfolio_projects where tenant_id = $1 and project_id = $2`, [tenantId, String(projectId)])
+  ]);
+  for (const [label, res] of [['direct costs', dcRes], ['sub invoices', reqRes], ['prime contracts', pcRes]]) {
+    if (res.status !== 200) throw new Error(`Couldn't load ${label} from Procore (${res.status})`);
+  }
+
+  // LEDGER status per direct cost / commitment, from its billing records.
+  const statusesBy = { dc: new Map(), cm: new Map() };
+  for (const r of ledgerRows) {
+    const parent = r.record_type === 'direct_cost' ? r.procore_record_id : r.procore_record_id.split(':')[0];
+    const map = r.record_type === 'commitment_line' ? statusesBy.cm : statusesBy.dc;
+    if (!map.has(parent)) map.set(parent, { statuses: new Set(), estimated: false });
+    map.get(parent).statuses.add(r.status);
+    if (r.is_estimated) map.get(parent).estimated = true;
+  }
+  const LABEL = { billed: 'Billed', draft_co: 'In draft CO', written_off: 'Written off', reconciled_to_period: 'Budgeted' };
+  const ledgerStatus = (map, id) => {
+    const s = map.get(String(id));
+    if (!s) return 'Not in LEDGER yet';
+    return [...s.statuses].map(x => LABEL[x] || x).join(' + ') + (s.estimated ? ' (estimated)' : '');
+  };
+
+  const round2 = (x) => Math.round(x * 100) / 100;
+  const directCosts = (dcRes.data || []).map(d => ({
+    id: d.id,
+    date: d.direct_cost_date || null,
+    vendor: d.vendor_name || d.vendor || null,
+    description: d.description || '',
+    type: d.direct_cost_type || null,
+    status: d.status || null,
+    amount: num(d.grand_total ?? d.amount) || 0,
+    ledgerStatus: ledgerStatus(statusesBy.dc, d.id)
+  }));
+
+  // A sub invoice's own amount = its completed-to-date minus the previous
+  // invoice's on the same commitment (Procore only stores cumulative totals).
+  const reqs = [...(reqRes.data || [])].sort((a, b) => (a.commitment_id - b.commitment_id) || ((a.number || 0) - (b.number || 0)));
+  const lastToDate = new Map();
+  const subInvoices = reqs.map(r => {
+    const toDate = num(r.summary?.total_completed_and_stored_to_date) || 0;
+    const previous = lastToDate.get(r.commitment_id) || 0;
+    lastToDate.set(r.commitment_id, toDate);
+    return {
+      id: r.id,
+      commitmentId: r.commitment_id,
+      commitmentType: r.commitment_type || null,
+      vendor: r.vendor_name || null,
+      invoiceNumber: r.invoice_number || null,
+      number: r.number ?? null,
+      billingDate: r.billing_date || null,
+      status: r.status || null,
+      amount: round2(toDate - previous),
+      ledgerStatus: ledgerStatus(statusesBy.cm, r.commitment_id)
+    };
+  });
+
+  const contracts = Array.isArray(pcRes.data) ? pcRes.data : [];
+  const ownerInvoices = [];
+  for (const c of contracts) {
+    const paRes = await procoreGet(env, `/rest/v1.0/prime_contracts/${c.id}/payment_applications?project_id=${projectId}&per_page=300`);
+    if (paRes.status !== 200) continue;
+    for (const pa of paRes.data || []) {
+      ownerInvoices.push({
+        id: pa.id,
+        contractId: c.id,
+        contractTitle: c.title || `#${c.number}`,
+        invoiceNumber: pa.invoice_number || null,
+        billingDate: pa.billing_date || null,
+        periodStart: pa.period_start || null,
+        periodEnd: pa.period_end || null,
+        status: pa.status || null,
+        amount: num(pa.total_amount_accrued_this_period) || 0
+      });
+    }
+  }
+
+  const total = (list) => round2(list.reduce((s, x) => s + x.amount, 0));
+  const dcTotal = total(directCosts);
+  const subTotal = total(subInvoices);
+  const snap = snapshot[0] || {};
+  const budgetCost = (num(snap.direct_costs) || 0) + (num(snap.sub_invoices) || 0);
+  return {
+    directCosts: directCosts.sort((a, b) => String(b.date).localeCompare(String(a.date))),
+    subInvoices: subInvoices.sort((a, b) => String(b.billingDate).localeCompare(String(a.billingDate))),
+    ownerInvoices: ownerInvoices.sort((a, b) => String(b.billingDate).localeCompare(String(a.billingDate))),
+    totals: { directCosts: dcTotal, subInvoices: subTotal, ownerInvoices: total(ownerInvoices) },
+    // Cost recorded in Procore that the budget view doesn't count (a cost
+    // code not added to the budget). Null until the project's been refreshed.
+    costOutsideBudget: snapshot[0] ? round2(dcTotal + subTotal - budgetCost) : null
+  };
+}
+
 // Sidebar use keeps busy projects current: refresh at most every 10 minutes.
 export async function refreshIfStale(env, tenantId, projectId) {
   const rows = await dbQuery(

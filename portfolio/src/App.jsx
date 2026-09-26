@@ -3,6 +3,7 @@ import { getStoredToken, verify, hasLedgerAccess, logout as doLogout } from "./a
 import { api } from "./api.js";
 import Header from "./components/Header.jsx";
 import LoginScreen from "./components/LoginScreen.jsx";
+import SourceRecords from "./components/SourceRecords.jsx";
 
 const PROCORE_ORIGIN = "https://us02.procore.com";
 // The full LEDGER app (same one as the Procore sidebar), opened standalone on a project.
@@ -323,6 +324,7 @@ export default function App() {
                             </div>
                           )}
                           {p.refresh_error && <div className="detail-note detail-error">{p.refresh_error}</div>}
+                          <SourceRecords projectId={p.project_id} onUnauthorized={handleLogout} />
                           <div className="detail-actions">
                             <button
                               className="btn btn-ghost btn-sm"

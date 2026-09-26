@@ -233,3 +233,15 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
   .header-badge-name { font-size: 28px; }
   .container { padding: 16px 16px 40px; }
 }
+
+/* Source-record drill-down (components/SourceRecords.jsx) */
+.src { display: flex; flex-direction: column; gap: 8px; }
+.src-section { display: flex; flex-direction: column; gap: 6px; }
+.src-toggle {
+  display: flex; align-items: baseline; gap: 6px; width: 100%;
+  background: none; border: none; padding: 4px 0; cursor: pointer;
+  color: var(--text-primary); font: inherit; font-size: 13px; font-weight: 600; text-align: left;
+}
+.src-total { margin-left: auto; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+.src-table { max-height: 360px; overflow-y: auto; }
+.src-desc { white-space: normal !important; min-width: 200px; }

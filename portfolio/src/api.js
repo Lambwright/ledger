@@ -23,4 +23,5 @@ async function call(action, payload = {}) {
 export const api = {
   list: () => call("list"),
   refreshProject: (projectId) => call("refresh_project", { project_id: projectId }),
+  sourceRecords: (projectId) => call("source_records", { project_id: projectId }),
 };
