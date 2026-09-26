@@ -296,6 +296,19 @@ export function saveProjectCounts({ tenantId, projectId, counts }) {
   return callAction('save_portfolio_counts', { tenant_id: tenantId, project_id: projectId, counts });
 }
 
+// Estimated-commitment reconciliation (2026-09-26): the proposal, then the
+// PM-confirmed amount (0 = no adjustment; negative = a credit on the draft CO).
+export function previewCommitmentReconciliation({ tenantId, projectId, commitmentId }) {
+  return callAction('preview_commitment_reconciliation', { tenant_id: tenantId, project_id: projectId, commitment_id: commitmentId });
+}
+
+export function reconcileCommitment({ tenantId, projectId, commitmentId, amount, description, primeContractId, userId }) {
+  return callAction('reconcile_commitment', {
+    tenant_id: tenantId, project_id: projectId, commitment_id: commitmentId, amount, description, user_id: userId,
+    ...(primeContractId ? { prime_contract_id: primeContractId } : {})
+  });
+}
+
 export function listCommitments({ tenantId, projectId }) {
   return callAction('list_commitments', { tenant_id: tenantId, project_id: projectId });
 }

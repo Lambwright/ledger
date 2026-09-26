@@ -2759,9 +2759,10 @@ export async function generateDirectCostInvoice(env, {
 // specific line the subcontractor has invoiced. So the flag is
 // commitment-level: the first time ANY line on a commitment is billed before
 // a real Requisition exists for it, that commitment's new rows get
-// `is_estimated = true`, and NO further billing is allowed on it until the
-// (deferred, not built) CO-delta reconciliation workflow exists. Write-off
-// and Mark-as-Budgeted are exempt — see resolveCommitmentSelection.
+// `is_estimated = true`, and NO further billing is allowed on it until it's
+// reconciled against the sub's real invoices (see reconcileCommitment — an
+// adjustment row lifts the lock). Write-off and Mark-as-Budgeted are exempt —
+// see resolveCommitmentSelection.
 //
 // Labour from a commitment (Ben's ask 2026-09-24): Einvoice builds Work Order
 // Contract lines one per subcontractor timecard, and the SAME timecard can sit
@@ -2980,18 +2981,19 @@ async function fetchUnbilledCommitmentLines(env, {
   ]);
 
   const estimatedCommitmentIds = new Set();
+  const reconciledCommitmentIds = new Set();
   for (const [key, info] of lineMap) {
-    if (info.isEstimated) {
-      const sep = key.indexOf(':');
-      if (sep !== -1) estimatedCommitmentIds.add(key.slice(0, sep));
-    }
+    const sep = key.indexOf(':');
+    if (sep === -1) continue;
+    if (isAdjustmentKey(key)) reconciledCommitmentIds.add(key.slice(0, sep));
+    else if (info.isEstimated) estimatedCommitmentIds.add(key.slice(0, sep));
   }
-  const blockedEstimated = [...resolvedSelection.keys()].filter(id => estimatedCommitmentIds.has(id));
+  const blockedEstimated = [...resolvedSelection.keys()].filter(id => estimatedCommitmentIds.has(id) && !reconciledCommitmentIds.has(id));
   if (blockedEstimated.length > 0) {
     throw new Error(
       `${blockedEstimated.length} of these commitment(s) already have an ESTIMATED line billed (billed before the ` +
-      `subcontractor invoiced it) — no further billing is allowed on ${blockedEstimated.length > 1 ? 'them' : 'it'} until a real ` +
-      `Requisition exists and a reconciling Change Order is built. Reconcile manually in Procore for now.`
+      `subcontractor invoiced it) — no further billing is allowed on ${blockedEstimated.length > 1 ? 'them' : 'it'} until ` +
+      `${blockedEstimated.length > 1 ? "they're" : "it's"} reconciled against the sub's invoice (Review → Billed → Reconcile).`
     );
   }
 
@@ -3403,7 +3405,9 @@ export async function listCommitments(env, { tenantId, projectId }) {
       amount: round2(Number(c.grand_total ?? 0))
     };
 
-    const lineRows = lineRowsByCommitment.get(String(c.id)) || [];
+    const allRows = lineRowsByCommitment.get(String(c.id)) || [];
+    const lineRows = allRows.filter(r => !r.lineItemId.startsWith('adj:'));
+    const adjustmentRows = allRows.filter(r => r.lineItemId.startsWith('adj:'));
     if (lineRows.length === 0) {
       unbilled.push(record);
       continue;
@@ -3415,6 +3419,7 @@ export async function listCommitments(env, { tenantId, projectId }) {
     const writtenOffRows = lineRows.filter(r => r.status === 'written_off');
     const budgetedRows = lineRows.filter(r => r.status === 'reconciled_to_period');
     const sumAmt = (rows) => round2(rows.reduce((s, r) => s + (r.amount ?? 0), 0));
+    const adjustmentAmount = sumAmt(adjustmentRows);
     const breakdown = {
       billedLineCount: billedRows.length,
       writtenOffLineCount: writtenOffRows.length,
@@ -3422,7 +3427,12 @@ export async function listCommitments(env, { tenantId, projectId }) {
       totalLineCount: rawLines.length,
       isEstimated: lineRows.some(r => r.isEstimated),
       estimatedLineCount: billedRows.filter(r => r.isEstimated).length,
-      billedLineAmount: sumAmt(billedRows),
+      // Reconciled against the sub's invoice (reconcileCommitment) — lifts the
+      // estimated lock. The adjustment itself counts as billed money, not a line.
+      reconciled: adjustmentRows.length > 0,
+      adjustmentAmount,
+      adjustmentDraft: adjustmentRows.some(r => r.status === 'draft_co'),
+      billedLineAmount: round2(sumAmt(billedRows) + adjustmentAmount),
       writtenOffLineAmount: sumAmt(writtenOffRows),
       budgetedLineAmount: sumAmt(budgetedRows)
     };
@@ -3433,10 +3443,10 @@ export async function listCommitments(env, { tenantId, projectId }) {
       if (billedRows.length > 0) {
         billed.push({
           ...record, ...breakdown,
-          billedStatus: billedRows.some(r => r.status === 'draft_co') ? 'draft_co' : 'billed',
+          billedStatus: billedRows.some(r => r.status === 'draft_co') || adjustmentRows.some(r => r.status === 'draft_co') ? 'draft_co' : 'billed',
           outsideLedgerLineCount: billedRows.filter(r => r.billedOutsideLedger).length,
           invoiceNumber: billedRows.find(r => r.invoiceNumber)?.invoiceNumber || null,
-          billedAmount: round2(billedRows.reduce((s, r) => s + (r.amount ?? 0), 0))
+          billedAmount: round2(billedRows.reduce((s, r) => s + (r.amount ?? 0), 0) + adjustmentAmount)
         });
       } else if (writtenOffRows.length > 0) {
         writtenOff.push({
@@ -3530,6 +3540,169 @@ export async function commitmentLineDetail(env, { tenantId, projectId, commitmen
     hasRealRequisition: hasReq,
     lines
   };
+}
+
+// ============================================================
+// Estimated-commitment reconciliation (Ben's ask 2026-09-26, "proposed, PM
+// confirms"). A commitment billed before its sub invoiced it is locked (see
+// the Commitments header comment). Once a real Requisition exists, LEDGER
+// proposes the difference between what the sub actually invoiced and what
+// LEDGER billed the client, at the same markup, and the PM edits/confirms it.
+// A non-zero amount goes on a draft CO (negative = a credit to the client).
+// Confirming records an adjustment row, "<commitmentId>:adj:<changeOrderId>"
+// (or ":adj:none-<timestamp>" for "no adjustment needed"), and that row is what
+// lifts the lock — so undoing it, or the self-heal clearing a deleted draft
+// CO, puts the lock straight back.
+//
+// Procore only exposes a Requisition's COMMITMENT-level totals, so the
+// proposal is commitment-level too: sub invoiced to date, minus the cost of
+// every line LEDGER has already accounted for (billed, written off, budgeted),
+// minus earlier adjustments. It assumes the sub's invoices don't cover lines
+// still unbilled in LEDGER — the preview lists those so the PM can adjust.
+// ============================================================
+
+function isAdjustmentKey(key) {
+  return String(key).includes(':adj:');
+}
+
+async function computeCommitmentReconciliation(env, { tenantId, projectId, commitmentId }) {
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const [headers, rawLines, lineMap, reqRes] = await Promise.all([
+    fetchCommitmentHeaders(env, projectId),
+    fetchCommitmentLines(env, projectId, commitmentId),
+    getBilledCommitmentLineMap(env, tenantId, projectId),
+    requestWithRetry(env, 'GET', `/rest/v1.0/requisitions?project_id=${projectId}&filters[commitment_id]=${commitmentId}`, null)
+  ]);
+  const commitment = headers.find(h => String(h.id) === String(commitmentId));
+  if (!commitment) throw new Error(`Commitment ${commitmentId} not found on this project — it may have been deleted in Procore.`);
+  if (reqRes.status !== 200) throw new Error(`Couldn't load the sub's invoices from Procore (${reqRes.status}).`);
+  const requisitions = Array.isArray(reqRes.data) ? reqRes.data : [];
+  if (requisitions.length === 0) {
+    throw new Error("The subcontractor hasn't invoiced this commitment in Procore yet — there's nothing to reconcile against.");
+  }
+  // Requisition totals are cumulative per commitment; the highest is the latest.
+  const subInvoiced = round2(Math.max(...requisitions.map(r => Number(r.summary?.total_completed_and_stored_to_date ?? 0))));
+
+  const prefix = `${commitmentId}:`;
+  const rawById = new Map(rawLines.map(li => [String(li.id), li]));
+  let billedCost = 0, billedAmount = 0, estimatedCost = 0, estimatedAmount = 0, otherCost = 0, priorAdjustments = 0;
+  let wbsCodeId = null, hasEstimated = false;
+  for (const [key, info] of lineMap) {
+    if (!key.startsWith(prefix)) continue;
+    if (isAdjustmentKey(key)) { priorAdjustments += info.amount ?? 0; continue; }
+    const raw = rawById.get(key.slice(prefix.length));
+    const cost = Number(raw?.amount ?? 0);
+    if (info.status === 'billed' || info.status === 'draft_co') {
+      billedCost += cost;
+      billedAmount += info.amount ?? 0;
+      if (info.isEstimated) {
+        hasEstimated = true;
+        if (!info.billedOutsideLedger) { estimatedCost += cost; estimatedAmount += info.amount ?? 0; }
+        if (!wbsCodeId && raw && hasBudgetCode(raw)) wbsCodeId = raw.wbs_code_id;
+      }
+    } else {
+      otherCost += cost; // written off / budgeted — the client was never meant to pay for these
+    }
+  }
+  if (!hasEstimated) throw new Error('Nothing on this commitment was billed as an estimate — there is nothing to reconcile.');
+  if (!wbsCodeId) wbsCodeId = rawLines.find(hasBudgetCode)?.wbs_code_id || null;
+
+  // The markup LEDGER actually used on the estimated lines (falls back to the default 20%).
+  const markupPercent = estimatedCost > 0 ? round2((estimatedAmount / estimatedCost - 1) * 100) : 20;
+  const unbilled = rawLines.filter(li => !lineMap.has(`${prefix}${li.id}`));
+  const proposedAmount = round2((subInvoiced - billedCost - otherCost) * (1 + markupPercent / 100) - priorAdjustments);
+  const label = commitmentLabel(commitment);
+  return {
+    commitment,
+    label,
+    wbsCodeId,
+    subInvoiced,
+    requisitionCount: requisitions.length,
+    billedCost: round2(billedCost),
+    billedAmount: round2(billedAmount),
+    otherCost: round2(otherCost),
+    priorAdjustments: round2(priorAdjustments),
+    unbilledLineCount: unbilled.length,
+    unbilledCost: round2(unbilled.reduce((s, li) => s + Number(li.amount ?? 0), 0)),
+    markupPercent,
+    proposedAmount,
+    proposedDescription: `${label} - adjustment to subcontractor invoice`
+  };
+}
+
+export async function previewCommitmentReconciliation(env, args) {
+  const { commitment, wbsCodeId, ...rest } = await computeCommitmentReconciliation(env, args);
+  return { ...rest, commitmentId: commitment.id, number: commitment.number || null, vendor: commitment.vendor_name, hasBudgetCode: !!wbsCodeId };
+}
+
+export async function reconcileCommitment(env, { tenantId, projectId, commitmentId, amount, description, primeContractId, userId }) {
+  const value = Math.round(Number(amount) * 100) / 100;
+  if (amount === '' || amount == null || !Number.isFinite(value)) {
+    throw new Error('A valid adjustment amount is required (0 if no adjustment is needed).');
+  }
+  const recon = await computeCommitmentReconciliation(env, { tenantId, projectId, commitmentId });
+  const reconciledBy = userId || 'ledger-system';
+
+  if (value === 0) {
+    await insertBillingRecordsBatch(env, [{
+      tenantId, projectId, recordType: 'commitment_line', procoreRecordId: `${commitmentId}:adj:none-${Date.now()}`,
+      amount: 0, status: 'billed', reconciledBy, writeOffReason: 'Reconciled with the sub invoice — no adjustment needed'
+    }]);
+    return { amount: 0, changeOrderId: null };
+  }
+
+  if (!recon.wbsCodeId) {
+    throw new Error("None of this commitment's lines have a budget code in Procore, so the adjustment can't go on a Change Order. Fix it there first.");
+  }
+  const lineDescription = String(description || '').trim() || recon.proposedDescription;
+  const title = `${recon.label} - invoice adjustment`;
+  const why = `LEDGER-generated: reconciles ${recon.label} with the subcontractor's invoice`;
+
+  const ceRes = await requestWithRetry(env, 'POST', `/rest/v1.1/change_events?project_id=${projectId}`, {
+    change_event: {
+      title,
+      description: why,
+      scope: 'in_scope',
+      status: { id: 562949953739902 }, // Open — same id as every other LEDGER Change Event
+      change_items: [{
+        description: lineDescription,
+        revenue_impact: {
+          estimate: { quantity: '1', unit_cost: String(value), amount: String(value), unit_of_measure: 'LS', calculation_strategy: 'manual' }
+        },
+        budget_code: { id: String(recon.wbsCodeId) }
+      }]
+    }
+  });
+  if (ceRes.status !== 201) throw new Error(`Failed to create Change Event: ${ceRes.status} ${JSON.stringify(ceRes.data)}`);
+  const changeEventId = ceRes.data.id;
+
+  let contractId, changeOrderId;
+  try {
+    contractId = primeContractId || await findBillableContract(env, projectId);
+    const coRes = await requestWithRetry(env, 'POST', `/rest/v1.0/projects/${projectId}/prime_change_orders`, {
+      change_order: { contract_id: contractId, title, description: why, status: 'draft', reason: 'Commitment / subcontractor invoice billing' }
+    });
+    if (coRes.status !== 201) throw new Error(`Failed to create Prime Change Order: ${coRes.status} ${JSON.stringify(coRes.data)}`);
+    changeOrderId = coRes.data.id;
+    const lineRes = await requestWithRetry(
+      env, 'POST',
+      `/rest/v2.0/companies/${env.PROCORE_COMPANY_ID}/projects/${projectId}/prime_change_orders/${changeOrderId}/line_items`,
+      { description: lineDescription, quantity: '1', unit_cost: String(value), uom: 'LS', wbs_code_id: String(recon.wbsCodeId) }
+    );
+    if (lineRes.status !== 201) throw new Error(`Failed to add the adjustment line: ${lineRes.status} ${JSON.stringify(lineRes.data)}`);
+  } catch (e) {
+    const rb = await rollbackChangeEventAndOrder(env, projectId, changeEventId, changeOrderId);
+    throw new Error(
+      `${e.message} ${rb.ceDeleted ? '(rolled back — nothing left behind in Procore)' : '(COULD NOT roll back — check Procore for a leftover Change Event/Change Order)'}`
+    );
+  }
+
+  await insertBillingRecordsBatch(env, [{
+    tenantId, projectId, recordType: 'commitment_line', procoreRecordId: `${commitmentId}:adj:${changeOrderId}`,
+    amount: value, status: 'draft_co', reconciledBy,
+    changeOrderId: String(changeOrderId), changeEventId: String(changeEventId)
+  }]);
+  return { amount: value, contractId, changeEventId, changeOrderId };
 }
 
 // ============================================================

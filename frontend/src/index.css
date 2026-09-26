@@ -1354,3 +1354,10 @@ body {
 .tag-outside { background: var(--success-tint); color: #9fd39e; margin-left: 4px; }
 
 .cm-disposition-scope { font-size: 11px; color: var(--ink-muted); }
+
+/* Estimated-commitment reconciliation modal */
+.recon-grid { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; margin: 8px 0 12px; font-size: 12px; }
+.recon-grid dd { text-align: right; font-variant-numeric: tabular-nums; }
+.recon-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; font-size: 12px; }
+.recon-field input, .recon-field select { width: 100%; }
+.recon-error { color: var(--danger); }
