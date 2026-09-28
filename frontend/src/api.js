@@ -1,19 +1,29 @@
-// LEDGER Worker client. Uses the scoped frontend key (action-based routes
-// only) — see worker/src/index.js for why this is deliberately a different,
-// narrower key than the one used for direct testing.
+// LEDGER Worker client. Every call carries the signed-in Einbau ID token
+// (see auth.js / AuthGate.jsx); the worker checks it, and LEDGER access in
+// HELM, on every request. Replaced the old "frontend key" 2026-09-28 — that
+// key sat in this public bundle, so anyone with the URL could bill.
+import { getToken, storeToken } from './auth';
 
 const WORKER_URL = import.meta.env.VITE_WORKER_URL;
-const FRONTEND_KEY = import.meta.env.VITE_LEDGER_FRONTEND_KEY;
 
-async function callAction(action, payload) {
+async function post(action, payload) {
   const res = await fetch(WORKER_URL, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Ledger-Service-Key': FRONTEND_KEY
-    },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
     body: JSON.stringify({ action, ...payload })
   });
+  // The worker hands back a fresh token when the current one is getting old.
+  const refreshed = res.headers.get('X-Refreshed-Token');
+  if (refreshed) storeToken(refreshed);
+  if (res.status === 401) {
+    window.dispatchEvent(new Event('ledger:unauthorized'));
+    throw new Error('Your session ended — sign in again.');
+  }
+  return res;
+}
+
+async function callAction(action, payload) {
+  const res = await post(action, payload);
   const body = await res.json();
   if (!res.ok) {
     // Carry code/unlinkedCount through so callers can distinguish the
@@ -30,14 +40,7 @@ async function callAction(action, payload) {
 // event, ending in {type:'done', result} or {type:'error', ...}. Always a 200
 // HTTP response; success/failure lives in that final line, not res.ok.
 async function streamAction(action, payload, onProgress) {
-  const res = await fetch(WORKER_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Ledger-Service-Key': FRONTEND_KEY
-    },
-    body: JSON.stringify({ action, ...payload })
-  });
+  const res = await post(action, payload);
 
   if (!res.body) {
     // No streaming support (very old browser) — fall back to a plain read.

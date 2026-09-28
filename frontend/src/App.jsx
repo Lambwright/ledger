@@ -6,6 +6,7 @@ import {
   previewCommitmentReconciliation, reconcileCommitment
 } from './api';
 import { connectProcoreSidePanel, isEmbedded } from './procore';
+import { withTokenHash } from './auth';
 
 const MODE_LABEL = { tm: 'T&M', fixed_price: 'Fixed-Price', non_billable: 'Not Billable' };
 const TIME_TYPE_LABEL = { regular: 'Regular', overtime: 'Overtime', double_time: 'Double Time', per_diem: 'Per Diem' };
@@ -166,7 +167,7 @@ function resolveUserId(params) {
   return params.get('user_id') || DEFAULT_USER_ID;
 }
 
-export default function App() {
+export default function App({ user, onSignOut }) {
   const params = new URLSearchParams(window.location.search);
 
   const [projectId, setProjectId] = useState(resolveProjectId(params));
@@ -519,7 +520,7 @@ export default function App() {
     if (projectId) url.searchParams.set('project_id', projectId);
     if (contractId) url.searchParams.set('contract_id', contractId);
     if (userId) url.searchParams.set('user_id', userId);
-    window.open(url.toString(), '_blank', 'noopener,noreferrer,width=1100,height=850');
+    window.open(withTokenHash(url).toString(), '_blank', 'noopener,noreferrer,width=1100,height=850');
   }
 
   // T&M ticket URL — confirmed live 2026-09-14 (Ben pasted the real one from
@@ -544,7 +545,7 @@ export default function App() {
     url.searchParams.set('ticket_number', t.number);
     url.searchParams.set('billing_mode', billingMode || '');
     url.searchParams.set('procore_origin', procoreOrigin);
-    window.open(url.toString(), `ledger_ticket_${t.id}`, 'noopener,noreferrer,width=700,height=800');
+    window.open(withTokenHash(url).toString(), `ledger_ticket_${t.id}`, 'noopener,noreferrer,width=700,height=800');
   }
 
   // Direct cost's own "Full details" popout (Ben's ask 2026-09-22) — mirrors
@@ -556,7 +557,7 @@ export default function App() {
     url.searchParams.set('direct_cost_id', d.id);
     url.searchParams.set('vendor', d.vendor || '');
     url.searchParams.set('procore_origin', procoreOrigin);
-    window.open(url.toString(), `ledger_dc_${d.id}`, 'noopener,noreferrer,width=700,height=800');
+    window.open(withTokenHash(url).toString(), `ledger_dc_${d.id}`, 'noopener,noreferrer,width=700,height=800');
   }
 
   // Preview/edit popout (Ben's ask 2026-09-15: "pop out the summaries for a
@@ -1501,7 +1502,15 @@ export default function App() {
           </button>
         )}
       </header>
-      <div className="ledger-tagline">An Einbau Product</div>
+      <div className="ledger-tagline-row">
+        <div className="ledger-tagline">An Einbau Product</div>
+        {user && (
+          <div className="signed-in">
+            {user.displayName || user.username}
+            <button type="button" className="link-btn" onClick={onSignOut}>Sign out</button>
+          </div>
+        )}
+      </div>
 
       {!EMBEDDED && (
         <div className="project-row">

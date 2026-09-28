@@ -410,7 +410,14 @@ export async function runScheduled(env, { maxRefreshes = 4 } = {}) {
 // Einbau ID (auth-worker, the suite's shared login). Only accounts granted
 // LEDGER in HELM get in — app ids are uppercase ("PUNCH", "SCOUT", …; see
 // HELM's apps.js). Fails closed if the verify response has no apps list.
-export async function verifyEinbauUser(request, env) {
+export function hasLedgerApp(user) {
+  const apps = user?.apps;
+  return Array.isArray(apps) && apps.some(a => String(a).toUpperCase() === 'LEDGER');
+}
+
+// { user, refreshedToken } for a valid LEDGER session, else null. Used by the
+// portfolio page AND (since 2026-09-28) every Procore-sidebar call.
+export async function verifyEinbauSession(request, env) {
   const auth = request.headers.get('Authorization') || '';
   if (!auth.startsWith('Bearer ')) return null;
   try {
@@ -421,12 +428,15 @@ export async function verifyEinbauUser(request, env) {
       body: '{}'
     });
     const data = await res.json().catch(() => ({}));
-    const apps = data?.user?.apps;
-    if (!data?.valid || !Array.isArray(apps) || !apps.some(a => String(a).toUpperCase() === 'LEDGER')) return null;
-    return data.user;
+    if (!data?.valid || !hasLedgerApp(data.user)) return null;
+    return { user: data.user, refreshedToken: data.refreshedToken || null };
   } catch {
     return null;
   }
+}
+
+export async function verifyEinbauUser(request, env) {
+  return (await verifyEinbauSession(request, env))?.user || null;
 }
 
 export async function listPortfolio(env, tenantId) {

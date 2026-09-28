@@ -13,6 +13,11 @@
 //   NEON_DATABASE_URL       — Neon connection string (postgres://user:pass@host/db)
 //   LEDGER_SERVICE_KEY      — shared secret our own apps send back to us,
 //                             so this isn't an open proxy for anyone who finds the URL.
+//
+// The Procore sidebar authenticates with an Einbau ID token instead
+// (Authorization: Bearer — LEDGER must be ticked in HELM). Since 2026-09-28;
+// before that it used a "frontend key" baked into its public JS, which let
+// anyone with the sidebar's URL bill.
 
 import { procoreRequest } from './procore.js';
 import { dbQuery } from './db.js';
@@ -27,14 +32,35 @@ import {
 } from './app.js';
 import {
   handleProcoreWebhook, refreshIfStale, refreshProjectSnapshot, refreshProjectCounts, saveProjectCounts, projectSourceRecords,
-  runScheduled, verifyEinbauUser, listPortfolio
+  runScheduled, verifyEinbauUser, verifyEinbauSession, hasLedgerApp, listPortfolio
 } from './portfolio.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, X-Ledger-Service-Key, Authorization',
+  'Access-Control-Expose-Headers': 'X-Refreshed-Token',
 };
+
+// Sidebar sign-in. The sidebar lives on ledger-sidebar.pages.dev, which
+// auth-worker's CORS doesn't allow, so its login/verify go through here (over
+// the AUTH_WORKER service binding). The client's IP is passed on so
+// auth-worker's per-IP login rate limit still sees the real caller.
+async function proxyAuth(request, env, path) {
+  const body = await request.text();
+  const headers = { 'Content-Type': 'application/json' };
+  const auth = request.headers.get('Authorization');
+  if (auth) headers.Authorization = auth;
+  const ip = request.headers.get('CF-Connecting-IP');
+  if (ip) headers['CF-Connecting-IP'] = ip;
+  const res = await env.AUTH_WORKER.fetch(`https://auth.ben-a90.workers.dev${path}`, { method: 'POST', headers, body });
+  const data = await res.json().catch(() => ({}));
+  // A correct Einbau ID without LEDGER ticked in HELM doesn't get a session here.
+  if (res.ok && data.user && !hasLedgerApp(data.user)) {
+    return json({ valid: false, error: 'no_ledger_access' }, 403);
+  }
+  return json(data, res.status);
+}
 
 function json(body, status) {
   return new Response(JSON.stringify(body), {
@@ -729,6 +755,13 @@ export default {
     if (path === '/procore-webhook') {
       return handleProcoreWebhook(request, env);
     }
+    if (path === '/auth/login' || path === '/auth/verify') {
+      try {
+        return await proxyAuth(request, env, path);
+      } catch (e) {
+        return json({ error: 'auth_unavailable' }, 502);
+      }
+    }
     if (path === '/portfolio') {
       try {
         return await handlePortfolio(request, env);
@@ -739,12 +772,11 @@ export default {
 
     const callerKey = request.headers.get('X-Ledger-Service-Key');
     const isFullAccess = env.LEDGER_SERVICE_KEY && callerKey === env.LEDGER_SERVICE_KEY;
-    // The frontend key is scoped to action-based business logic ONLY — it's embedded
-    // in client-side JS (visible to anyone who inspects the page), so it must never
-    // be able to reach the raw target:"procore"/"db" passthrough (arbitrary API calls /
-    // arbitrary SQL). LEDGER_SERVICE_KEY (full access) stays server-side only.
-    const isFrontendAccess = env.LEDGER_FRONTEND_KEY && callerKey === env.LEDGER_FRONTEND_KEY;
-    if (!isFullAccess && !isFrontendAccess) {
+    // Sidebar users: actions only — never the raw target:"procore"/"db"
+    // passthrough (arbitrary API calls / SQL). LEDGER_SERVICE_KEY (full access)
+    // stays server-side only.
+    const session = isFullAccess ? null : await verifyEinbauSession(request, env);
+    if (!isFullAccess && !session) {
       return json({ error: 'unauthorized' }, 401);
     }
 
@@ -756,9 +788,15 @@ export default {
     }
 
     try {
-      if (isFrontendAccess && !isFullAccess) {
-        if (!body.action) return json({ error: 'this key can only call actions' }, 403);
-        return await handleAction(env, body, ctx);
+      if (session) {
+        if (!body.action) return json({ error: 'sidebar sign-ins can only call actions' }, 403);
+        // Every record is attributed to the signed-in person, never whatever the page sent.
+        body.user_id = session.user.username;
+        const res = await handleAction(env, body, ctx);
+        if (!session.refreshedToken) return res;
+        const withToken = new Response(res.body, res);
+        withToken.headers.set('X-Refreshed-Token', session.refreshedToken);
+        return withToken;
       }
       if (body.target === 'db') {
         return await handleGenericDb(env, body);

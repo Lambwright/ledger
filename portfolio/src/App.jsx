@@ -3,6 +3,7 @@ import { getStoredToken, verify, hasLedgerAccess, logout as doLogout } from "./a
 import { api } from "./api.js";
 import Header from "./components/Header.jsx";
 import LoginScreen from "./components/LoginScreen.jsx";
+import { applyAccentPreset } from "./accentPresets.js";
 import SourceRecords from "./components/SourceRecords.jsx";
 
 const PROCORE_ORIGIN = "https://us02.procore.com";
@@ -75,11 +76,14 @@ export default function App() {
 
   function signIn(u) {
     setUser(u);
+    // Personal LEDGER colour from HELM (My Account → Appearance), if set.
+    applyAccentPreset(u?.themeAccent?.LEDGER || null);
     setAuthState(hasLedgerAccess(u) ? "in" : "noaccess");
   }
 
   const handleLogout = useCallback(() => {
     doLogout();
+    applyAccentPreset(null);
     setUser(null);
     setProjects([]);
     setAuthState("out");

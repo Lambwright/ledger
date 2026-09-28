@@ -26,7 +26,8 @@
   --accent: #e2871a;
   --accent-on: #1e1c1a;
   --accent-dark: #b56a14; /* PUNCH's --accent-dark — hover/pressed states */
-  --accent-tint: rgba(226, 135, 26, 0.08);
+  --accent-rgb: 226, 135, 26; /* overridden by the user's HELM accent (accentPresets.js) */
+  --accent-tint: rgba(var(--accent-rgb), 0.08);
 
   --danger: #c1401c;
   --danger-tint: rgba(193, 64, 28, 0.1);
@@ -39,7 +40,7 @@
 body {
   margin: 0;
   background: var(--bg);
-  background-image: radial-gradient(circle at 20% 15%, rgba(226, 135, 26, 0.05), transparent 45%);
+  background-image: radial-gradient(circle at 20% 15%, rgba(var(--accent-rgb), 0.05), transparent 45%);
   color: var(--ink);
   font-family: var(--font-body);
   font-size: 13px;
@@ -1361,3 +1362,12 @@ body {
 .recon-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; font-size: 12px; }
 .recon-field input, .recon-field select { width: 100%; }
 .recon-error { color: var(--danger); }
+
+/* Einbau ID sign-in (AuthGate.jsx) and the signed-in line under the header */
+.ledger-tagline-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.signed-in { display: flex; align-items: baseline; gap: 8px; font-size: 11px; color: var(--ink-muted); }
+.signin { display: flex; flex-direction: column; gap: 12px; margin-top: 24px; }
+.signin-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--ink-dim); }
+.signin-field input { width: 100%; }
+.signin-submit { width: 100%; }
+.signin-help { font-size: 11px; color: var(--ink-muted); }
