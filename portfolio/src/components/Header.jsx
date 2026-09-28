@@ -1,17 +1,29 @@
 import { useEffect, useRef, useState } from "react";
 
-// Suite app switcher — same list every Einbau app carries (from HELM's
-// Header.jsx), with LEDGER marked current.
+// Suite app switcher — same list and rules as HELM/TALLY/HANDOFF/SCOUT/INTAKE.
+const CURRENT_APP = "LEDGER";
 const APP_LINKS = [
   { name: "PUNCH", url: "https://lambwright.github.io/PUNCH/" },
   { name: "SCOUT", url: "https://lambwright.github.io/scout-addin/app.html" },
   { name: "INTAKE", url: "https://lambwright.github.io/scout-intake/" },
   { name: "TALLY", url: "https://lambwright.github.io/tally/" },
   { name: "HANDOFF", url: "https://lambwright.github.io/handoff/" },
-  { name: "LEDGER", url: "https://lambwright.github.io/ledger/", current: true },
-  { name: "HELM", url: "https://lambwright.github.io/helm/" },
+  { name: "LEDGER", url: "https://lambwright.github.io/ledger/" },
   { name: "CRM", url: "https://lambwright.github.io/crm/" },
 ];
+const HELM_LINK = { name: "HELM", url: "https://lambwright.github.io/helm/" };
+
+// Only apps this user can open, then HELM always last (it's where settings
+// live). No apps granted = nothing but this app and HELM (access fails
+// closed — see auth-worker/README.md).
+function appLinks(user) {
+  const apps = (Array.isArray(user?.apps) ? user.apps : []).map((a) => String(a).toUpperCase());
+  const allowed = (name) => apps.includes(name);
+  return [...APP_LINKS.filter((a) => a.name === CURRENT_APP || allowed(a.name)), HELM_LINK].map((a) => ({
+    ...a,
+    current: a.name === CURRENT_APP,
+  }));
+}
 
 export default function Header({ user, onLogout }) {
   const [open, setOpen] = useState(false);
@@ -42,7 +54,7 @@ export default function Header({ user, onLogout }) {
         <span className="header-brand-tag">An Einbau Product</span>
         {open && (
           <div className="app-switcher-menu">
-            {APP_LINKS.map((app) => (
+            {appLinks(user).map((app) => (
               <a className={`app-switcher-item${app.current ? " current" : ""}`} href={app.url} key={app.name}>
                 {app.name}
               </a>
