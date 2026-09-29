@@ -439,10 +439,19 @@ export async function verifyEinbauUser(request, env) {
   return (await verifyEinbauSession(request, env))?.user || null;
 }
 
+// Stages the company page never shows (Ben, 2026-09-29): Overhead isn't a job
+// (its costs would swamp the totals), and Cancelled / Warranty / no stage
+// aren't live work. Everything else stays — a PM marking a job "Completed and
+// Invoiced" or "On Hold" still needs accounting to check it, and Bidding /
+// Pre-Construction are a heads-up of what's coming.
+const HIDDEN_STAGES = ['Overhead', 'Cancelled', 'Warranty', 'None'];
+
 export async function listPortfolio(env, tenantId) {
   return dbQuery(
     env,
-    `select * from portfolio_projects where tenant_id = $1 and name is not null order by name`,
-    [tenantId]
+    `select * from portfolio_projects
+     where tenant_id = $1 and name is not null and coalesce(stage, 'None') <> all($2::text[])
+     order by name`,
+    [tenantId, HIDDEN_STAGES]
   );
 }

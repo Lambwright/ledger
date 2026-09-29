@@ -175,6 +175,29 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .stat-value { font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .stat-sub { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--accent); }
 
+/* Headline (2026-09-29): margin vs budget and LEDGER's record counts lead. */
+.hero-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 10px; margin-bottom: 10px; }
+.stat-hero { padding: 16px 18px; gap: 10px; }
+.stat-big { display: block; font-family: 'JetBrains Mono', monospace; font-size: 30px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.stat-big.neg { color: var(--red); }
+.stat-big-muted { color: var(--text-secondary); }
+.stat-caption { display: block; font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
+.margin-compare { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 16px; }
+.margin-vs { font-size: 12px; color: var(--text-tertiary); padding-bottom: 18px; }
+.gap-chip { font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 700; padding: 3px 8px; border-radius: var(--radius-sm); margin-bottom: 16px; }
+.gap-up { color: var(--green); background: rgba(111,179,92,0.12); }
+.gap-down { color: var(--yellow); background: rgba(209,169,63,0.14); }
+.record-counts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.record-count-key .stat-big { color: var(--accent); }
+.table td.pos { color: var(--green); }
+.table td.warn { color: var(--yellow); }
+.table td.cell-key { color: var(--accent); font-weight: 700; }
+.table td.cell-muted { color: var(--text-secondary); }
+@media (max-width: 640px) {
+  .record-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stat-big { font-size: 24px; }
+}
+
 .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
 .filter-search { flex: 1 1 240px; min-width: 0; }
 .filters select { max-width: 100%; }

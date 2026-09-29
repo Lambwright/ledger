@@ -29,23 +29,39 @@ function ago(ts) {
 // are hidden by default — their margin numbers aren't meaningful.
 const isReportable = (p) => p.budget_status === "ok" || p.budget_status === "no_budget";
 
+// Budget-view "Committed costs" minus what subs have invoiced so far.
+const commitmentsLeft = (p) =>
+  p.committed_costs == null ? null : (n(p.committed_costs) || 0) - (n(p.sub_invoices) || 0);
+
+// Ordered by importance (Ben, 2026-09-29): margin vs budget, LEDGER's record
+// counts, then cost / invoicing / contract / what's left.
 const COLUMNS = [
   { key: "name", label: "Project", sort: (p) => (p.name || "").toLowerCase() },
   { key: "stage", label: "Stage", sort: (p) => p.stage || "" },
-  { key: "region", label: "Region", sort: (p) => p.region || "" },
-  { key: "departments", label: "Department", sort: (p) => p.departments || "" },
-  { key: "unbilled_count", label: "Unbilled Records", num: true },
-  { key: "revised_contract", label: "Contract", num: true },
-  { key: "invoiced", label: "Invoiced", num: true },
-  { key: "pct_invoiced", label: "% Invoiced", num: true },
-  { key: "invoicing_remaining", label: "Remaining", num: true },
-  { key: "jtd_cost", label: "JTD Cost", num: true },
-  { key: "margin_to_date", label: "Margin to Date", num: true },
-  { key: "margin_to_date_pct", label: "MTD %", num: true },
-  { key: "budgeted_margin", label: "Budgeted Margin", num: true },
+  { key: "margin_to_date_pct", label: "Margin %", num: true },
   { key: "budgeted_margin_pct", label: "Budgeted %", num: true },
+  { key: "unbilled_count", label: "Unbilled", num: true },
+  { key: "billed_count", label: "Billed", num: true },
+  { key: "written_off_count", label: "Written off", num: true },
+  { key: "budgeted_count", label: "Budgeted", num: true },
+  { key: "jtd_cost", label: "Cost", num: true },
+  { key: "invoiced", label: "Invoiced", num: true },
+  { key: "revised_contract", label: "Contract", num: true },
+  { key: "invoicing_remaining", label: "Left to invoice", num: true },
+  { key: "commitments_left", label: "Commitments left", num: true, sort: commitmentsLeft },
   { key: "refreshed_at", label: "Updated", sort: (p) => (p.refreshed_at ? new Date(p.refreshed_at).getTime() : 0) },
 ];
+
+// Margin % coloured against the project's own budget: red below zero,
+// amber when trailing budget, green at or above it.
+function marginClass(p) {
+  const mtd = n(p.margin_to_date_pct);
+  if (mtd == null) return "";
+  if (mtd < 0) return " neg";
+  const budgeted = p.budget_status === "ok" ? n(p.budgeted_margin_pct) : null;
+  if (budgeted == null) return "";
+  return mtd >= budgeted ? " pos" : " warn";
+}
 
 function uniqueValues(projects, key) {
   const set = new Set();
@@ -156,19 +172,33 @@ export default function App() {
       });
   }, [projects, search, stage, region, dept, showAll, invoiceFilter, sort]);
 
+  // Headline figures always match the projects currently shown (Ben, 2026-09-29).
   const totals = useMemo(() => {
-    const sum = (key) => visible.reduce((s, p) => s + (n(p[key]) || 0), 0);
-    const contract = sum("revised_contract");
-    const invoiced = sum("invoiced");
-    const mtd = sum("margin_to_date");
+    const sumOf = (list, key) => list.reduce((s, p) => s + (n(typeof key === "function" ? key(p) : p[key]) || 0), 0);
+    const contract = sumOf(visible, "revised_contract");
+    const invoiced = sumOf(visible, "invoiced");
+    const mtd = sumOf(visible, "margin_to_date");
+    // Budgeted margin only from projects that actually have a budget — one
+    // with no revised budget reports a meaningless 100%.
+    const budgetedProjects = visible.filter((p) => p.budget_status === "ok");
+    const budgetedContract = sumOf(budgetedProjects, "revised_contract");
+    const counted = visible.filter((p) => p.counts_at);
     return {
       contract, invoiced, mtd,
-      remaining: sum("invoicing_remaining"),
-      jtd: sum("jtd_cost"),
-      pctInvoiced: contract ? (invoiced / contract) * 100 : null,
       mtdPct: invoiced ? (mtd / invoiced) * 100 : null,
+      budgetedPct: budgetedContract ? (sumOf(budgetedProjects, "budgeted_margin") / budgetedContract) * 100 : null,
+      remaining: sumOf(visible, "invoicing_remaining"),
+      jtd: sumOf(visible, "jtd_cost"),
+      commitmentsLeft: sumOf(visible, commitmentsLeft),
+      pctInvoiced: contract ? (invoiced / contract) * 100 : null,
+      unbilled: sumOf(counted, "unbilled_count"),
+      billed: sumOf(counted, "billed_count"),
+      writtenOff: sumOf(counted, "written_off_count"),
+      budgeted: sumOf(counted, "budgeted_count"),
+      countedProjects: counted.length,
     };
   }, [visible]);
+  const marginGap = totals.mtdPct != null && totals.budgetedPct != null ? totals.mtdPct - totals.budgetedPct : null;
 
   const hiddenCount = projects.length - projects.filter(isReportable).length;
   const notLoaded = projects.filter((p) => !p.refreshed_at).length;
@@ -210,12 +240,43 @@ export default function App() {
     <>
       <Header user={user} onLogout={handleLogout} />
       <div className="container container-wide">
+        <div className="hero-row">
+          <div className="stat stat-hero">
+            <span className="stat-label">Margin to date vs budgeted</span>
+            <div className="margin-compare">
+              <div>
+                <span className={`stat-big${n(totals.mtdPct) < 0 ? " neg" : ""}`}>{pct(totals.mtdPct)}</span>
+                <span className="stat-caption">to date · {money(totals.mtd)}</span>
+              </div>
+              <span className="margin-vs">vs</span>
+              <div>
+                <span className="stat-big stat-big-muted">{pct(totals.budgetedPct)}</span>
+                <span className="stat-caption">budgeted</span>
+              </div>
+              {marginGap != null && (
+                <span className={`gap-chip ${marginGap >= 0 ? "gap-up" : "gap-down"}`}>
+                  {marginGap >= 0 ? "▲" : "▼"} {Math.abs(marginGap).toFixed(1)} pts
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="stat stat-hero">
+            <span className="stat-label">LEDGER records</span>
+            <div className="record-counts">
+              <div className="record-count record-count-key"><span className="stat-big">{totals.unbilled.toLocaleString()}</span><span className="stat-caption">unbilled</span></div>
+              <div className="record-count"><span className="stat-big stat-big-muted">{totals.billed.toLocaleString()}</span><span className="stat-caption">billed</span></div>
+              <div className="record-count"><span className="stat-big stat-big-muted">{totals.writtenOff.toLocaleString()}</span><span className="stat-caption">written off</span></div>
+              <div className="record-count"><span className="stat-big stat-big-muted">{totals.budgeted.toLocaleString()}</span><span className="stat-caption">budgeted</span></div>
+            </div>
+            <span className="stat-caption">T&amp;M tickets, direct costs and commitments · counted on {totals.countedProjects} of {visible.length} projects</span>
+          </div>
+        </div>
         <div className="summary-row">
-          <div className="stat"><span className="stat-label">Contract</span><span className="stat-value">{money(totals.contract)}</span></div>
-          <div className="stat"><span className="stat-label">Invoiced</span><span className="stat-value">{money(totals.invoiced)}</span><span className="stat-sub">{pct(totals.pctInvoiced)}</span></div>
+          <div className="stat"><span className="stat-label">Total costs</span><span className="stat-value">{money(totals.jtd)}</span></div>
+          <div className="stat"><span className="stat-label">Total invoiced</span><span className="stat-value">{money(totals.invoiced)}</span><span className="stat-sub">{pct(totals.pctInvoiced)} of contract</span></div>
+          <div className="stat"><span className="stat-label">Contract value</span><span className="stat-value">{money(totals.contract)}</span></div>
           <div className="stat"><span className="stat-label">Left to invoice</span><span className="stat-value">{money(totals.remaining)}</span></div>
-          <div className="stat"><span className="stat-label">JTD cost</span><span className="stat-value">{money(totals.jtd)}</span></div>
-          <div className="stat"><span className="stat-label">Margin to date</span><span className="stat-value">{money(totals.mtd)}</span><span className="stat-sub">{pct(totals.mtdPct)}</span></div>
+          <div className="stat"><span className="stat-label">Commitments left to pay</span><span className="stat-value">{money(totals.commitmentsLeft)}</span></div>
         </div>
 
         <div className="filters">
@@ -273,32 +334,35 @@ export default function App() {
                     <td className="cell-name">
                       <div>{p.name}</div>
                       <div className="cell-sub">
-                        {p.project_number}
+                        {[p.project_number, p.region, p.departments].filter(Boolean).join(" · ")}
                         {noBudget && <span className="badge badge-warn">Budget not set up</span>}
                         {p.budget_status === "no_view" && <span className="badge badge-muted">No budget view</span>}
                         {!p.refreshed_at && <span className="badge badge-muted">Not loaded</span>}
                       </div>
                     </td>
                     <td>{p.stage || "—"}</td>
-                    <td>{p.region || "—"}</td>
-                    <td>{p.departments || "—"}</td>
-                    <td className="num">{p.unbilled_count ?? "—"}</td>
-                    <td className="num">{money(p.revised_contract)}</td>
+                    <td className={`num${marginClass(p)}`} title={p.margin_to_date != null ? `${money(p.margin_to_date)} margin to date` : undefined}>
+                      {pct(p.margin_to_date_pct)}
+                    </td>
+                    <td className="num cell-muted">{noBudget ? "—" : pct(p.budgeted_margin_pct)}</td>
+                    <td className={`num${n(p.unbilled_count) > 0 ? " cell-key" : ""}`}>{p.unbilled_count ?? "—"}</td>
+                    <td className="num cell-muted">{p.billed_count ?? "—"}</td>
+                    <td className="num cell-muted">{p.written_off_count ?? "—"}</td>
+                    <td className="num cell-muted">{p.budgeted_count ?? "—"}</td>
+                    <td className="num">{money(p.jtd_cost)}</td>
                     <td className="num">{money(p.invoiced)}</td>
+                    <td className="num">{money(p.revised_contract)}</td>
                     <td className="num">
                       <div className="pct-cell">
-                        <span>{pct(p.pct_invoiced)}</span>
+                        <span>{money(p.invoicing_remaining)}</span>
                         {n(p.pct_invoiced) != null && (
-                          <span className="pct-bar"><span style={{ width: `${Math.min(100, Math.max(0, n(p.pct_invoiced)))}%` }} /></span>
+                          <span className="pct-bar" title={`${pct(p.pct_invoiced)} invoiced`}>
+                            <span style={{ width: `${Math.min(100, Math.max(0, n(p.pct_invoiced)))}%` }} />
+                          </span>
                         )}
                       </div>
                     </td>
-                    <td className="num">{money(p.invoicing_remaining)}</td>
-                    <td className="num">{money(p.jtd_cost)}</td>
-                    <td className={`num${n(p.margin_to_date) < 0 ? " neg" : ""}`}>{money(p.margin_to_date)}</td>
-                    <td className={`num${n(p.margin_to_date_pct) < 0 ? " neg" : ""}`}>{pct(p.margin_to_date_pct)}</td>
-                    <td className="num">{noBudget ? "—" : money(p.budgeted_margin)}</td>
-                    <td className="num">{noBudget ? "—" : pct(p.budgeted_margin_pct)}</td>
+                    <td className="num">{money(commitmentsLeft(p))}</td>
                     <td className="cell-sub">{ago(p.refreshed_at)}</td>
                   </tr>,
                   isOpen && (
