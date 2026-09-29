@@ -2866,20 +2866,75 @@ async function fetchVendorNames(env, projectId) {
   return names;
 }
 
-// Every commitment header on the project, with vendor_name attached.
+// Commitment Change Orders (Ben's ask 2026-09-28/29): each APPROVED one is
+// billed as its own item, placed straight after its parent commitment — so it
+// sits beside the parent while that's unbilled, and stands on its own in
+// Unbilled once the parent is billed. Verified live 2026-09-29 on Test
+// Project 1: the list is v1.0 /projects/{id}/commitment_change_orders
+// (contract_id = the parent commitment); the lines are v2.0
+// .../commitment_change_orders/{id}/line_items (amount, quantity, unit_cost,
+// uom, wbs_code_id — same shape as a commitment line). An approved CO's lines
+// do NOT show up in the parent commitment's own line_items, and the parent's
+// grand_total excludes them — so nothing is counted twice. Their ids share
+// the commitment_line key scheme ("<changeOrderId>:<lineItemId>"); Procore ids
+// are unique, so they can't collide with a commitment's.
+async function fetchApprovedCommitmentChangeOrders(env, projectId) {
+  const res = await requestWithRetry(env, 'GET', `/rest/v1.0/projects/${projectId}/commitment_change_orders?per_page=300`, null);
+  if (res.status !== 200 || !Array.isArray(res.data)) return []; // never let COs break the commitments list
+  return res.data.filter(co => String(co.status).toLowerCase() === 'approved');
+}
+
+// Every commitment header on the project, with vendor_name attached, plus each
+// approved commitment Change Order as its own header right after its parent.
 async function fetchCommitmentHeaders(env, projectId) {
-  const [listRes, vendorNames] = await Promise.all([
+  const [listRes, vendorNames, changeOrders] = await Promise.all([
     fetchAllV2Pages(env, commitmentsBase(env, projectId)),
-    fetchVendorNames(env, projectId)
+    fetchVendorNames(env, projectId),
+    fetchApprovedCommitmentChangeOrders(env, projectId)
   ]);
   if (listRes.status !== 200) {
     throw new Error(`Failed to list commitments: ${listRes.status} ${JSON.stringify(listRes.data)}`);
   }
-  return listRes.items.map(c => ({ ...c, vendor_name: vendorNames.get(String(c.vendor?.id)) || null }));
+  const commitments = listRes.items.map(c => ({ ...c, vendor_name: vendorNames.get(String(c.vendor?.id)) || null }));
+  const byParent = new Map();
+  for (const co of changeOrders) {
+    const key = String(co.contract_id);
+    if (!byParent.has(key)) byParent.set(key, []);
+    byParent.get(key).push(co);
+  }
+  const asHeader = (co, parent) => ({
+    id: co.id,
+    number: `${parent?.number || 'Commitment'} · CO #${co.number}`,
+    title: co.title || null,
+    type: 'CommitmentChangeOrder',
+    status: 'Approved',
+    executed: co.executed === true,
+    grand_total: co.grand_total,
+    vendor: parent?.vendor || null,
+    vendor_name: parent?.vendor_name || null,
+    change_order_of: String(co.contract_id),
+    parent_number: parent?.number || null,
+    parent_type: parent?.type || null
+  });
+  const out = [];
+  for (const c of commitments) {
+    out.push(c);
+    for (const co of (byParent.get(String(c.id)) || []).sort((a, b) => String(a.number).localeCompare(String(b.number)))) {
+      out.push(asHeader(co, c));
+    }
+    byParent.delete(String(c.id));
+  }
+  for (const orphans of byParent.values()) for (const co of orphans) out.push(asHeader(co, null));
+  return out;
 }
 
-async function fetchCommitmentLines(env, projectId, commitmentId, onProgress = () => {}) {
-  const res = await fetchAllV2Pages(env, `${commitmentsBase(env, projectId)}/${commitmentId}/line_items`, onProgress);
+// `header` tells a commitment Change Order (its own line-items endpoint) from
+// a commitment. Pass it whenever it's to hand.
+async function fetchCommitmentLines(env, projectId, commitmentId, onProgress = () => {}, header = null) {
+  const path = header?.type === 'CommitmentChangeOrder'
+    ? `/rest/v2.0/companies/${env.PROCORE_COMPANY_ID}/projects/${projectId}/commitment_change_orders/${commitmentId}/line_items`
+    : `${commitmentsBase(env, projectId)}/${commitmentId}/line_items`;
+  const res = await fetchAllV2Pages(env, path, onProgress);
   if (res.status !== 200) {
     throw new Error(`Failed to fetch line items for commitment ${commitmentId}: ${res.status} ${JSON.stringify(res.data)}`);
   }
@@ -2897,7 +2952,7 @@ async function fetchCommitmentsByIds(env, projectId, commitmentIds, onProgress =
   for (const id of commitmentIds) {
     const header = byId.get(String(id));
     if (!header) throw new Error(`Commitment ${id} not found on this project — it may have been deleted in Procore.`);
-    commitments.push({ ...header, line_items: await fetchCommitmentLines(env, projectId, id, onProgress) });
+    commitments.push({ ...header, line_items: await fetchCommitmentLines(env, projectId, id, onProgress, header) });
   }
   return commitments;
 }
@@ -3318,6 +3373,13 @@ export async function generateCommitmentInvoice(env, {
   };
 }
 
+// What the frontend needs to show a commitment Change Order as one.
+function changeOrderFields(c) {
+  return c.type === 'CommitmentChangeOrder'
+    ? { isChangeOrder: true, parentCommitmentId: c.change_order_of, parentNumber: c.parent_number, parentType: c.parent_type }
+    : { isChangeOrder: false };
+}
+
 // Mirrors listPendingDirectCosts' bucket logic (billed > written_off >
 // budgeted priority, partialBilled/breakdown fields for a commitment mid
 // partial-billing). One list call covers every commitment's total; line items
@@ -3353,7 +3415,8 @@ export async function listCommitments(env, { tenantId, projectId }) {
       vendor: c.vendor_name,
       status: c.status || null,
       executed: c.executed === true,
-      amount: round2(Number(c.grand_total ?? 0))
+      amount: round2(Number(c.grand_total ?? 0)),
+      ...changeOrderFields(c)
     };
 
     const lineRows = lineRowsByCommitment.get(String(c.id)) || [];
@@ -3362,7 +3425,7 @@ export async function listCommitments(env, { tenantId, projectId }) {
       continue;
     }
 
-    const rawLines = await fetchCommitmentLines(env, projectId, c.id);
+    const rawLines = await fetchCommitmentLines(env, projectId, c.id, () => {}, c);
     const remaining = rawLines.filter(li => !lineRows.some(r => r.lineItemId === String(li.id)));
     const billedRows = lineRows.filter(r => r.status === 'billed' || r.status === 'draft_co');
     const writtenOffRows = lineRows.filter(r => r.status === 'written_off');
@@ -3421,9 +3484,10 @@ export async function listCommitments(env, { tenantId, projectId }) {
 //   tmBilled       — those hours were already billed/drafted elsewhere (the
 //                     backend hard-blocks billing it; the UI can disable it)
 export async function commitmentLineDetail(env, { tenantId, projectId, commitmentId }) {
-  const [headers, rawLines, lineMap, billedTimecards, timecardsRes, entriesRes] = await Promise.all([
-    fetchCommitmentHeaders(env, projectId),
-    fetchCommitmentLines(env, projectId, commitmentId),
+  const headers = await fetchCommitmentHeaders(env, projectId);
+  const header = headers.find(h => String(h.id) === String(commitmentId));
+  const [rawLines, lineMap, billedTimecards, timecardsRes, entriesRes] = await Promise.all([
+    fetchCommitmentLines(env, projectId, commitmentId, () => {}, header),
     getBilledCommitmentLineMap(env, tenantId, projectId),
     getBilledTimecardMap(env, tenantId, projectId),
     requestWithRetry(env, 'GET', `/rest/v1.0/projects/${projectId}/time_and_material_timecards`, null),
@@ -3476,6 +3540,7 @@ export async function commitmentLineDetail(env, { tenantId, projectId, commitmen
     status: c.status || null,
     executed: c.executed === true,
     grandTotal: c.grand_total != null ? Number(c.grand_total) : null,
+    ...changeOrderFields(c),
     lines
   };
 }

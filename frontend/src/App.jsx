@@ -535,8 +535,13 @@ export default function App({ user, onSignOut }) {
     `${procoreOrigin}/webclients/host/companies/${TENANT_ID}/projects/${projectId}/tools/timeandmaterials/${entryId}/show`;
 
   const directCostUrl = (id) => `${procoreOrigin}/${projectId}/project/direct_costs/${id}`;
-  const commitmentUrl = (c) =>
-    `${procoreOrigin}/${projectId}/project/commitments/${c.type === 'PurchaseOrderContract' ? 'purchase_order_contracts' : 'work_order_contracts'}/${c.id}`;
+  // A commitment Change Order links to its parent commitment (where Procore
+  // lists its Change Orders).
+  const commitmentUrl = (c) => {
+    const type = c.isChangeOrder ? c.parentType : c.type;
+    const id = c.isChangeOrder ? c.parentCommitmentId : c.id;
+    return `${procoreOrigin}/${projectId}/project/commitments/${type === 'PurchaseOrderContract' ? 'purchase_order_contracts' : 'work_order_contracts'}/${id}`;
+  };
 
   // "Full details" popout (Ben's ask 2026-09-15, replacing the old in-sidebar
   // modal — same "smushed in a narrow panel" problem). Read-only, so it just
@@ -2385,7 +2390,7 @@ export default function App({ user, onSignOut }) {
                     return (
                       <div
                         key={cmId}
-                        className={`ticket-card ${checkedHere > 0 ? 'checked' : ''}`}
+                        className={`ticket-card ${checkedHere > 0 ? 'checked' : ''}${c.isChangeOrder ? ' cm-change-order' : ''}`}
                         onClick={() => toggleExpandCm(c)}
                       >
                         <div className="ticket-card-header">
@@ -2403,7 +2408,9 @@ export default function App({ user, onSignOut }) {
                         </div>
                         <div className="ticket-description">{c.vendor || c.title || 'Unknown vendor'}</div>
                         <div className="ticket-meta">
-                          {c.type === 'WorkOrderContract' ? 'Subcontract' : c.type === 'PurchaseOrderContract' ? 'Purchase order' : c.type}
+                          {c.isChangeOrder
+                            ? `Change Order to ${c.parentNumber || 'a commitment'}`
+                            : c.type === 'WorkOrderContract' ? 'Subcontract' : c.type === 'PurchaseOrderContract' ? 'Purchase order' : c.type}
                           {c.status && ` · ${c.status}`}
                           {c.partialBilled && ` · ${c.billedLineCount} of ${c.totalLineCount} line items already accounted for`}
                         </div>
