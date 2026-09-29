@@ -287,3 +287,9 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .multi-select-option:hover { background: rgba(var(--accent-rgb), 0.08); }
 .multi-select-option input { padding: 0; accent-color: var(--accent); }
 .multi-select-footer { display: flex; justify-content: space-between; gap: 8px; padding: 8px 12px 4px; border-top: 1px solid var(--border-color); margin-top: 4px; }
+
+/* Budgeted % held at the original quote (budget_basis 'original') */
+.basis-mark {
+  display: inline-block; margin-left: 4px; font-family: 'JetBrains Mono', monospace; font-size: 9px; font-weight: 700;
+  color: var(--text-tertiary); border: 1px solid var(--border-color); border-radius: 3px; padding: 0 3px; vertical-align: 1px;
+}

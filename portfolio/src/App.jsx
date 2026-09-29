@@ -182,7 +182,10 @@ export default function App() {
     // Budgeted margin only from projects that actually have a budget — one
     // with no revised budget reports a meaningless 100%.
     const budgetedProjects = visible.filter((p) => p.budget_status === "ok");
-    const budgetedContract = sumOf(budgetedProjects, "revised_contract");
+    // Each project's budgeted margin is measured against its original quote
+    // until its budget changes, then against the revised contract.
+    const basisContract = (p) => (p.budget_basis === "original" ? p.original_contract : p.revised_contract);
+    const budgetedContract = sumOf(budgetedProjects, basisContract);
     const counted = visible.filter((p) => p.counts_at);
     return {
       contract, invoiced, mtd,
@@ -306,6 +309,8 @@ export default function App() {
           {visible.length} project{visible.length === 1 ? "" : "s"} shown. Figures come from each project's budget
           (Custom Reporting View) as of the "Updated" time; open a project for a live refresh.
           {notLoaded > 0 && ` ${notLoaded} project${notLoaded === 1 ? " hasn't" : "s haven't"} been loaded yet.`}
+          {" "}Budgeted % marked Q is the original quote (original contract vs original budget, pass-through contracts
+          excluded), held until the project's budget changes.
         </div>
 
         {error && <div className="banner-error">{error}</div>}
@@ -342,7 +347,15 @@ export default function App() {
                     <td className={`num${marginClass(p)}`} title={p.margin_to_date != null ? `${money(p.margin_to_date)} margin to date` : undefined}>
                       {pct(p.margin_to_date_pct)}
                     </td>
-                    <td className="num cell-muted">{noBudget ? "—" : pct(p.budgeted_margin_pct)}</td>
+                    <td
+                      className="num cell-muted"
+                      title={p.budget_basis === "original"
+                        ? `Original quote: ${money(p.original_contract)} contract vs ${money(p.original_budget)} budget (no budget changes yet)`
+                        : p.budget_basis === "live" ? "Live budget (budget changes have been made)" : undefined}
+                    >
+                      {noBudget ? "—" : pct(p.budgeted_margin_pct)}
+                      {!noBudget && p.budget_basis === "original" && <span className="basis-mark">Q</span>}
+                    </td>
                     <td className={`num${n(p.unbilled_count) > 0 ? " cell-key" : ""}`}>{p.unbilled_count ?? "—"}</td>
                     <td className="num cell-muted">{p.billed_count ?? "—"}</td>
                     <td className="num cell-muted">{p.written_off_count ?? "—"}</td>

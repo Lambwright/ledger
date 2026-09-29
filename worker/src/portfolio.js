@@ -28,6 +28,8 @@ const COLUMN_MAP = {
   sub_invoices: 'Subcontractor invoices',
   committed_costs: 'Committed costs',
   revised_budget: 'Revised Budget',
+  original_budget: 'original_budget_amount',
+  approved_budget_changes: 'Approved budget changes',
   margin_to_date: 'Margin to Date ($)',
   margin_to_date_pct: 'Margin to Date (%)',
   budgeted_margin: 'Budgeted Margin ($)',
@@ -36,6 +38,36 @@ const COLUMN_MAP = {
 };
 // Percent columns are recomputed from the summed totals — never summed.
 const PERCENT_COLUMNS = new Set(['pct_invoiced', 'margin_to_date_pct', 'budgeted_margin_pct']);
+
+// Einbau's convention for a Prime Contract that bills costs straight through
+// (LEDGER's standalone invoices use it too). Their revenue isn't part of the
+// quote the original budget was built for.
+const isPassThroughContract = (title) => /pass[\s-]*thr(u|ough)/i.test(String(title || ''));
+
+// Budgeted margin basis (Ben, 2026-09-24/29). The live "Revised Contract −
+// Revised Budget" inflates as soon as Change Orders or pass-through contracts
+// add revenue to a budget nobody has updated — KPS showed 58% against a 39%
+// quote. So until the budget itself has changed (no approved budget changes,
+// revised budget still = original), hold it at the original quote: approved
+// Prime Contracts' original values (grand_total, before COs; pass-through
+// contracts excluded) against the original budget. Once the budget has been
+// changed, use Procore's live figures. (The approved estimate itself would be
+// better still, but Estimating's API rejects app logins — asked Procore.)
+function budgetedMarginBasis(values, contracts) {
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const originalContract = Array.isArray(contracts)
+    ? round2(contracts
+        .filter(c => ['Approved', 'Complete'].includes(c.status) && !isPassThroughContract(c.title))
+        .reduce((s, c) => s + (num(c.grand_total) || 0), 0))
+    : null;
+  const budgetChanged = Math.abs(values.approved_budget_changes || 0) >= 0.01
+    || Math.abs((values.revised_budget ?? 0) - (values.original_budget ?? 0)) >= 0.01;
+  if (!budgetChanged && originalContract > 0 && (values.original_budget ?? 0) > 0) {
+    const margin = round2(originalContract - values.original_budget);
+    return { basis: 'original', originalContract, margin, pct: Math.round((margin / originalContract) * 10000) / 100 };
+  }
+  return { basis: 'live', originalContract };
+}
 
 // Stages that are finished — refreshed rarely, not on every sweep.
 const CLOSED_STAGES = ['Completed and Invoiced', 'Cancelled', 'Closed', 'Warranty Complete'];
@@ -100,7 +132,22 @@ export async function refreshProjectSnapshot(env, tenantId, projectId) {
   values.budgeted_margin_pct = pctOf(values.budgeted_margin, values.revised_contract);
   const budgetStatus = !rows ? 'no_view' : (values.revised_budget ?? 0) === 0 ? 'no_budget' : 'ok';
 
-  const cols = Object.keys(COLUMN_MAP);
+  let contractsRes = null;
+  if (rows) {
+    contractsRes = await procoreGet(env, `/rest/v1.0/prime_contracts?project_id=${projectId}`);
+    const basis = budgetedMarginBasis(values, contractsRes.status === 200 ? contractsRes.data : null);
+    values.original_contract = basis.originalContract;
+    values.budget_basis = basis.basis;
+    if (basis.basis === 'original') {
+      values.budgeted_margin = basis.margin;
+      values.budgeted_margin_pct = basis.pct;
+    }
+  } else {
+    values.original_contract = null;
+    values.budget_basis = null;
+  }
+
+  const cols = [...Object.keys(COLUMN_MAP), 'original_contract', 'budget_basis'];
   const params = [
     tenantId, String(projectId),
     p.name || null, p.project_number || null, p.project_stage?.name || p.stage || null,
@@ -122,7 +169,7 @@ export async function refreshProjectSnapshot(env, tenantId, projectId) {
        dirty_at = case when portfolio_projects.dirty_at <= $${allCols.length + 3}::timestamptz then null else portfolio_projects.dirty_at end`,
     params
   );
-  return Math.min(...[show.remaining, summary.remaining].filter(r => r != null), 999);
+  return Math.min(...[show.remaining, summary.remaining, contractsRes?.remaining].filter(r => r != null), 999);
 }
 
 // Record counts (Ben's ask 2026-09-25): how many T&M tickets, direct costs and

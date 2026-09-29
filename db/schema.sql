@@ -204,3 +204,61 @@ alter table project_settings enable row level security;
 -- No policies are created yet on purpose — with RLS enabled and zero policies, the anon key can
 -- read/write NOTHING on these tables by default (fail closed). Add scoped policies here once the
 -- frontend's auth model is designed (e.g. matching a JWT claim to tenant_id).
+
+-- ============================================================
+-- Company portfolio page (lambwright.github.io/ledger/) — added 2026-09-24/25,
+-- documented here 2026-09-29 from the live table. One row per Procore project:
+-- a snapshot of its budget view ("Procore Standard Budget (Custom Reporting
+-- View)") plus LEDGER's record counts. Written by worker/src/portfolio.js.
+-- ============================================================
+
+create table if not exists portfolio_projects (
+  tenant_id text not null,
+  project_id text not null,
+  name text,
+  project_number text,
+  stage text,
+  region text,
+  departments text,
+  office text,
+  city text,
+  state_code text,
+  active boolean,
+  procore_created_at timestamptz,
+  -- Budget view totals (summed across the project row + every sub job row)
+  revised_contract numeric,
+  invoiced numeric,
+  pct_invoiced numeric,
+  invoicing_remaining numeric,
+  jtd_cost numeric,
+  direct_costs numeric,
+  sub_invoices numeric,
+  committed_costs numeric,
+  revised_budget numeric,
+  original_budget numeric,            -- budget view original_budget_amount (2026-09-29)
+  approved_budget_changes numeric,    -- budget view "Approved budget changes" (2026-09-29)
+  original_contract numeric,          -- approved Prime Contracts' original values, pass-through excluded (2026-09-29)
+  margin_to_date numeric,
+  margin_to_date_pct numeric,
+  budgeted_margin numeric,            -- per budget_basis below
+  budgeted_margin_pct numeric,
+  budget_basis text,                  -- 'original' = original_contract vs original_budget (no budget changes yet); 'live' = Procore's revised figures
+  retainage numeric,
+  budget_status text,                 -- 'ok' | 'no_budget' | 'no_view'
+  refresh_error text,
+  refreshed_at timestamptz,
+  dirty_at timestamptz,               -- set by the Procore webhook; the scheduled run refreshes it once quiet
+  listed_at timestamptz,
+  -- LEDGER record counts (T&M tickets + direct costs + commitments)
+  unbilled_count integer,
+  billed_count integer,
+  budgeted_count integer,
+  written_off_count integer,
+  counts_at timestamptz,
+  primary key (tenant_id, project_id)
+);
+
+create table if not exists portfolio_sync_state (
+  tenant_id text primary key,
+  projects_listed_at timestamptz
+);
