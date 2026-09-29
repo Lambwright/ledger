@@ -596,6 +596,14 @@
       "status_code": 200,
       "verification": "verified",
       "notes": "Verified live 2026-09-29. Wrapped {data:[...]}, paginate like other v2.0 lists. Per line: id, amount, description, quantity, unit_cost, uom, wbs_code {id, flat_code, description}, wbs_code_id, commitment_line_item_id (null), prime_line_item_id (null), extended_type, position. IMPORTANT: an approved commitment CO's lines do NOT appear in the parent commitment's own v2.0 line_items, and the parent's grand_total excludes the CO (SC-000_000_1-003 stayed $1,000 with a $680 approved CO) — so LEDGER bills them as separate items with no double count."
+    },
+    {
+      "name": "Estimating proposal summary (NOT reachable with LEDGER's app token)",
+      "method": "GET",
+      "path": "https://estimating-tool.procore.com/api/project/{estimating_project_id}/proposal/{proposal_id}/summary",
+      "status_code": 401,
+      "verification": "verified",
+      "notes": "Captured by Ben 2026-09-29 from the browser (web page https://us02.procore.com/webclients/host/companies/{company}/projects/{procore_project_id}/tools/estimating/estimate?proposalId={proposal_id}). Separate host, NOT api.procore.com. The Estimating project id differs from the Procore project id (562949954065278 vs 562949955178988 for the same job). Tested from LEDGER's worker with its client_credentials token: without X-Procore-Company-Id -> 500 'Missing X-Procore-Company-Id header'; with it (plus Procore-Company-Id, and with/without X-Procore-Project-Id) -> 401 {errorType:'NotLoggedIn','User is not logged in'}. Likely needs the browser's session, not an OAuth app token. Response bodies Ben shared: one has the estimate's settings (margin % by category, e.g. labor 31/41 = margin on SELL, laborCost $/hr, adjustments, summaryHash); another has totals (laborCost, laborSales, itemCost, itemSales, subtotal, total) — budgeted margin = (total - laborCost - itemCost) / total (30.66% on the sample: $56,153.55 on $183,140.49). Paths /proposal/{id} (405) and /proposals (404) don't exist."
     }
   ],
   "rate_limit": {
