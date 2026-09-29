@@ -6,6 +6,7 @@ import {
 } from './api';
 import { connectProcoreSidePanel, isEmbedded } from './procore';
 import { withTokenHash } from './auth';
+import ProjectPicker, { recentProjects } from './ProjectPicker';
 
 const MODE_LABEL = { tm: 'T&M', fixed_price: 'Fixed-Price', non_billable: 'Not Billable' };
 const TIME_TYPE_LABEL = { regular: 'Regular', overtime: 'Overtime', double_time: 'Double Time', per_diem: 'Per Diem' };
@@ -147,11 +148,16 @@ function MarkupFields({ label, value, onChange, placeholder }) {
 //    project / resource (Prime Contract) / view / origin; see connectProcoreSidePanel.
 //  - Standalone (local dev, direct browser) → URL query params, else the .env
 //    default so the app is still usable on its own.
+// Outside Procore (phone / home-screen app) with no project in the link, open
+// the last project used on this device. The build's default project is only a
+// local-development convenience now — it used to drop every standalone user
+// onto the same test project.
 function resolveProjectId(params) {
   return (
     params.get('project_id') ||
     params.get('projectId') ||
-    (EMBEDDED ? '' : DEFAULT_PROJECT_ID)
+    (EMBEDDED ? '' : recentProjects()[0]?.project_id || (import.meta.env.DEV ? DEFAULT_PROJECT_ID : '')) ||
+    ''
   );
 }
 
@@ -1475,14 +1481,16 @@ export default function App({ user, onSignOut }) {
       </div>
 
       {!EMBEDDED && (
-        <div className="project-row">
-          <label>Project ID</label>
-          <input
-            value={projectId}
-            onChange={e => setProjectId(e.target.value)}
-            onBlur={e => load(e.target.value)}
-          />
-        </div>
+        <ProjectPicker
+          projectId={projectId}
+          onPick={(id) => {
+            // Keep the project in the address so a refresh stays on it.
+            const url = new URL(window.location.href);
+            url.searchParams.set('project_id', id);
+            window.history.replaceState(null, '', url.toString());
+            setProjectId(id);
+          }}
+        />
       )}
 
       {contracts.length > 1 && contractFromProcore ? (

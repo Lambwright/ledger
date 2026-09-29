@@ -484,6 +484,26 @@ export async function verifyEinbauUser(request, env) {
 // Pre-Construction are a heads-up of what's coming.
 const HIDDEN_STAGES = ['Overhead', 'Cancelled', 'Warranty', 'None'];
 
+// Project search for LEDGER opened outside Procore (phone / home-screen app,
+// 2026-09-29) — reads the project list the portfolio already keeps, so it
+// costs no Procore requests. Matches name or number, or an exact project id
+// (used to put a name to a project opened by link). Live projects first.
+export async function searchProjects(env, tenantId, query) {
+  const q = String(query || '').trim();
+  if (q.length < 2) return [];
+  // Escape ILIKE wildcards so "50%" searches for a literal percent sign.
+  const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+  return dbQuery(
+    env,
+    `select project_id, name, project_number, stage, region, departments from portfolio_projects
+     where tenant_id = $1 and name is not null and coalesce(stage, 'None') <> all($2::text[])
+       and (name ilike $3 or project_number ilike $3 or project_id = $4)
+     order by (stage = any($5::text[])) asc, name
+     limit 20`,
+    [tenantId, HIDDEN_STAGES, like, q, CLOSED_STAGES]
+  );
+}
+
 export async function listPortfolio(env, tenantId) {
   return dbQuery(
     env,

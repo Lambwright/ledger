@@ -1,8 +1,12 @@
 # Cloudflare Pages headers.
-# LEDGER runs only as an embedded panel inside Procore — allow Procore to
-# frame it and nobody else. (Cloudflare Pages sets no X-Frame-Options by
-# default, so frame-ancestors is the whole control here.)
+# LEDGER runs embedded inside Procore AND on its own (phone home-screen app,
+# 2026-09-29). Only Procore may frame it; opening it directly is fine.
+# (Cloudflare Pages sets no X-Frame-Options by default, so frame-ancestors is
+# the whole control here.)
 /*
   Content-Security-Policy: frame-ancestors https://*.procore.com
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
+
+/manifest.webmanifest
+  Content-Type: application/manifest+json

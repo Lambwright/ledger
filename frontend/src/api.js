@@ -297,6 +297,11 @@ export function saveProjectCounts({ tenantId, projectId, counts }) {
   return callAction('save_portfolio_counts', { tenant_id: tenantId, project_id: projectId, counts });
 }
 
+// Project search for LEDGER opened outside Procore (phone / home-screen app).
+export function searchProjects({ query }) {
+  return callAction('search_projects', { query });
+}
+
 export function listCommitments({ tenantId, projectId }) {
   return callAction('list_commitments', { tenant_id: tenantId, project_id: projectId });
 }

@@ -66,6 +66,22 @@ body {
 
 .ledger.has-actionbar { padding-bottom: 92px; }
 
+/* Installed on a phone's home screen (display: standalone): keep clear of the
+   notch / home indicator. env() is 0 everywhere else, so this is a no-op in
+   Procore and in a normal browser tab. */
+@media (display-mode: standalone) {
+  .ledger {
+    padding-top: calc(20px + env(safe-area-inset-top));
+    padding-left: calc(16px + env(safe-area-inset-left));
+    padding-right: calc(16px + env(safe-area-inset-right));
+  }
+  .ledger.has-actionbar { padding-bottom: calc(92px + env(safe-area-inset-bottom)); }
+}
+/* Phones get the narrow layout's padding even in standalone (ledger-wide) mode. */
+@media (max-width: 600px) {
+  .ledger-wide { padding: 20px 16px 32px; }
+}
+
 /* ---- header ---- */
 
 .ledger-header {
@@ -1364,3 +1380,31 @@ body {
 .signin-field input { width: 100%; }
 .signin-submit { width: 100%; }
 .signin-help { font-size: 11px; color: var(--ink-muted); }
+
+/* Project picker — LEDGER opened outside Procore (ProjectPicker.jsx) */
+.project-picker { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.project-picker input {
+  width: 100%; padding: 10px 12px; border: 1px solid var(--border-input); border-radius: 4px;
+  background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; /* 16px stops iOS zooming on focus */
+}
+.project-picker input:focus { outline: none; border-color: var(--accent); }
+.project-options { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.project-option {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%;
+  padding: 10px 12px; background: var(--surface); border: none; border-bottom: 1px solid var(--border);
+  color: var(--ink); text-align: left; cursor: pointer; font: inherit;
+}
+.project-option:last-child { border-bottom: none; }
+.project-option:hover, .project-option:focus-visible { background: var(--surface-2); outline: none; }
+.project-option-name { font-size: 14px; }
+.project-option-meta { font-family: var(--font-mono); font-size: 10px; color: var(--ink-muted); }
+.project-option-note {
+  padding: 8px 12px; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--ink-muted); background: var(--surface);
+}
+.project-picked { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.project-picked-name { font-size: 15px; font-weight: 600; color: var(--ink); }
+.project-picked-stage {
+  margin-left: 8px; font-family: var(--font-mono); font-size: 10px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-muted);
+}

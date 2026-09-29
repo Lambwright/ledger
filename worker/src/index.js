@@ -32,7 +32,7 @@ import {
 } from './app.js';
 import {
   handleProcoreWebhook, refreshIfStale, refreshProjectSnapshot, refreshProjectCounts, saveProjectCounts, projectSourceRecords,
-  runScheduled, verifyEinbauUser, verifyEinbauSession, hasLedgerApp, listPortfolio
+  runScheduled, verifyEinbauUser, verifyEinbauSession, hasLedgerApp, listPortfolio, searchProjects
 } from './portfolio.js';
 
 const CORS_HEADERS = {
@@ -629,6 +629,10 @@ async function handleAction(env, body, ctx) {
     }
     const result = await listCommitments(env, { tenantId: tenant_id, projectId: project_id });
     return json(result, 200);
+  }
+
+  if (action === 'search_projects') {
+    return json({ projects: await searchProjects(env, String(env.PROCORE_COMPANY_ID), body.query) }, 200);
   }
 
   if (action === 'commitment_line_detail') {
