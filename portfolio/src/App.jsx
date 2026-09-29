@@ -5,6 +5,7 @@ import Header from "./components/Header.jsx";
 import LoginScreen from "./components/LoginScreen.jsx";
 import { applyAccentPreset } from "./accentPresets.js";
 import SourceRecords from "./components/SourceRecords.jsx";
+import MultiSelect from "./components/MultiSelect.jsx";
 
 const PROCORE_ORIGIN = "https://us02.procore.com";
 // The full LEDGER app (same one as the Procore sidebar), opened standalone on a project.
@@ -80,7 +81,7 @@ export default function App() {
   const [error, setError] = useState(null);
 
   const [search, setSearch] = useState("");
-  const [stage, setStage] = useState("");
+  const [stageFilter, setStageFilter] = useState(() => new Set()); // empty = all stages
   const [region, setRegion] = useState("");
   const [dept, setDept] = useState("");
   const [showAll, setShowAll] = useState(false);
@@ -157,7 +158,7 @@ export default function App() {
         const done = n(p.pct_invoiced) != null && n(p.pct_invoiced) >= 100;
         return invoiceFilter === "done" ? done : !done;
       })
-      .filter((p) => !stage || p.stage === stage)
+      .filter((p) => stageFilter.size === 0 || stageFilter.has(p.stage))
       .filter((p) => !region || p.region === region)
       .filter((p) => !dept || String(p.departments || "").split(", ").includes(dept))
       .filter((p) => !q || `${p.name} ${p.project_number || ""}`.toLowerCase().includes(q))
@@ -170,7 +171,7 @@ export default function App() {
         const cmp = va < vb ? -1 : va > vb ? 1 : 0;
         return sort.dir === "asc" ? cmp : -cmp;
       });
-  }, [projects, search, stage, region, dept, showAll, invoiceFilter, sort]);
+  }, [projects, search, stageFilter, region, dept, showAll, invoiceFilter, sort]);
 
   // Headline figures always match the projects currently shown (Ben, 2026-09-29).
   const totals = useMemo(() => {
@@ -281,10 +282,7 @@ export default function App() {
 
         <div className="filters">
           <input className="filter-search" placeholder="Search project name or number" value={search} onChange={(e) => setSearch(e.target.value)} />
-          <select value={stage} onChange={(e) => setStage(e.target.value)} aria-label="Stage">
-            <option value="">All stages</option>
-            {stages.map((s) => <option key={s}>{s}</option>)}
-          </select>
+          <MultiSelect label="Stage" allLabel="All stages" options={stages} selected={stageFilter} onChange={setStageFilter} />
           <select value={region} onChange={(e) => setRegion(e.target.value)} aria-label="Region">
             <option value="">All regions</option>
             {regions.map((s) => <option key={s}>{s}</option>)}

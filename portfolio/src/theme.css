@@ -268,3 +268,22 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .src-total { margin-left: auto; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
 .src-table { max-height: 360px; overflow-y: auto; }
 .src-desc { white-space: normal !important; min-width: 200px; }
+
+/* Multi-select filter (components/MultiSelect.jsx) — styled to match the selects beside it */
+.multi-select { position: relative; }
+.multi-select-toggle {
+  display: inline-flex; align-items: center; gap: 8px; min-width: 170px; max-width: 280px;
+  padding: 7px 10px; font-size: 13px; text-align: left; cursor: pointer;
+}
+.multi-select-toggle.is-filtered { border-color: var(--accent); }
+.multi-select-summary { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.multi-select-caret { font-size: 11px; color: var(--text-tertiary); }
+.multi-select-menu {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 300; min-width: 260px; max-height: 360px; overflow-y: auto;
+  background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-sm); box-shadow: var(--shadow-md);
+  padding: 6px 0;
+}
+.multi-select-option { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+.multi-select-option:hover { background: rgba(var(--accent-rgb), 0.08); }
+.multi-select-option input { padding: 0; accent-color: var(--accent); }
+.multi-select-footer { display: flex; justify-content: space-between; gap: 8px; padding: 8px 12px 4px; border-top: 1px solid var(--border-color); margin-top: 4px; }
