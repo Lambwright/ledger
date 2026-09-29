@@ -179,7 +179,7 @@ export async function projectSourceRecords(env, tenantId, projectId) {
     procoreGet(env, `/rest/v1.0/prime_contracts?project_id=${projectId}`),
     dbQuery(
       env,
-      `select record_type, procore_record_id, status, is_estimated from billing_records
+      `select record_type, procore_record_id, status from billing_records
        where tenant_id = $1 and project_id = $2 and record_type in ('direct_cost', 'direct_cost_line', 'commitment_line')`,
       [tenantId, String(projectId)]
     ),
@@ -194,15 +194,14 @@ export async function projectSourceRecords(env, tenantId, projectId) {
   for (const r of ledgerRows) {
     const parent = r.record_type === 'direct_cost' ? r.procore_record_id : r.procore_record_id.split(':')[0];
     const map = r.record_type === 'commitment_line' ? statusesBy.cm : statusesBy.dc;
-    if (!map.has(parent)) map.set(parent, { statuses: new Set(), estimated: false });
+    if (!map.has(parent)) map.set(parent, { statuses: new Set() });
     map.get(parent).statuses.add(r.status);
-    if (r.is_estimated) map.get(parent).estimated = true;
   }
   const LABEL = { billed: 'Billed', draft_co: 'In draft CO', written_off: 'Written off', reconciled_to_period: 'Budgeted' };
   const ledgerStatus = (map, id) => {
     const s = map.get(String(id));
     if (!s) return 'Not in LEDGER yet';
-    return [...s.statuses].map(x => LABEL[x] || x).join(' + ') + (s.estimated ? ' (estimated)' : '');
+    return [...s.statuses].map(x => LABEL[x] || x).join(' + ');
   };
 
   const round2 = (x) => Math.round(x * 100) / 100;

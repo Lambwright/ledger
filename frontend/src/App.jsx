@@ -2,8 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   listPendingTickets, listPendingDirectCosts, listPrimeContracts, listBillingPeriods, nextInvoiceNumber,
   previewCombinedBilling, generateCombinedInvoice, pushCombinedToDraftCO, getProjectSettings, saveProjectSettings, revertToUnbilled,
-  revertDirectCost, writeOffRecords, markAsBudgeted, markAlreadyBilled, directCostLineDetail, listCommitments, commitmentLineDetail, revertCommitment, saveProjectCounts,
-  previewCommitmentReconciliation, reconcileCommitment
+  revertDirectCost, writeOffRecords, markAsBudgeted, markAlreadyBilled, directCostLineDetail, listCommitments, commitmentLineDetail, revertCommitment, saveProjectCounts
 } from './api';
 import { connectProcoreSidePanel, isEmbedded } from './procore';
 import { withTokenHash } from './auth';
@@ -831,40 +830,6 @@ export default function App({ user, onSignOut }) {
     setLabourWarning({ title: 'Billing labour from a subcontract', text: LABOUR_WARNING_TEXT, lines: risky, onProceed: apply });
   }
 
-  // Estimated-commitment reconciliation (2026-09-26): LEDGER proposes the
-  // difference between the sub's real invoices and what was billed as an
-  // estimate; the PM edits it and confirms. See reconcileCommitment (worker).
-  const [recon, setRecon] = useState(null); // { c, loading, data, error, amount, description, contract, saving }
-
-  async function openReconcile(c) {
-    setRecon({ c, loading: true, data: null, error: null, amount: '', description: '', contract: contractId || '', saving: false });
-    try {
-      const data = await previewCommitmentReconciliation({ tenantId: TENANT_ID, projectId, commitmentId: c.id });
-      setRecon(r => r && { ...r, loading: false, data, amount: String(data.proposedAmount), description: data.proposedDescription });
-    } catch (e) {
-      setRecon(r => r && { ...r, loading: false, error: e.message });
-    }
-  }
-
-  async function confirmReconcile() {
-    const amount = Number(recon.amount);
-    if (recon.amount.trim() === '' || !Number.isFinite(amount)) {
-      setRecon(r => ({ ...r, error: 'Enter an amount (0 if no adjustment is needed).' }));
-      return;
-    }
-    setRecon(r => ({ ...r, saving: true, error: null }));
-    try {
-      await reconcileCommitment({
-        tenantId: TENANT_ID, projectId, commitmentId: recon.c.id, amount, description: recon.description,
-        primeContractId: recon.contract || undefined, userId
-      });
-      setRecon(null);
-      await load(projectId, { preserveResult: true });
-    } catch (e) {
-      setRecon(r => r && { ...r, saving: false, error: e.message });
-    }
-  }
-
   // Commitments' undo (2026-09-24) — same confirm wording as the DC undos.
   async function handleUndoCm(c, kind) {
     const label = `${c.number}${c.vendor ? ` (${c.vendor})` : ''}`;
@@ -1393,8 +1358,6 @@ export default function App({ user, onSignOut }) {
     unbilled: o.unbilled + r.unbilled, billed: o.billed + r.billed,
     writtenOff: o.writtenOff + r.writtenOff, budgeted: o.budgeted + r.budgeted
   }), { unbilled: 0, billed: 0, writtenOff: 0, budgeted: 0 });
-  const estimatedCmCount = ['unbilled', 'billed', 'writtenOff', 'budgeted']
-    .flatMap(b => commitments?.[b] || []).filter(c => c.estimatedLineCount > 0).length;
 
   const billedCm = withPartials(commitments?.billed, unbilledCm, 'billedLineCount', c => ({ ...c, billedAmount: c.billedLineAmount }));
   const writtenOffCm = withPartials(commitments?.writtenOff, unbilledCm, 'writtenOffLineCount', c => ({ ...c, writtenOffAmount: c.writtenOffLineAmount, reasonNotes: c.writeOffNotes }));
@@ -1445,7 +1408,6 @@ export default function App({ user, onSignOut }) {
           </table>
           <div className="rollup-note">
             Billed includes draft Change Orders, with markup. Unbilled is at cost for direct costs and commitments.
-            {estimatedCmCount > 0 && ` ${estimatedCmCount} commitment${estimatedCmCount === 1 ? ' was' : 's were'} billed as estimates — not yet invoiced by the sub.`}
           </div>
         </div>
       )}
@@ -1939,10 +1901,6 @@ export default function App({ user, onSignOut }) {
                       {c.invoiceNumber && <span className="tag tag-billed">{c.invoiceNumber}</span>}
                       {c.outsideLedgerLineCount > 0 && <span className="tag tag-outside">Billed outside LEDGER</span>}
                       {c.partialBilled && <span className="tag tag-open">Some lines still unbilled</span>}
-                      {c.estimatedLineCount > 0 && (c.reconciled
-                        ? <span className="tag tag-billed">Reconciled</span>
-                        : <span className="tag tag-draft">Estimated — needs reconciling</span>)}
-                      {c.adjustmentAmount ? <span> · includes {money(c.adjustmentAmount)} adjustment{c.adjustmentDraft ? ' (draft CO)' : ''}</span> : null}
                       {(c.writtenOffLineCount > 0 || c.budgetedLineCount > 0) && (
                         <span>
                           {' '}· {c.billedLineCount} of {c.totalLineCount} line(s) billed
@@ -1958,11 +1916,6 @@ export default function App({ user, onSignOut }) {
                         </button>
                       )}
                       <a href={commitmentUrl(c)} target="_blank" rel="noreferrer">Open in Procore ↗</a>
-                      {c.estimatedLineCount > 0 && (
-                        <button className="undo-link" onClick={() => openReconcile(c)}>
-                          {c.reconciled ? 'Reconcile again' : 'Reconcile with sub invoice'}
-                        </button>
-                      )}
                       {c.outsideLedgerLineCount > 0 && (
                         <button className="undo-link" disabled={revertingId === c.id} onClick={() => handleUndoOutsideBilled('cm', c, c.number)}>
                           {revertingId === c.id ? 'Undoing…' : 'Undo "Already Billed"'}
@@ -2504,7 +2457,6 @@ export default function App({ user, onSignOut }) {
                                   {l.billedStatus === 'draft_co' && <span className="tag tag-draft"> In draft CO</span>}
                                   {l.billedStatus === 'written_off' && <span className="tag tag-written-off"> Written off</span>}
                                   {l.billedStatus === 'reconciled_to_period' && <span className="tag tag-budgeted"> Budgeted</span>}
-                                  {l.isEstimated && <span className="tag tag-draft"> Estimated</span>}
                                   {l.tmBilled && (
                                     <span className="tag tag-billed">
                                       {' '}Billed via {l.tmBilled.viaCommitment ? 'another commitment' : 'T&M'}
@@ -2905,12 +2857,6 @@ export default function App({ user, onSignOut }) {
                     {previewCmLines?.length > 0 && (
                       <>
                         <div className="rate-overrides-label">Commitment lines</div>
-                        {previewCmLines.some(l => l.isEstimated) && (
-                          <div className="banner banner-warning">
-                            Some of these commitments haven't been invoiced by the subcontractor yet — they'll be billed as
-                            estimates, and LEDGER will block any further billing on them until that's reconciled.
-                          </div>
-                        )}
                         <div className="preview-lines">
                           {previewCmLines.map((line, i) => (
                             <div className="preview-line" key={i}>
@@ -2923,7 +2869,6 @@ export default function App({ user, onSignOut }) {
                               <div className="preview-line-nums">
                                 <span>
                                   cost {money(line.cost)} @ {line.markupPercent}% markup
-                                  {line.isEstimated && <span className="tag tag-draft"> Estimated</span>}
                                 </span>
                                 <span className="preview-line-amount">{money(line.amount)}</span>
                               </div>
@@ -3151,75 +3096,6 @@ export default function App({ user, onSignOut }) {
             </div>
           )}
         </>
-      )}
-
-      {recon && (
-        <div className="warn-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="recon-title">
-          <div className="warn-modal">
-            <div className="warn-modal-title" id="recon-title">
-              Reconcile {recon.c.number}{recon.c.vendor ? ` (${recon.c.vendor})` : ''}
-            </div>
-            {recon.loading && <p className="warn-modal-text">Checking the sub's invoices in Procore…</p>}
-            {recon.data && (
-              <>
-                <p className="warn-modal-text">
-                  This was billed to the client before the sub invoiced it. Here's how the sub's real invoices compare.
-                  Edit the adjustment if you need to, then confirm.
-                </p>
-                <dl className="recon-grid">
-                  <dt>Sub invoiced to date ({recon.data.requisitionCount} invoice{recon.data.requisitionCount === 1 ? '' : 's'})</dt>
-                  <dd>{money(recon.data.subInvoiced)}</dd>
-                  <dt>Cost LEDGER billed the client for</dt><dd>{money(recon.data.billedCost)}</dd>
-                  {recon.data.otherCost > 0 && <><dt>Written off / budgeted lines</dt><dd>{money(recon.data.otherCost)}</dd></>}
-                  {recon.data.priorAdjustments !== 0 && <><dt>Earlier adjustments (billed)</dt><dd>{money(recon.data.priorAdjustments)}</dd></>}
-                  <dt>Markup</dt><dd>{recon.data.markupPercent}%</dd>
-                  <dt>Proposed adjustment</dt><dd><strong>{money(recon.data.proposedAmount)}</strong></dd>
-                </dl>
-                {recon.data.unbilledLineCount > 0 && (
-                  <p className="warn-modal-text">
-                    {recon.data.unbilledLineCount} line{recon.data.unbilledLineCount === 1 ? '' : 's'} ({money(recon.data.unbilledCost)}) on this
-                    commitment {recon.data.unbilledLineCount === 1 ? "isn't" : "aren't"} billed yet and will be billable normally after this.
-                    If the sub's invoices already include {recon.data.unbilledLineCount === 1 ? 'it' : 'them'}, take that off the adjustment.
-                  </p>
-                )}
-                <label className="recon-field">
-                  <span>Adjustment (incl. markup; negative = credit to the client; 0 = no adjustment)</span>
-                  <input type="number" step="0.01" value={recon.amount} onChange={e => setRecon(r => ({ ...r, amount: e.target.value }))} />
-                </label>
-                {Number(recon.amount) !== 0 && (
-                  <>
-                    <label className="recon-field">
-                      <span>Change Order line description</span>
-                      <input type="text" value={recon.description} onChange={e => setRecon(r => ({ ...r, description: e.target.value }))} />
-                    </label>
-                    {contracts.length > 1 && (
-                      <label className="recon-field">
-                        <span>Prime Contract</span>
-                        <select value={recon.contract} onChange={e => setRecon(r => ({ ...r, contract: e.target.value }))}>
-                          <option value="">Pick one…</option>
-                          {contracts.map(k => <option key={k.id} value={k.id}>#{k.number ?? k.id} — {k.title || '(untitled)'}</option>)}
-                        </select>
-                      </label>
-                    )}
-                  </>
-                )}
-              </>
-            )}
-            {recon.error && <p className="warn-modal-text recon-error">{recon.error}</p>}
-            <div className="warn-modal-buttons">
-              <button className="cancel-btn" onClick={() => setRecon(null)} disabled={recon.saving}>Cancel</button>
-              {recon.data && (
-                <button
-                  className="warn-btn-ok"
-                  onClick={confirmReconcile}
-                  disabled={recon.saving || (Number(recon.amount) !== 0 && contracts.length > 1 && !recon.contract)}
-                >
-                  {recon.saving ? 'Working…' : Number(recon.amount) === 0 ? 'Confirm — no adjustment' : 'Create draft Change Order'}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
       )}
 
       {labourWarning && (

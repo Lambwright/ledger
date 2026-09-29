@@ -270,8 +270,6 @@ export function pushDirectCostToDraftCO({ tenantId, projectId, directCostIds, di
 // Commitments / subcontractor invoices (Ben's ask 2026-09-24) — same shape
 // as direct costs. `commitmentLineIds` are "<commitmentId>:<lineItemId>".
 // `groupBy`: 'per_commitment' (default) | 'per_line_item' | 'total'.
-// Preview lines carry `isEstimated` — true when the sub hasn't invoiced the
-// commitment yet; once billed that way, the Worker blocks further billing on it.
 // ============================================================
 
 export function revertCommitment({ tenantId, projectId, commitmentId, includeBilled, includeWrittenOff, includeBudgeted, includeBilledOutside }) {
@@ -297,19 +295,6 @@ export function saveProjectSettings({ tenantId, projectId, userId, settings }) {
 // sidebar already has every list loaded, so this costs no Procore requests.
 export function saveProjectCounts({ tenantId, projectId, counts }) {
   return callAction('save_portfolio_counts', { tenant_id: tenantId, project_id: projectId, counts });
-}
-
-// Estimated-commitment reconciliation (2026-09-26): the proposal, then the
-// PM-confirmed amount (0 = no adjustment; negative = a credit on the draft CO).
-export function previewCommitmentReconciliation({ tenantId, projectId, commitmentId }) {
-  return callAction('preview_commitment_reconciliation', { tenant_id: tenantId, project_id: projectId, commitment_id: commitmentId });
-}
-
-export function reconcileCommitment({ tenantId, projectId, commitmentId, amount, description, primeContractId, userId }) {
-  return callAction('reconcile_commitment', {
-    tenant_id: tenantId, project_id: projectId, commitment_id: commitmentId, amount, description, user_id: userId,
-    ...(primeContractId ? { prime_contract_id: primeContractId } : {})
-  });
 }
 
 export function listCommitments({ tenantId, projectId }) {

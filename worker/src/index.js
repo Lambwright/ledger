@@ -27,7 +27,7 @@ import {
   listPendingDirectCosts, directCostLineDetail, previewDirectCostBilling, generateDirectCostInvoice, pushDirectCostToDraftCO,
   previewCombinedBilling, generateCombinedInvoice, generateStandaloneInvoice, pushCombinedToDraftCO, writeOffRecords, markAsBudgeted, markAsAlreadyBilled,
   invoiceExistingChangeOrder,
-  listCommitments, commitmentLineDetail, previewCommitmentReconciliation, reconcileCommitment, previewCommitmentBilling, generateCommitmentInvoice, pushCommitmentToDraftCO,
+  listCommitments, commitmentLineDetail, previewCommitmentBilling, generateCommitmentInvoice, pushCommitmentToDraftCO,
   revertCommitment
 } from './app.js';
 import {
@@ -628,19 +628,6 @@ async function handleAction(env, body, ctx) {
       return json({ error: 'tenant_id and project_id are required' }, 400);
     }
     const result = await listCommitments(env, { tenantId: tenant_id, projectId: project_id });
-    return json(result, 200);
-  }
-
-  // Estimated-commitment reconciliation (2026-09-26) — see reconcileCommitment.
-  if (action === 'preview_commitment_reconciliation' || action === 'reconcile_commitment') {
-    const { tenant_id, project_id, commitment_id, amount, description, prime_contract_id, user_id } = body;
-    if (!tenant_id || !project_id || !commitment_id) {
-      return json({ error: 'tenant_id, project_id and commitment_id are required' }, 400);
-    }
-    const args = { tenantId: tenant_id, projectId: project_id, commitmentId: commitment_id };
-    const result = action === 'reconcile_commitment'
-      ? await reconcileCommitment(env, { ...args, amount, description, primeContractId: prime_contract_id, userId: user_id })
-      : await previewCommitmentReconciliation(env, args);
     return json(result, 200);
   }
 
