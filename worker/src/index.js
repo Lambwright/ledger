@@ -739,7 +739,7 @@ async function handlePortfolio(request, env) {
 
 export default {
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runScheduled(env));
+    ctx.waitUntil(runScheduled(env).then(log => console.log('[scheduled]', log.join('; ') || 'nothing due')));
   },
 
   async fetch(request, env, ctx) {

@@ -761,11 +761,13 @@ function ticketLabel(numbers) {
 // its unbilled timecard lines (still actionable) and its billed / draft-CO
 // lines (history), with dollar totals for both. The frontend's "Unbilled" and
 // "Billed" tabs are both rendered from this one response.
-export async function listPendingTickets(env, { tenantId, projectId }) {
+export async function listPendingTickets(env, { tenantId, projectId, selfHeal = true }) {
   // Self-heal first — if a PM deleted a draft CO directly in Procore, the
   // billing_records rows for it need to disappear before we compute what's
   // billed vs. unbilled below, or the ticket stays wrongly "billed" forever.
-  await reconcileStaleDraftCOs(env, tenantId, projectId);
+  // The portfolio's background record counts pass selfHeal:false: they only
+  // read, and deleting billing records stays tied to a PM opening the sidebar.
+  if (selfHeal) await reconcileStaleDraftCOs(env, tenantId, projectId);
 
   const [entriesRes, timecardsRes, billedMap, rates, billingMode] = await Promise.all([
     requestWithRetry(env, 'GET', `/rest/v1.0/projects/${projectId}/time_and_material_entries`, null),

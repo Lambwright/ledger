@@ -154,11 +154,12 @@ export async function saveProjectCounts(env, tenantId, projectId, counts) {
   );
 }
 
-// Dashboard drill-in: recount from the same lists the sidebar uses. ~8-10
-// Procore requests, so only on an explicit project open, never in the sweep.
+// Recount from the same lists the sidebar uses. ~8-10 Procore requests — run
+// on a dashboard project open, and one project at a time by the scheduled
+// count sweep (runScheduled step 4) when enough requests are spare.
 export async function refreshProjectCounts(env, tenantId, projectId) {
   const [tm, dc, cm] = await Promise.all([
-    listPendingTickets(env, { tenantId, projectId }),
+    listPendingTickets(env, { tenantId, projectId, selfHeal: false }),
     listPendingDirectCosts(env, { tenantId, projectId }).catch(() => null),
     listCommitments(env, { tenantId, projectId }).catch(() => null)
   ]);
@@ -364,13 +365,21 @@ export async function handleProcoreWebhook(request, env) {
   return new Response('ok', { status: 200 });
 }
 
+// Counting a project's records costs ~8-10 requests, so the sweep only starts
+// one when Procore reports at least this many left (the PM reserve plus one
+// count's worth).
+const COUNT_SWEEP_MIN_REMAINING = RESERVED_REQUESTS + 12;
+
 // One scheduled pass, paced to leave RESERVED_REQUESTS free for PMs:
 //   1. re-list all projects if that's more than 12 hours old,
 //   2. refresh projects a webhook marked dirty (quiet for 90s+),
-//   3. sweep stale ones: open projects daily, closed ones monthly.
+//   3. sweep stale ones: open projects daily, closed ones monthly,
+//   4. recount one project's LEDGER records (Ben's ask 2026-09-29) — same
+//      daily/monthly cadence, skipping stages the company page hides.
 export async function runScheduled(env, { maxRefreshes = 4 } = {}) {
   const tenantId = String(env.PROCORE_COMPANY_ID);
   const log = [];
+  let lastRemaining = null;
   try {
     const state = await dbQuery(env, `select projects_listed_at from portfolio_sync_state where tenant_id = $1`, [tenantId]);
     const listedAt = state[0]?.projects_listed_at ? new Date(state[0].projects_listed_at).getTime() : 0;
@@ -397,8 +406,38 @@ export async function runScheduled(env, { maxRefreshes = 4 } = {}) {
     );
     for (const { project_id } of due) {
       const remaining = await refreshProjectSnapshot(env, tenantId, project_id);
+      lastRemaining = remaining;
       log.push(`refreshed ${project_id}`);
       if (remaining != null && remaining < RESERVED_REQUESTS) throw new RateBudgetExhausted();
+    }
+
+    const countDue = await dbQuery(
+      env,
+      `select project_id from portfolio_projects
+       where tenant_id = $1 and name is not null and coalesce(stage, 'None') <> all($2::text[]) and (
+         counts_at is null
+         or (coalesce(stage, '') <> all($3::text[]) and counts_at < now() - interval '24 hours')
+         or (stage = any($3::text[]) and counts_at < now() - interval '30 days')
+       )
+       order by counts_at asc nulls first
+       limit 1`,
+      [tenantId, HIDDEN_STAGES, CLOSED_STAGES]
+    );
+    if (countDue.length > 0) {
+      // Nothing refreshed this run means no fresh reading — one cheap request finds out.
+      if (lastRemaining == null) {
+        lastRemaining = (await procoreGet(env, `/rest/v1.0/companies/${env.PROCORE_COMPANY_ID}/project_regions`)).remaining;
+      }
+      if (lastRemaining == null || lastRemaining < COUNT_SWEEP_MIN_REMAINING) throw new RateBudgetExhausted();
+      const projectId = countDue[0].project_id;
+      try {
+        await refreshProjectCounts(env, tenantId, projectId);
+        log.push(`counted ${projectId}`);
+      } catch (e) {
+        // Don't retry a failing project every minute — try again tomorrow.
+        await saveProjectCounts(env, tenantId, projectId, {});
+        log.push(`count failed ${projectId}: ${e.message}`);
+      }
     }
   } catch (e) {
     if (!(e instanceof RateBudgetExhausted)) throw e;
