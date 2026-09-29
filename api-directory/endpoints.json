@@ -2,7 +2,7 @@
   "company_id": "562949953508586",
   "company_name": "Einbau",
   "test_project_id": "562949954996998",
-  "last_updated": "2026-09-26",
+  "last_updated": "2026-09-29",
   "test_project_name": "000_000_1 - Test Project 1",
   "endpoints": [
     {
@@ -580,6 +580,22 @@
       "status_code": 200,
       "verification": "verified",
       "notes": "Verified live 2026-09-26: an invoice created on a freshly approved contract has its SOV rows in g703 IMMEDIATELY (added_from_source 'contract', added_from_source_id = the contract id), unlike Change Order rows, which can take ~1 minute. Claim each at 100% with PATCH /rest/v1.0/prime_contracts/{id}/payment_application_line_items/{row_id} {project_id, payment_application_line_item:{work_completed_this_period}} (amount only on an amount contract). Full LEDGER standalone run: TEST-PT-2 on test contract #6, $780, 3/3 lines claimed."
+    },
+    {
+      "name": "List Commitment Change Orders",
+      "method": "GET",
+      "path": "/rest/v1.0/projects/{project_id}/commitment_change_orders",
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live 2026-09-29 on Test Project 1 (1 CO, created by Ben in the UI). Bare array. Fields: id, contract_id (= the PARENT commitment's id), number ('001'), title, status ('approved'), executed, grand_total, legacy_package_id, legacy_request_id, change_order_change_reason, description (HTML), type 'CommitmentChangeOrder'. Show: /rest/v1.0/projects/{project_id}/commitment_change_orders/{id} has the same fields, NO line items. LEDGER's Procore account gets 403 creating one (read-only is all LEDGER needs). Dead ends (404): v2.0 .../commitment_change_orders list, /commitment_change_order_packages, /commitments/{id}/change_order_packages, /work_order_contracts/{id}/change_order_packages, v1.0/v1.1 .../commitment_change_orders/{id}/line_items. /rest/v1.0/change_order_packages?project_id= lists PRIME contract COs only (its filters[contract_id] is ignored)."
+    },
+    {
+      "name": "Commitment Change Order line items — v2.0",
+      "method": "GET",
+      "path": "/rest/v2.0/companies/{company_id}/projects/{project_id}/commitment_change_orders/{id}/line_items",
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified live 2026-09-29. Wrapped {data:[...]}, paginate like other v2.0 lists. Per line: id, amount, description, quantity, unit_cost, uom, wbs_code {id, flat_code, description}, wbs_code_id, commitment_line_item_id (null), prime_line_item_id (null), extended_type, position. IMPORTANT: an approved commitment CO's lines do NOT appear in the parent commitment's own v2.0 line_items, and the parent's grand_total excludes the CO (SC-000_000_1-003 stayed $1,000 with a $680 approved CO) — so LEDGER bills them as separate items with no double count."
     }
   ],
   "rate_limit": {
