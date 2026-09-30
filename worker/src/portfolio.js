@@ -11,6 +11,8 @@
 
 import { procoreRequest } from './procore.js';
 import { dbQuery } from './db.js';
+import { ensureBulkSchema } from './schema.js';
+import { hasQueuedBulkReconciliation, processNextBulkReconciliation } from './bulk.js';
 import { listPendingTickets, listPendingDirectCosts, listCommitments } from './app.js';
 
 // Company-level budget view; resolved by name if a project doesn't have it.
@@ -338,6 +340,7 @@ export async function refreshIfStale(env, tenantId, projectId) {
 // refresh (the list endpoint doesn't carry them).
 export async function syncProjectList(env, tenantId) {
   const co = env.PROCORE_COMPANY_ID;
+  const syncStartedAt = new Date().toISOString();
   const regions = await procoreGet(env, `/rest/v1.0/companies/${co}/project_regions`);
   const regionName = new Map((Array.isArray(regions.data) ? regions.data : []).map(r => [String(r.id), r.name]));
   let remaining = regions.remaining;
@@ -374,6 +377,16 @@ export async function syncProjectList(env, tenantId) {
     }
     if (res.data.length < 300) break;
   }
+  // Procore's project list only returns ACTIVE projects, so one set inactive
+  // simply stops appearing — without this it would linger on the dashboard
+  // with its old record counts (Ben, 2026-09-30). Reaching here means every
+  // page was read, so "not seen this sync" really means "not in the list".
+  await dbQuery(
+    env,
+    `update portfolio_projects set active = false
+     where tenant_id = $1 and listed_at < $2::timestamptz and active is not false`,
+    [tenantId, syncStartedAt]
+  );
   await dbQuery(
     env,
     `insert into portfolio_sync_state (tenant_id, projects_listed_at) values ($1, now())
@@ -469,6 +482,20 @@ export async function runScheduled(env, { maxRefreshes = 4 } = {}) {
       if (remaining != null && remaining < RESERVED_REQUESTS) throw new RateBudgetExhausted();
     }
 
+    // 2. Bulk reconciliations an admin queued on the dashboard — one project
+    //    per run, only with enough requests spare (see bulk.js).
+    if (await hasQueuedBulkReconciliation(env, tenantId)) {
+      if (lastRemaining == null) {
+        lastRemaining = (await procoreGet(env, `/rest/v1.0/companies/${env.PROCORE_COMPANY_ID}/project_regions`)).remaining;
+      }
+      if (lastRemaining == null || lastRemaining < COUNT_SWEEP_MIN_REMAINING) throw new RateBudgetExhausted();
+      const result = await processNextBulkReconciliation(env, tenantId);
+      if (result) {
+        log.push(result);
+        throw new RateBudgetExhausted(); // that used this run's requests
+      }
+    }
+
     const due = await dbQuery(
       env,
       `select project_id from portfolio_projects
@@ -494,7 +521,8 @@ export async function runScheduled(env, { maxRefreshes = 4 } = {}) {
     const countDue = await dbQuery(
       env,
       `select project_id from portfolio_projects
-       where tenant_id = $1 and name is not null and coalesce(stage, 'None') <> all($2::text[]) and (
+       where tenant_id = $1 and name is not null and active is not false
+         and coalesce(stage, 'None') <> all($2::text[]) and (
          counts_at is null
          or (coalesce(stage, '') <> all($3::text[]) and counts_at < now() - interval '24 hours')
          or (stage = any($3::text[]) and counts_at < now() - interval '30 days')
@@ -586,11 +614,23 @@ export async function searchProjects(env, tenantId, query) {
 }
 
 export async function listPortfolio(env, tenantId) {
+  await ensureBulkSchema(env);
   return dbQuery(
     env,
-    `select * from portfolio_projects
-     where tenant_id = $1 and name is not null and coalesce(stage, 'None') <> all($2::text[])
-     order by name`,
+    `select p.*, b.status as bulk_status, b.disposition as bulk_disposition, b.requested_by_name as bulk_by,
+            coalesce(b.completed_at, b.requested_at) as bulk_at, b.record_count as bulk_record_count,
+            b.amount as bulk_amount, b.error as bulk_error, b.notes as bulk_notes
+     from portfolio_projects p
+     left join lateral (
+       select * from bulk_reconciliations r
+       where r.tenant_id = p.tenant_id and r.project_id = p.project_id
+         and r.status in ('queued', 'running', 'done', 'failed')
+       order by r.requested_at desc
+       limit 1
+     ) b on true
+     where p.tenant_id = $1 and p.name is not null and p.active is not false
+       and coalesce(p.stage, 'None') <> all($2::text[])
+     order by p.name`,
     [tenantId, HIDDEN_STAGES]
   );
 }

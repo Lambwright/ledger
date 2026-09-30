@@ -24,4 +24,8 @@ export const api = {
   list: () => call("list"),
   refreshProject: (projectId) => call("refresh_project", { project_id: projectId }),
   sourceRecords: (projectId) => call("source_records", { project_id: projectId }),
+  // LEDGER admins only (checked by the worker) — bulk project reconciliation.
+  bulkReconcile: ({ projectIds, disposition, notes, invoiceNumber }) =>
+    call("bulk_reconcile", { project_ids: projectIds, disposition, notes, invoice_number: invoiceNumber }),
+  reopenProject: (projectId) => call("reopen_project", { project_id: projectId }),
 };

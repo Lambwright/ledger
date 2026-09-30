@@ -1411,3 +1411,6 @@ body {
 
 /* A commitment Change Order — listed straight after its parent commitment. */
 .ticket-card.cm-change-order { margin-left: 14px; border-left: 3px solid var(--accent); }
+
+/* Bulk reconciliation banner (a LEDGER admin reconciled this project in bulk) */
+.banner-bulk { border-left: 3px solid var(--success); background: var(--success-tint); color: var(--ink-dim); }

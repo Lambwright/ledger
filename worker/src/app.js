@@ -4,6 +4,7 @@
 
 import { procoreRequest } from './procore.js';
 import { dbQuery } from './db.js';
+import { ensureBulkSchema } from './schema.js';
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -238,10 +239,13 @@ function dcBillingRows(lineItems) {
 // together without a round trip per row.
 async function insertBillingRecordsBatch(env, rows) {
   if (rows.length === 0) return [];
+  const withBulk = rows.some(r => r.bulkReconciliationId);
   const cols = [
     'tenant_id', 'project_id', 'record_type', 'procore_record_id', 'invoice_id', 'invoice_number',
     'amount_billed', 'status', 'write_off_reason', 'reconciled_by', 'change_order_id', 'change_event_id',
-    'source_timecard_key', 'billed_outside_ledger'
+    'source_timecard_key', 'billed_outside_ledger',
+    // Bulk project reconciliation (bulk.js) — only included when used.
+    ...(withBulk ? ['bulk_reconciliation_id'] : [])
   ];
   const values = [];
   const params = [];
@@ -253,7 +257,8 @@ async function insertBillingRecordsBatch(env, rows) {
       row.invoiceId ?? null, row.invoiceNumber ?? null, row.amount, row.status, row.writeOffReason ?? null,
       row.reconciledBy, row.changeOrderId ?? null, row.changeEventId ?? null,
       row.sourceTimecardKey ?? null,
-      row.billedOutsideLedger === true
+      row.billedOutsideLedger === true,
+      ...(withBulk ? [row.bulkReconciliationId ?? null] : [])
     );
   });
   const inserted = await dbQuery(
@@ -344,6 +349,7 @@ async function deleteLinkedWriteOffs(env, billingRecordIds) {
 // `includeWrittenOff` (Ben's ask 2026-09-17) does the same for a written-off
 // row — "Undo write-off" always passes it, everything else leaves it off.
 export async function revertToUnbilled(env, { tenantId, projectId, entryId, includeBilled = false, includeWrittenOff = false, includeBudgeted = false, includeBilledOutside = false }) {
+  await ensureBulkSchema(env);
   const entryRes = await procoreRequest(env, 'GET', `/rest/v1.0/projects/${projectId}/time_and_material_entries/${entryId}`);
   if (entryRes.status !== 200) {
     throw new Error(`Failed to fetch T&M entry: ${entryRes.status} ${JSON.stringify(entryRes.data)}`);
@@ -363,15 +369,20 @@ export async function revertToUnbilled(env, { tenantId, projectId, entryId, incl
     ...(includeWrittenOff ? ['written_off'] : []),
     ...(includeBudgeted ? ['reconciled_to_period'] : [])
   ];
-  const matches = await dbQuery(
+  const matchRows = (bulk) => dbQuery(
     env,
     `select id from billing_records
      where tenant_id = $1 and project_id = $2 and record_type = 'timecard'
        and (status = any($4::text[]) or ($5 and status = 'billed' and billed_outside_ledger))
-       and procore_record_id = any($3::text[])`,
+       and procore_record_id = any($3::text[])
+       and bulk_reconciliation_id is ${bulk ? 'not null' : 'null'}`,
     [tenantId, projectId, keys, statuses, includeBilledOutside]
   );
-  if (matches.length === 0) return { reverted: 0 };
+  const matches = await matchRows(false);
+  if (matches.length === 0) {
+    if ((await matchRows(true)).length > 0) throw new Error('These records were reconciled in bulk by a LEDGER admin. They can only be reopened together, from the company dashboard.');
+    return { reverted: 0 };
+  }
   const ids = matches.map(m => m.id);
   await deleteLinkedWriteOffs(env, ids);
   await dbQuery(env, `delete from billing_records where id = any($1::uuid[])`, [ids]);
@@ -390,13 +401,14 @@ export async function revertToUnbilled(env, { tenantId, projectId, entryId, incl
 // billed against it back to Unbilled in one action, regardless of which
 // scheme wrote it.
 export async function revertDirectCost(env, { tenantId, projectId, directCostId, includeBilled = false, includeWrittenOff = false, includeBudgeted = false, includeBilledOutside = false }) {
+  await ensureBulkSchema(env);
   const statuses = [
     'draft_co',
     ...(includeBilled ? ['billed'] : []),
     ...(includeWrittenOff ? ['written_off'] : []),
     ...(includeBudgeted ? ['reconciled_to_period'] : [])
   ];
-  const matches = await dbQuery(
+  const matchRows = (bulk) => dbQuery(
     env,
     `select id from billing_records
      where tenant_id = $1 and project_id = $2
@@ -404,10 +416,15 @@ export async function revertDirectCost(env, { tenantId, projectId, directCostId,
        and (
          (record_type = 'direct_cost' and procore_record_id = $3)
          or (record_type = 'direct_cost_line' and procore_record_id like $3 || ':%')
-       )`,
+       )
+       and bulk_reconciliation_id is ${bulk ? 'not null' : 'null'}`,
     [tenantId, projectId, String(directCostId), statuses, includeBilledOutside]
   );
-  if (matches.length === 0) return { reverted: 0 };
+  const matches = await matchRows(false);
+  if (matches.length === 0) {
+    if ((await matchRows(true)).length > 0) throw new Error('These records were reconciled in bulk by a LEDGER admin. They can only be reopened together, from the company dashboard.');
+    return { reverted: 0 };
+  }
   const ids = matches.map(m => m.id);
   await deleteLinkedWriteOffs(env, ids);
   await dbQuery(env, `delete from billing_records where id = any($1::uuid[])`, [ids]);
@@ -418,21 +435,27 @@ export async function revertDirectCost(env, { tenantId, projectId, directCostId,
 // this commitment (prefix match on "<commitmentId>:") in the chosen statuses
 // goes back to Unbilled.
 export async function revertCommitment(env, { tenantId, projectId, commitmentId, includeBilled = false, includeWrittenOff = false, includeBudgeted = false, includeBilledOutside = false }) {
+  await ensureBulkSchema(env);
   const statuses = [
     'draft_co',
     ...(includeBilled ? ['billed'] : []),
     ...(includeWrittenOff ? ['written_off'] : []),
     ...(includeBudgeted ? ['reconciled_to_period'] : [])
   ];
-  const matches = await dbQuery(
+  const matchRows = (bulk) => dbQuery(
     env,
     `select id from billing_records
      where tenant_id = $1 and project_id = $2
        and (status = any($4::text[]) or ($5 and status = 'billed' and billed_outside_ledger))
-       and record_type = 'commitment_line' and procore_record_id like $3 || ':%'`,
+       and record_type = 'commitment_line' and procore_record_id like $3 || ':%'
+       and bulk_reconciliation_id is ${bulk ? 'not null' : 'null'}`,
     [tenantId, projectId, String(commitmentId), statuses, includeBilledOutside]
   );
-  if (matches.length === 0) return { reverted: 0 };
+  const matches = await matchRows(false);
+  if (matches.length === 0) {
+    if ((await matchRows(true)).length > 0) throw new Error('These records were reconciled in bulk by a LEDGER admin. They can only be reopened together, from the company dashboard.');
+    return { reverted: 0 };
+  }
   const ids = matches.map(m => m.id);
   await deleteLinkedWriteOffs(env, ids);
   await dbQuery(env, `delete from billing_records where id = any($1::uuid[])`, [ids]);
@@ -4086,11 +4109,12 @@ export async function generateStandaloneInvoice(env, {
 // nobody had wired it up until now, same situation direct costs were in.
 // ============================================================
 
-const WRITE_OFF_REASONS = ['warranty', 'service_call', 'goodwill', 'pm_decision', 'other'];
+// 'bulk_reconciliation' is only used by the admin bulk reconcile (bulk.js).
+const WRITE_OFF_REASONS = ['warranty', 'service_call', 'goodwill', 'pm_decision', 'other', 'bulk_reconciliation'];
 
 export async function writeOffRecords(env, {
   tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [],
-  userId, reasonCategory, reasonNotes, invoiceNumber
+  userId, reasonCategory, reasonNotes, invoiceNumber, bulkReconciliationId = null
 }) {
   if (entryIds.length === 0 && directCostIds.length === 0 && directCostLineIds.length === 0 && commitmentIds.length === 0 && commitmentLineIds.length === 0) {
     throw new Error('Nothing selected — pick at least one T&M ticket, direct cost, or commitment to write off.');
@@ -4121,7 +4145,7 @@ export async function writeOffRecords(env, {
       tmRows.push({
         tenantId, projectId, recordType: 'timecard', procoreRecordId: line.timecardEntryId,
         amount: line.amount, status: 'written_off', writeOffReason: reasonNotes, reconciledBy: userId || 'ledger-system',
-        invoiceNumber: trimmedInvoiceNumber
+        invoiceNumber: trimmedInvoiceNumber, bulkReconciliationId
       });
     }
   }
@@ -4160,7 +4184,7 @@ export async function writeOffRecords(env, {
     for (const row of dcBillingRows(lineItems)) {
       dcRows.push({
         ...row, tenantId, projectId, status: 'written_off',
-        writeOffReason: reasonNotes, reconciledBy: userId || 'ledger-system', invoiceNumber: trimmedInvoiceNumber
+        writeOffReason: reasonNotes, reconciledBy: userId || 'ledger-system', invoiceNumber: trimmedInvoiceNumber, bulkReconciliationId
       });
     }
   }
@@ -4192,7 +4216,7 @@ export async function writeOffRecords(env, {
     for (const row of commitmentBillingRows(lineItems)) {
       commitmentRows.push({
         ...row, tenantId, projectId, status: 'written_off',
-        writeOffReason: reasonNotes, reconciledBy: userId || 'ledger-system', invoiceNumber: trimmedInvoiceNumber
+        writeOffReason: reasonNotes, reconciledBy: userId || 'ledger-system', invoiceNumber: trimmedInvoiceNumber, bulkReconciliationId
       });
     }
   }
@@ -4246,12 +4270,12 @@ export async function markAsAlreadyBilled(env, args) {
 // Procore writes.
 async function recordDisposition(env, {
   tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [], userId, notes,
-  invoiceNumber, status, verb, billedOutsideLedger = false
+  invoiceNumber, status, verb, billedOutsideLedger = false, bulkReconciliationId = null
 }) {
   if (entryIds.length === 0 && directCostIds.length === 0 && directCostLineIds.length === 0 && commitmentIds.length === 0 && commitmentLineIds.length === 0) {
     throw new Error(`Nothing selected — pick at least one T&M ticket, direct cost, or commitment to ${verb}.`);
   }
-  const extra = { invoiceNumber: invoiceNumber?.trim() || null, billedOutsideLedger };
+  const extra = { invoiceNumber: invoiceNumber?.trim() || null, billedOutsideLedger, bulkReconciliationId };
 
   let tmEntries = [];
   const tmRows = [];

@@ -6,6 +6,7 @@ import LoginScreen from "./components/LoginScreen.jsx";
 import { applyAccentPreset } from "./accentPresets.js";
 import SourceRecords from "./components/SourceRecords.jsx";
 import MultiSelect from "./components/MultiSelect.jsx";
+import { BulkBadge, BulkDetail, BulkDialog, hasActiveBatch, reopenMessage } from "./components/BulkReconcile.jsx";
 
 const PROCORE_ORIGIN = "https://us02.procore.com";
 // The full LEDGER app (same one as the Procore sidebar), opened standalone on a project.
@@ -91,6 +92,13 @@ export default function App() {
   const [openId, setOpenId] = useState(null);
   const [refreshingId, setRefreshingId] = useState(null);
 
+  // Bulk reconciliation (LEDGER admins only — the worker checks it too).
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [selected, setSelected] = useState(() => new Set());
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [notice, setNotice] = useState(null);
+  const [reopeningId, setReopeningId] = useState(null);
+
   function signIn(u) {
     setUser(u);
     // Personal LEDGER colour from HELM (My Account → Appearance), if set.
@@ -120,7 +128,10 @@ export default function App() {
     setError(null);
     api
       .list()
-      .then((data) => setProjects(data.projects || []))
+      .then((data) => {
+        setProjects(data.projects || []);
+        setIsAdmin(data.isLedgerAdmin === true);
+      })
       .catch((e) => (e.unauthorized ? handleLogout() : setError(e.message)))
       .finally(() => setLoading(false));
   }, [handleLogout]);
@@ -134,7 +145,7 @@ export default function App() {
     setError(null);
     try {
       const { project } = await api.refreshProject(id);
-      if (project) setProjects((prev) => prev.map((p) => (p.project_id === project.project_id ? project : p)));
+      if (project) setProjects((prev) => prev.map((p) => (p.project_id === project.project_id ? { ...p, ...project } : p)));
     } catch (e) {
       if (e.unauthorized) handleLogout();
       else setError(e.message);
@@ -217,6 +228,52 @@ export default function App() {
     setOpenId(p.project_id);
     const fresh = p.refreshed_at && p.counts_at && Date.now() - new Date(p.refreshed_at).getTime() < 2 * 60 * 1000;
     if (!fresh && refreshingId !== p.project_id) refreshProject(p.project_id);
+  }
+
+  const selectable = visible.filter((p) => !hasActiveBatch(p));
+  const selectedProjects = projects.filter((p) => selected.has(p.project_id));
+  const allSelected = selectable.length > 0 && selectable.every((p) => selected.has(p.project_id));
+  const colCount = COLUMNS.length + (isAdmin ? 1 : 0);
+
+  function toggleSelected(id) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    setSelected(allSelected ? new Set() : new Set(selectable.map((p) => p.project_id)));
+  }
+
+  async function queueBulk({ disposition, notes, invoiceNumber }) {
+    const res = await api.bulkReconcile({ projectIds: selectedProjects.map((p) => p.project_id), disposition, notes, invoiceNumber });
+    setBulkOpen(false);
+    setSelected(new Set());
+    setNotice(
+      `Queued ${res.queued} project${res.queued === 1 ? "" : "s"}` +
+      (res.skipped ? ` (${res.skipped} skipped — already reconciled or queued)` : "") +
+      ". They're worked through in the background, one at a time, pausing whenever someone is using LEDGER."
+    );
+    load();
+  }
+
+  async function reopen(p) {
+    if (!window.confirm(reopenMessage(p))) return;
+    setReopeningId(p.project_id);
+    setError(null);
+    try {
+      const res = await api.reopenProject(p.project_id);
+      setNotice(res.cancelled ? `Cancelled the queued reconciliation for ${p.name}.` : `Reopened ${p.name} — ${res.reverted} record(s) back to Unbilled.`);
+      load();
+    } catch (e) {
+      if (e.unauthorized) handleLogout();
+      else setError(e.message);
+    } finally {
+      setReopeningId(null);
+    }
   }
 
   function toggleSort(key) {
@@ -314,11 +371,36 @@ export default function App() {
         </div>
 
         {error && <div className="banner-error">{error}</div>}
+        {notice && (
+          <div className="banner-ok">
+            {notice}
+            <button type="button" className="banner-close" onClick={() => setNotice(null)} aria-label="Dismiss">✕</button>
+          </div>
+        )}
+
+        {isAdmin && selected.size > 0 && (
+          <div className="selection-bar">
+            <span>
+              <strong>{selected.size}</strong> project{selected.size === 1 ? "" : "s"} selected ·{" "}
+              {selectedProjects.reduce((s, p) => s + (n(p.unbilled_count) || 0), 0).toLocaleString()} unbilled records
+            </span>
+            <button className="btn btn-accent btn-sm" onClick={() => setBulkOpen(true)}>Mark reconciled…</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setSelected(new Set())}>Clear</button>
+          </div>
+        )}
+        {bulkOpen && (
+          <BulkDialog projects={selectedProjects} onCancel={() => setBulkOpen(false)} onConfirm={queueBulk} />
+        )}
 
         <div className="table-wrap">
           <table className="table portfolio-table">
             <thead>
               <tr>
+                {isAdmin && (
+                  <th className="cell-select">
+                    <input type="checkbox" aria-label="Select all shown projects" checked={allSelected} onChange={toggleSelectAll} />
+                  </th>
+                )}
                 {COLUMNS.map((c) => (
                   <th key={c.key} className={c.num ? "num" : ""} aria-sort={sort.key === c.key ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}>
                     <button type="button" className="th-sort" onClick={() => toggleSort(c.key)}>
@@ -334,6 +416,18 @@ export default function App() {
                 const isOpen = openId === p.project_id;
                 return [
                   <tr key={p.project_id} className={`row-click${isOpen ? " row-open" : ""}`} onClick={() => toggleOpen(p)}>
+                    {isAdmin && (
+                      <td className="cell-select" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${p.name}`}
+                          disabled={hasActiveBatch(p)}
+                          title={hasActiveBatch(p) ? "Already reconciled or queued — reopen it first" : undefined}
+                          checked={selected.has(p.project_id)}
+                          onChange={() => toggleSelected(p.project_id)}
+                        />
+                      </td>
+                    )}
                     <td className="cell-name">
                       <div>{p.name}</div>
                       <div className="cell-sub">
@@ -341,6 +435,7 @@ export default function App() {
                         {noBudget && <span className="badge badge-warn">Budget not set up</span>}
                         {p.budget_status === "no_view" && <span className="badge badge-muted">No budget view</span>}
                         {!p.refreshed_at && <span className="badge badge-muted">Not loaded</span>}
+                        <BulkBadge project={p} />
                       </div>
                     </td>
                     <td>{p.stage || "—"}</td>
@@ -378,8 +473,9 @@ export default function App() {
                   </tr>,
                   isOpen && (
                     <tr key={`${p.project_id}-detail`} className="detail-row">
-                      <td colSpan={COLUMNS.length}>
+                      <td colSpan={colCount}>
                         <div className="detail">
+                          <BulkDetail project={p} isAdmin={isAdmin} onReopen={reopen} busy={reopeningId === p.project_id} />
                           <dl className="detail-grid">
                             <dt>Direct costs</dt><dd>{money(p.direct_costs)}</dd>
                             <dt>Subcontractor invoices</dt><dd>{money(p.sub_invoices)}</dd>
@@ -427,7 +523,7 @@ export default function App() {
                 ];
               })}
               {!loading && visible.length === 0 && (
-                <tr><td colSpan={COLUMNS.length} className="empty-state">No projects match these filters.</td></tr>
+                <tr><td colSpan={colCount} className="empty-state">No projects match these filters.</td></tr>
               )}
             </tbody>
           </table>

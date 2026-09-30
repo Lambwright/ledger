@@ -293,3 +293,38 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
   display: inline-block; margin-left: 4px; font-family: 'JetBrains Mono', monospace; font-size: 9px; font-weight: 700;
   color: var(--text-tertiary); border: 1px solid var(--border-color); border-radius: 3px; padding: 0 3px; vertical-align: 1px;
 }
+
+/* Bulk project reconciliation (components/BulkReconcile.jsx) */
+.badge-ok { background: rgba(111,179,92,0.14); color: var(--green); }
+.cell-select { width: 34px; text-align: center; }
+.cell-select input { padding: 0; accent-color: var(--accent); }
+.selection-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; padding: 10px 12px;
+  background: rgba(var(--accent-rgb), 0.08); border: 1px solid rgba(var(--accent-rgb), 0.4); border-radius: var(--radius-sm); font-size: 13px;
+}
+.selection-bar > span { flex: 1 1 auto; }
+.banner-ok {
+  display: flex; align-items: flex-start; gap: 10px; color: var(--green); background: rgba(111,179,92,0.08);
+  border: 1px solid rgba(111,179,92,0.35); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 12px; margin-bottom: 10px;
+}
+.banner-close { margin-left: auto; background: none; border: none; color: inherit; cursor: pointer; padding: 0 4px; }
+.bulk-detail {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 12px; line-height: 1.5;
+  padding: 10px 12px; border: 1px solid var(--border-color); border-left: 3px solid var(--green); border-radius: var(--radius-sm);
+}
+.bulk-detail > div { flex: 1 1 320px; }
+.modal-backdrop { position: fixed; inset: 0; z-index: 500; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.modal {
+  width: min(560px, 100%); max-height: calc(100vh - 32px); overflow-y: auto;
+  background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 20px; box-shadow: var(--shadow-md);
+  display: flex; flex-direction: column; gap: 12px;
+}
+.modal-title { font-size: 16px; font-weight: 700; }
+.modal-text { font-size: 13px; line-height: 1.5; margin: 0; }
+.modal-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.bulk-options { display: flex; flex-direction: column; gap: 6px; }
+.bulk-option { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; }
+.bulk-option.is-picked { border-color: var(--accent); background: rgba(var(--accent-rgb), 0.06); }
+.bulk-option input { padding: 0; margin-top: 3px; accent-color: var(--accent); }
+.modal .field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); }
+.modal .field input { width: 100%; }

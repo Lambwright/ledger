@@ -34,6 +34,7 @@ import {
   handleProcoreWebhook, refreshIfStale, refreshProjectSnapshot, refreshProjectCounts, saveProjectCounts, projectSourceRecords,
   runScheduled, verifyEinbauUser, verifyEinbauSession, hasLedgerApp, listPortfolio, searchProjects, markUserActive
 } from './portfolio.js';
+import { isLedgerAdmin, ledgerRole, queueBulkReconciliation, reopenProject, projectReconciliation } from './bulk.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -631,6 +632,11 @@ async function handleAction(env, body, ctx) {
     return json(result, 200);
   }
 
+  if (action === 'project_reconciliation') {
+    if (!body.project_id) return json({ error: 'project_id is required' }, 400);
+    return json(await projectReconciliation(env, String(env.PROCORE_COMPANY_ID), body.project_id), 200);
+  }
+
   if (action === 'search_projects') {
     return json({ projects: await searchProjects(env, String(env.PROCORE_COMPANY_ID), body.query) }, 200);
   }
@@ -712,7 +718,22 @@ async function handlePortfolio(request, env) {
   }
   const tenantId = String(env.PROCORE_COMPANY_ID);
   if (body.action === 'list') {
-    return json({ projects: await listPortfolio(env, tenantId) }, 200);
+    return json({ projects: await listPortfolio(env, tenantId), ledgerRole: ledgerRole(user), isLedgerAdmin: isLedgerAdmin(user) }, 200);
+  }
+  // Bulk reconciliation (bulk.js) — LEDGER admins only, checked here on every
+  // call from LEDGER's own /auth/verify result, never from the page.
+  if (body.action === 'bulk_reconcile' || body.action === 'reopen_project') {
+    if (!isLedgerAdmin(user)) {
+      return json({ error: 'Only LEDGER admins can do this. An admin can set your LEDGER role in HELM.' }, 403);
+    }
+    await markUserActive(env).catch(() => {});
+    if (body.action === 'bulk_reconcile') {
+      return json(await queueBulkReconciliation(env, tenantId, {
+        projectIds: body.project_ids, disposition: body.disposition, notes: body.notes, invoiceNumber: body.invoice_number, user
+      }), 200);
+    }
+    if (!body.project_id) return json({ error: 'project_id is required' }, 400);
+    return json(await reopenProject(env, tenantId, body.project_id, user), 200);
   }
   // Drill-ins call Procore live — background refreshing pauses for them too.
   if (body.action === 'refresh_project' || body.action === 'source_records') {

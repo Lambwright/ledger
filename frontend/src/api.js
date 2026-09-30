@@ -297,6 +297,11 @@ export function saveProjectCounts({ tenantId, projectId, counts }) {
   return callAction('save_portfolio_counts', { tenant_id: tenantId, project_id: projectId, counts });
 }
 
+// The project's bulk reconciliation, if a LEDGER admin did one (banner).
+export function getProjectReconciliation({ projectId }) {
+  return callAction('project_reconciliation', { project_id: projectId });
+}
+
 // Project search for LEDGER opened outside Procore (phone / home-screen app).
 export function searchProjects({ query }) {
   return callAction('search_projects', { query });

@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   listPendingTickets, listPendingDirectCosts, listPrimeContracts, listBillingPeriods, nextInvoiceNumber,
   previewCombinedBilling, generateCombinedInvoice, pushCombinedToDraftCO, getProjectSettings, saveProjectSettings, revertToUnbilled,
-  revertDirectCost, writeOffRecords, markAsBudgeted, markAlreadyBilled, directCostLineDetail, listCommitments, commitmentLineDetail, revertCommitment, saveProjectCounts
+  revertDirectCost, writeOffRecords, markAsBudgeted, markAlreadyBilled, directCostLineDetail, listCommitments, commitmentLineDetail, revertCommitment, saveProjectCounts,
+  getProjectReconciliation
 } from './api';
 import { connectProcoreSidePanel, isEmbedded } from './procore';
 import { withTokenHash } from './auth';
@@ -319,6 +320,8 @@ export default function App({ user, onSignOut }) {
   // Project Settings (2026-09-24): saved per-project defaults, and the
   // editable form copy shown on the Settings screen.
   const [projectSettings, setProjectSettings] = useState(null);
+  // A LEDGER admin's bulk reconciliation of this project, if any (banner).
+  const [bulkRecon, setBulkRecon] = useState(null);
   const [settingsForm, setSettingsForm] = useState(null);
   const [savingSettings, setSavingSettings] = useState(false);
 
@@ -371,6 +374,10 @@ export default function App({ user, onSignOut }) {
       setTickets(data.tickets);
       setLoadFailed(false);
       setProjectSettings(settings);
+      // Banner only — never blocks loading the project.
+      getProjectReconciliation({ projectId: pid })
+        .then(({ reconciliation }) => setBulkRecon(reconciliation))
+        .catch(() => setBulkRecon(null));
       setDirectCosts(dcData);
       setCommitments(cmData);
       setCmLegacy(cmData.legacyProject === true);
@@ -1514,6 +1521,21 @@ export default function App({ user, onSignOut }) {
         </div>
       ) : tickets && (
         <div className="banner banner-warning">No Prime Contract found on this project — billing will fail.</div>
+      )}
+
+      {bulkRecon?.status === 'done' && (
+        <div className="banner banner-bulk">
+          <strong>Reconciled as {bulkRecon.label}</strong> by {bulkRecon.by} on{' '}
+          {new Date(bulkRecon.at).toLocaleDateString('en-CA', { month: 'short', day: 'numeric', year: 'numeric' })}{' '}
+          ({bulkRecon.recordCount ?? 0} record{bulkRecon.recordCount === 1 ? '' : 's'}). Those records can only be reopened
+          together, by a LEDGER admin, from the company dashboard. Anything new since then shows as Unbilled as usual.
+        </div>
+      )}
+      {(bulkRecon?.status === 'queued' || bulkRecon?.status === 'running') && (
+        <div className="banner banner-bulk">
+          A LEDGER admin has queued this project to be reconciled as <strong>{bulkRecon.label}</strong>. It'll be
+          processed in the background shortly.
+        </div>
       )}
 
       {EMBEDDED && !projectId && !error && (
