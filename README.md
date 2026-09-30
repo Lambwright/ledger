@@ -56,11 +56,16 @@ LEDGER code changes until it ships.**
   | Level | Can do | Job roles |
   |---|---|---|
   | admin | Everything, including bulk reconcile / Reopen project | Admin (Ben, Leela, Josh), Super Admin |
-  | accounting | Same as pm for now; kept separate so it can split later | Accounting |
+  | accounting | Same as pm for now; kept separate so it can be narrowed later | Accounting |
   | pm | Bill (invoice, push to CO, standalone), dispositions, undo, Project Settings | Project Manager, Project Coordinator |
   | viewer | Dashboard and sidebar, read-only | Estimator |
   | no access | — | CRM, Logistics |
 
+- **Accounting (Ben, 2026-09-30):** an Accounting person who needs extra
+  powers is given Admin, per person. The Accounting level itself may later be
+  *more limited* than pm, not more powerful. So never build extra powers into
+  `accounting`, and keep its checks separate from `pm` in code so it can be
+  narrowed without a reshuffle.
 - **LEDGER work when it ships:** enforce viewer / pm / accounting in the
   worker, not just admin: read-only actions for viewers, billing and
   disposition actions for pm and up. Hide the billing buttons in the sidebar
