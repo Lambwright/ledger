@@ -263,3 +263,35 @@ create table if not exists portfolio_sync_state (
   projects_listed_at timestamptz,
   user_active_at timestamptz         -- last sidebar action / dashboard drill-in; background refresh pauses 3 min after (2026-09-30)
 );
+
+-- ============================================================
+-- Bulk project reconciliation (2026-09-30). Created/applied by the worker
+-- itself on first use — see worker/src/schema.js (ensureBulkSchema) and
+-- worker/src/bulk.js. One row per project per bulk run; every billing_records
+-- row a run creates carries its id, and "Reopen project" deletes exactly those.
+-- ============================================================
+
+create table if not exists bulk_reconciliations (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id text not null,
+  project_id text not null,
+  disposition text not null check (disposition in ('billed', 'reconciled_to_period', 'written_off')),
+  notes text,
+  invoice_number text,
+  status text not null default 'queued' check (status in ('queued', 'running', 'done', 'failed', 'reopened', 'cancelled')),
+  requested_by text not null,
+  requested_by_name text,
+  requested_at timestamptz not null default now(),
+  started_at timestamptz,
+  completed_at timestamptz,
+  record_count integer,
+  amount numeric,
+  error text,
+  reopened_by text,
+  reopened_at timestamptz
+);
+create index if not exists bulk_reconciliations_project on bulk_reconciliations (tenant_id, project_id, requested_at desc);
+
+alter table billing_records add column if not exists bulk_reconciliation_id uuid;
+-- write_offs.reason_category also allows 'already_billed' and 'bulk_reconciliation'
+-- (constraint write_offs_reason_category_check, replaced by ensureBulkSchema, NOT VALID).
