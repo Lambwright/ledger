@@ -260,5 +260,6 @@ create table if not exists portfolio_projects (
 
 create table if not exists portfolio_sync_state (
   tenant_id text primary key,
-  projects_listed_at timestamptz
+  projects_listed_at timestamptz,
+  user_active_at timestamptz         -- last sidebar action / dashboard drill-in; background refresh pauses 3 min after (2026-09-30)
 );

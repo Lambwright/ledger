@@ -32,7 +32,7 @@ import {
 } from './app.js';
 import {
   handleProcoreWebhook, refreshIfStale, refreshProjectSnapshot, refreshProjectCounts, saveProjectCounts, projectSourceRecords,
-  runScheduled, verifyEinbauUser, verifyEinbauSession, hasLedgerApp, listPortfolio, searchProjects
+  runScheduled, verifyEinbauUser, verifyEinbauSession, hasLedgerApp, listPortfolio, searchProjects, markUserActive
 } from './portfolio.js';
 
 const CORS_HEADERS = {
@@ -714,6 +714,10 @@ async function handlePortfolio(request, env) {
   if (body.action === 'list') {
     return json({ projects: await listPortfolio(env, tenantId) }, 200);
   }
+  // Drill-ins call Procore live — background refreshing pauses for them too.
+  if (body.action === 'refresh_project' || body.action === 'source_records') {
+    await markUserActive(env).catch(() => {});
+  }
   if (body.action === 'refresh_project') {
     if (!body.project_id) return json({ error: 'project_id is required' }, 400);
     await refreshProjectSnapshot(env, tenantId, body.project_id);
@@ -783,6 +787,8 @@ export default {
         if (!body.action) return json({ error: 'sidebar sign-ins can only call actions' }, 403);
         // Every record is attributed to the signed-in person, never whatever the page sent.
         body.user_id = session.user.username;
+        // Background refreshing pauses while people are using LEDGER (see markUserActive).
+        ctx.waitUntil(markUserActive(env).catch(() => {}));
         const res = await handleAction(env, body, ctx);
         if (!session.refreshedToken) return res;
         const withToken = new Response(res.body, res);

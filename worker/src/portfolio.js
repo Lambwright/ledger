@@ -416,6 +416,34 @@ export async function handleProcoreWebhook(request, env) {
 // count's worth).
 const COUNT_SWEEP_MIN_REMAINING = RESERVED_REQUESTS + 12;
 
+// Background work steps aside while a person is using LEDGER (Ben, 2026-09-30:
+// a commitment write-off crawled while the portfolio re-refresh was running —
+// each background run drains Procore's 25/minute down to the reserve, and the
+// sidebar then waits on the rest). Every sidebar action and dashboard
+// drill-in marks the time; the scheduled run skips itself for a few minutes
+// after. Marked at most every 30s per worker instance to keep DB writes down.
+const PAUSE_AFTER_USER_ACTIVITY_MS = 3 * 60 * 1000;
+let activityColumnReady = false;
+let lastActivityMark = 0;
+
+async function ensureActivityColumn(env) {
+  if (activityColumnReady) return;
+  await dbQuery(env, `alter table portfolio_sync_state add column if not exists user_active_at timestamptz`, []);
+  activityColumnReady = true;
+}
+
+export async function markUserActive(env) {
+  if (Date.now() - lastActivityMark < 30 * 1000) return;
+  lastActivityMark = Date.now();
+  await ensureActivityColumn(env);
+  await dbQuery(
+    env,
+    `insert into portfolio_sync_state (tenant_id, user_active_at) values ($1, now())
+     on conflict (tenant_id) do update set user_active_at = now()`,
+    [String(env.PROCORE_COMPANY_ID)]
+  );
+}
+
 // One scheduled pass, paced to leave RESERVED_REQUESTS free for PMs:
 //   1. re-list all projects if that's more than 12 hours old,
 //   2. refresh projects a webhook marked dirty (quiet for 90s+),
@@ -427,7 +455,13 @@ export async function runScheduled(env, { maxRefreshes = 4 } = {}) {
   const log = [];
   let lastRemaining = null;
   try {
-    const state = await dbQuery(env, `select projects_listed_at from portfolio_sync_state where tenant_id = $1`, [tenantId]);
+    await ensureActivityColumn(env);
+    const state = await dbQuery(env, `select projects_listed_at, user_active_at from portfolio_sync_state where tenant_id = $1`, [tenantId]);
+    const activeAt = state[0]?.user_active_at ? new Date(state[0].user_active_at).getTime() : 0;
+    if (Date.now() - activeAt < PAUSE_AFTER_USER_ACTIVITY_MS) {
+      log.push('paused — someone is using LEDGER');
+      return log;
+    }
     const listedAt = state[0]?.projects_listed_at ? new Date(state[0].projects_listed_at).getTime() : 0;
     if (Date.now() - listedAt > 12 * 60 * 60 * 1000) {
       const remaining = await syncProjectList(env, tenantId);
