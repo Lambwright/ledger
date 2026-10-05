@@ -55,7 +55,7 @@ const LOGIN_ERROR_MESSAGES = {
   rate_limited: 'Too many attempts — try again in a few minutes.',
   invalid_request: 'Enter a username and password.',
   no_app_access: "Your account doesn't have access to any apps yet. Ask an admin to grant you access in HELM.",
-  no_ledger_access: "Your Einbau ID doesn't have LEDGER access yet. Ask an admin to grant it in HELM.",
+  no_ledger_access: "You don't have access to LEDGER — ask Ben to grant it in HELM.",
 };
 
 export function authErrorMessage(code) {

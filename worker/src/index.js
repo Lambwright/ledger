@@ -34,7 +34,8 @@ import {
   handleProcoreWebhook, refreshIfStale, refreshProjectSnapshot, refreshProjectCounts, saveProjectCounts, projectSourceRecords,
   runScheduled, verifyEinbauUser, verifyEinbauSession, hasLedgerApp, listPortfolio, searchProjects, markUserActive
 } from './portfolio.js';
-import { isLedgerAdmin, ledgerRole, queueBulkReconciliation, reopenProject, projectReconciliation } from './bulk.js';
+import { queueBulkReconciliation, reopenProject, projectReconciliation } from './bulk.js';
+import { can, READ_ACTIONS, UNDO_ACTIONS, NO_ACCESS_MESSAGE } from './roles.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -58,7 +59,7 @@ async function proxyAuth(request, env, path) {
   const data = await res.json().catch(() => ({}));
   // A correct Einbau ID without LEDGER ticked in HELM doesn't get a session here.
   if (res.ok && data.user && !hasLedgerApp(data.user)) {
-    return json({ valid: false, error: 'no_ledger_access' }, 403);
+    return json({ valid: false, error: 'no_ledger_access', message: NO_ACCESS_MESSAGE }, 403);
   }
   return json(data, res.status);
 }
@@ -356,7 +357,9 @@ async function handleAction(env, body, ctx) {
     const result = await revertToUnbilled(env, {
       tenantId: tenant_id, projectId: project_id, entryId: entry_id,
       includeBilled: !!include_billed, includeWrittenOff: !!include_written_off, includeBudgeted: !!include_budgeted,
-      includeBilledOutside: !!include_billed_outside
+      includeBilledOutside: !!include_billed_outside,
+      // pm/accounting: only their own marks (set server-side in the session branch).
+      onlyReconciledBy: body.only_reconciled_by ?? null
     });
     return json(result, 200);
   }
@@ -369,7 +372,9 @@ async function handleAction(env, body, ctx) {
     const result = await revertDirectCost(env, {
       tenantId: tenant_id, projectId: project_id, directCostId: direct_cost_id,
       includeBilled: !!include_billed, includeWrittenOff: !!include_written_off, includeBudgeted: !!include_budgeted,
-      includeBilledOutside: !!include_billed_outside
+      includeBilledOutside: !!include_billed_outside,
+      // pm/accounting: only their own marks (set server-side in the session branch).
+      onlyReconciledBy: body.only_reconciled_by ?? null
     });
     return json(result, 200);
   }
@@ -382,7 +387,9 @@ async function handleAction(env, body, ctx) {
     const result = await revertCommitment(env, {
       tenantId: tenant_id, projectId: project_id, commitmentId: commitment_id,
       includeBilled: !!include_billed, includeWrittenOff: !!include_written_off, includeBudgeted: !!include_budgeted,
-      includeBilledOutside: !!include_billed_outside
+      includeBilledOutside: !!include_billed_outside,
+      // pm/accounting: only their own marks (set server-side in the session branch).
+      onlyReconciledBy: body.only_reconciled_by ?? null
     });
     return json(result, 200);
   }
@@ -708,8 +715,10 @@ async function handleAction(env, body, ctx) {
 // never the LEDGER frontend key. Reads stored rows; 'refresh_project' is the
 // drill-in, a live refresh of one project.
 async function handlePortfolio(request, env) {
-  const user = await verifyEinbauUser(request, env);
-  if (!user) return json({ error: 'unauthorized' }, 401);
+  const session = await verifyEinbauSession(request, env);
+  if (!session) return json({ error: 'unauthorized' }, 401);
+  if (session.denied) return json({ error: NO_ACCESS_MESSAGE, code: 'no_ledger_access' }, 403);
+  const { user, level } = session;
   let body;
   try {
     body = await request.json();
@@ -718,13 +727,19 @@ async function handlePortfolio(request, env) {
   }
   const tenantId = String(env.PROCORE_COMPANY_ID);
   if (body.action === 'list') {
-    return json({ projects: await listPortfolio(env, tenantId), ledgerRole: ledgerRole(user), isLedgerAdmin: isLedgerAdmin(user) }, 200);
+    return json({
+      projects: await listPortfolio(env, tenantId),
+      // For showing/hiding controls only — every action below re-checks.
+      ledgerRole: level,
+      isLedgerAdmin: can.bulkReconcile(level),
+      canSourceRecords: can.sourceRecords(level)
+    }, 200);
   }
   // Bulk reconciliation (bulk.js) — LEDGER admins only, checked here on every
   // call from LEDGER's own /auth/verify result, never from the page.
   if (body.action === 'bulk_reconcile' || body.action === 'reopen_project') {
-    if (!isLedgerAdmin(user)) {
-      return json({ error: 'Only LEDGER admins can do this. An admin can set your LEDGER role in HELM.' }, 403);
+    if (!can.bulkReconcile(level)) {
+      return json({ error: 'Only LEDGER admins can do this.' }, 403);
     }
     await markUserActive(env).catch(() => {});
     if (body.action === 'bulk_reconcile') {
@@ -747,6 +762,7 @@ async function handlePortfolio(request, env) {
     return json({ project: rows[0] || null }, 200);
   }
   if (body.action === 'source_records') {
+    if (!can.sourceRecords(level)) return json({ error: 'Source records are for LEDGER admins.' }, 403);
     if (!body.project_id) return json({ error: 'project_id is required' }, 400);
     return json(await projectSourceRecords(env, tenantId, body.project_id), 200);
   }
@@ -795,6 +811,9 @@ export default {
     if (!isFullAccess && !session) {
       return json({ error: 'unauthorized' }, 401);
     }
+    if (session?.denied) {
+      return json({ error: NO_ACCESS_MESSAGE, code: 'no_ledger_access' }, 403);
+    }
 
     let body;
     try {
@@ -806,6 +825,16 @@ export default {
     try {
       if (session) {
         if (!body.action) return json({ error: 'sidebar sign-ins can only call actions' }, 403);
+        // LEDGER level (roles.js), from LEDGER's own /auth/verify — never from the page.
+        // Read-only actions are open to every level; anything else needs write
+        // access, so an action missing from READ_ACTIONS is closed to viewers.
+        if (!READ_ACTIONS.has(body.action) && !can.write(session.level)) {
+          return json({ error: 'You have view-only access to LEDGER.', code: 'view_only' }, 403);
+        }
+        // pm/accounting may only undo their own marks; admin (and pre-switch 'access') anyone's.
+        body.only_reconciled_by = UNDO_ACTIONS.has(body.action) && !can.undoAnyone(session.level)
+          ? session.user.username
+          : null;
         // Every record is attributed to the signed-in person, never whatever the page sent.
         body.user_id = session.user.username;
         // Background refreshing pauses while people are using LEDGER (see markUserActive).

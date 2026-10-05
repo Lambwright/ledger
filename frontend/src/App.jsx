@@ -175,6 +175,9 @@ function resolveUserId(params) {
 
 export default function App({ user, onSignOut }) {
   const params = new URLSearchParams(window.location.search);
+  // LEDGER level (Einbau ID role matrix). Viewers are read-only: the worker
+  // refuses their writes, and these controls are hidden so they never hit one.
+  const viewOnly = String(user?.appRoles?.LEDGER ?? '').toLowerCase() === 'viewer';
 
   const [projectId, setProjectId] = useState(resolveProjectId(params));
   const [contractId, setContractId] = useState(resolveContractId(params));
@@ -1448,14 +1451,14 @@ export default function App({ user, onSignOut }) {
       </div>
     </>
   );
-  const showPickerFooter = action !== null && !overlayOpen && checkedCount > 0;
+  const showPickerFooter = action !== null && !overlayOpen && checkedCount > 0 && !viewOnly;
 
   return (
     // .ledger-wide only when standalone (popped out / direct browser) — the
     // embedded sidebar view stays narrow on purpose (Procore controls that
     // width, not LEDGER), but the same fixed 480px cap left a popped-out
     // window mostly empty margin either side (Ben's ask 2026-09-15).
-    <div className={`ledger ${showPickerFooter ? 'has-actionbar' : ''} ${!EMBEDDED ? 'ledger-wide' : ''}`}>
+    <div className={`ledger ${showPickerFooter ? 'has-actionbar' : ''} ${!EMBEDDED ? 'ledger-wide' : ''} ${viewOnly ? 'view-only' : ''}`}>
       <header className="ledger-header">
         <div className="ledger-logo">LEDGER</div>
         <div className="ledger-subtitle">Project Billing Reconciliation</div>
@@ -1487,6 +1490,7 @@ export default function App({ user, onSignOut }) {
         {user && (
           <div className="signed-in">
             {user.displayName || user.username}
+            {viewOnly && <span className="view-only-tag">View only</span>}
             <button type="button" className="link-btn" onClick={onSignOut}>Sign out</button>
           </div>
         )}
@@ -2029,12 +2033,21 @@ export default function App({ user, onSignOut }) {
           {/* Ben's ask 2026-09-24: two rows of wide buttons — billing on top,
               everything else below. Write Off / Mark as Budgeted / history
               all live inside Review Project now. */}
-          <div className="landing-grid">
-            <button className="generate-btn landing-btn" onClick={() => setAction('invoice')}>Create Invoice</button>
-            <button className="draft-btn landing-btn" onClick={() => setAction('draft')}>Push to CO (draft)</button>
-            <button className="draft-btn landing-btn" onClick={() => { setReviewTab('unbilled'); setAction('review'); }}>Review Project</button>
-            <button className="draft-btn landing-btn" onClick={openSettings}>Project Settings</button>
-          </div>
+          {viewOnly ? (
+            <>
+              <div className="landing-grid landing-grid-single">
+                <button className="draft-btn landing-btn" onClick={() => { setReviewTab('unbilled'); setAction('review'); }}>Review Project</button>
+              </div>
+              <div className="list-hint">You have view-only access to LEDGER.</div>
+            </>
+          ) : (
+            <div className="landing-grid">
+              <button className="generate-btn landing-btn" onClick={() => setAction('invoice')}>Create Invoice</button>
+              <button className="draft-btn landing-btn" onClick={() => setAction('draft')}>Push to CO (draft)</button>
+              <button className="draft-btn landing-btn" onClick={() => { setReviewTab('unbilled'); setAction('review'); }}>Review Project</button>
+              <button className="draft-btn landing-btn" onClick={openSettings}>Project Settings</button>
+            </div>
+          )}
         </div>
       ) : action === 'settings' ? (
         <>
@@ -2445,7 +2458,7 @@ export default function App({ user, onSignOut }) {
                             {/* Budget / Write Off up front (Ben's ask 2026-09-24):
                                 for labour on a subcontract, that's the expected
                                 path — billing it is the exception. */}
-                            {(isBillingAction || action === 'review') && openLines.length > 0 && (
+                            {(isBillingAction || action === 'review') && openLines.length > 0 && !viewOnly && (
                               <div className="cm-disposition-row" onClick={e => e.stopPropagation()}>
                                 {isBillingAction && !cmLegacy && labourCount > 0 && (
                                   <div className="labour-flag">

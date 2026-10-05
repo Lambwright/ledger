@@ -348,7 +348,7 @@ async function deleteLinkedWriteOffs(env, billingRecordIds) {
 // draft push" UI button from ever touching a real invoice by accident.
 // `includeWrittenOff` (Ben's ask 2026-09-17) does the same for a written-off
 // row — "Undo write-off" always passes it, everything else leaves it off.
-export async function revertToUnbilled(env, { tenantId, projectId, entryId, includeBilled = false, includeWrittenOff = false, includeBudgeted = false, includeBilledOutside = false }) {
+export async function revertToUnbilled(env, { tenantId, projectId, entryId, includeBilled = false, includeWrittenOff = false, includeBudgeted = false, includeBilledOutside = false, onlyReconciledBy = null }) {
   await ensureBulkSchema(env);
   const entryRes = await procoreRequest(env, 'GET', `/rest/v1.0/projects/${projectId}/time_and_material_entries/${entryId}`);
   if (entryRes.status !== 200) {
@@ -369,18 +369,22 @@ export async function revertToUnbilled(env, { tenantId, projectId, entryId, incl
     ...(includeWrittenOff ? ['written_off'] : []),
     ...(includeBudgeted ? ['reconciled_to_period'] : [])
   ];
-  const matchRows = (bulk) => dbQuery(
+  const matchRows = (bulk, owner = onlyReconciledBy) => dbQuery(
     env,
     `select id from billing_records
      where tenant_id = $1 and project_id = $2 and record_type = 'timecard'
        and (status = any($4::text[]) or ($5 and status = 'billed' and billed_outside_ledger))
        and procore_record_id = any($3::text[])
-       and bulk_reconciliation_id is ${bulk ? 'not null' : 'null'}`,
-    [tenantId, projectId, keys, statuses, includeBilledOutside]
+       and bulk_reconciliation_id is ${bulk ? 'not null' : 'null'}
+       and ($6::text is null or reconciled_by = $6)`,
+    [tenantId, projectId, keys, statuses, includeBilledOutside, owner]
   );
   const matches = await matchRows(false);
   if (matches.length === 0) {
-    if ((await matchRows(true)).length > 0) throw new Error('These records were reconciled in bulk by a LEDGER admin. They can only be reopened together, from the company dashboard.');
+    if (onlyReconciledBy != null && (await matchRows(false, null)).length > 0) {
+      throw new Error('You can only undo items you marked yourself. Ask a LEDGER admin to undo this one.');
+    }
+    if ((await matchRows(true, null)).length > 0) throw new Error('These records were reconciled in bulk by a LEDGER admin. They can only be reopened together, from the company dashboard.');
     return { reverted: 0 };
   }
   const ids = matches.map(m => m.id);
@@ -400,7 +404,7 @@ export async function revertToUnbilled(env, { tenantId, projectId, entryId, incl
 // call needed to find it. A PM undoing a DC therefore always gets everything
 // billed against it back to Unbilled in one action, regardless of which
 // scheme wrote it.
-export async function revertDirectCost(env, { tenantId, projectId, directCostId, includeBilled = false, includeWrittenOff = false, includeBudgeted = false, includeBilledOutside = false }) {
+export async function revertDirectCost(env, { tenantId, projectId, directCostId, includeBilled = false, includeWrittenOff = false, includeBudgeted = false, includeBilledOutside = false, onlyReconciledBy = null }) {
   await ensureBulkSchema(env);
   const statuses = [
     'draft_co',
@@ -408,7 +412,7 @@ export async function revertDirectCost(env, { tenantId, projectId, directCostId,
     ...(includeWrittenOff ? ['written_off'] : []),
     ...(includeBudgeted ? ['reconciled_to_period'] : [])
   ];
-  const matchRows = (bulk) => dbQuery(
+  const matchRows = (bulk, owner = onlyReconciledBy) => dbQuery(
     env,
     `select id from billing_records
      where tenant_id = $1 and project_id = $2
@@ -417,12 +421,16 @@ export async function revertDirectCost(env, { tenantId, projectId, directCostId,
          (record_type = 'direct_cost' and procore_record_id = $3)
          or (record_type = 'direct_cost_line' and procore_record_id like $3 || ':%')
        )
-       and bulk_reconciliation_id is ${bulk ? 'not null' : 'null'}`,
-    [tenantId, projectId, String(directCostId), statuses, includeBilledOutside]
+       and bulk_reconciliation_id is ${bulk ? 'not null' : 'null'}
+       and ($6::text is null or reconciled_by = $6)`,
+    [tenantId, projectId, String(directCostId), statuses, includeBilledOutside, owner]
   );
   const matches = await matchRows(false);
   if (matches.length === 0) {
-    if ((await matchRows(true)).length > 0) throw new Error('These records were reconciled in bulk by a LEDGER admin. They can only be reopened together, from the company dashboard.');
+    if (onlyReconciledBy != null && (await matchRows(false, null)).length > 0) {
+      throw new Error('You can only undo items you marked yourself. Ask a LEDGER admin to undo this one.');
+    }
+    if ((await matchRows(true, null)).length > 0) throw new Error('These records were reconciled in bulk by a LEDGER admin. They can only be reopened together, from the company dashboard.');
     return { reverted: 0 };
   }
   const ids = matches.map(m => m.id);
@@ -434,7 +442,7 @@ export async function revertDirectCost(env, { tenantId, projectId, directCostId,
 // Commitments' undo — mirrors revertDirectCost: every commitment_line row for
 // this commitment (prefix match on "<commitmentId>:") in the chosen statuses
 // goes back to Unbilled.
-export async function revertCommitment(env, { tenantId, projectId, commitmentId, includeBilled = false, includeWrittenOff = false, includeBudgeted = false, includeBilledOutside = false }) {
+export async function revertCommitment(env, { tenantId, projectId, commitmentId, includeBilled = false, includeWrittenOff = false, includeBudgeted = false, includeBilledOutside = false, onlyReconciledBy = null }) {
   await ensureBulkSchema(env);
   const statuses = [
     'draft_co',
@@ -442,18 +450,22 @@ export async function revertCommitment(env, { tenantId, projectId, commitmentId,
     ...(includeWrittenOff ? ['written_off'] : []),
     ...(includeBudgeted ? ['reconciled_to_period'] : [])
   ];
-  const matchRows = (bulk) => dbQuery(
+  const matchRows = (bulk, owner = onlyReconciledBy) => dbQuery(
     env,
     `select id from billing_records
      where tenant_id = $1 and project_id = $2
        and (status = any($4::text[]) or ($5 and status = 'billed' and billed_outside_ledger))
        and record_type = 'commitment_line' and procore_record_id like $3 || ':%'
-       and bulk_reconciliation_id is ${bulk ? 'not null' : 'null'}`,
-    [tenantId, projectId, String(commitmentId), statuses, includeBilledOutside]
+       and bulk_reconciliation_id is ${bulk ? 'not null' : 'null'}
+       and ($6::text is null or reconciled_by = $6)`,
+    [tenantId, projectId, String(commitmentId), statuses, includeBilledOutside, owner]
   );
   const matches = await matchRows(false);
   if (matches.length === 0) {
-    if ((await matchRows(true)).length > 0) throw new Error('These records were reconciled in bulk by a LEDGER admin. They can only be reopened together, from the company dashboard.');
+    if (onlyReconciledBy != null && (await matchRows(false, null)).length > 0) {
+      throw new Error('You can only undo items you marked yourself. Ask a LEDGER admin to undo this one.');
+    }
+    if ((await matchRows(true, null)).length > 0) throw new Error('These records were reconciled in bulk by a LEDGER admin. They can only be reopened together, from the company dashboard.');
     return { reverted: 0 };
   }
   const ids = matches.map(m => m.id);

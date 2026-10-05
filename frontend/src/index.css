@@ -1414,3 +1414,12 @@ body {
 
 /* Bulk reconciliation banner (a LEDGER admin reconciled this project in bulk) */
 .banner-bulk { border-left: 3px solid var(--success); background: var(--success-tint); color: var(--ink-dim); }
+
+/* View-only LEDGER access (role 'viewer'): undo links and selection boxes
+   hidden — the worker refuses viewer writes regardless. */
+.view-only .undo-link, .view-only .ticket-check { display: none; }
+.view-only-tag {
+  font-family: var(--font-mono); font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 1px 6px; border-radius: 3px; border: 1px solid var(--border-input); color: var(--ink-muted);
+}
+.landing-grid-single { grid-template-columns: 1fr; }

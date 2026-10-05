@@ -11,6 +11,7 @@
 
 import { procoreRequest } from './procore.js';
 import { dbQuery } from './db.js';
+import { ledgerLevel } from './roles.js';
 import { ensureBulkSchema } from './schema.js';
 import { hasQueuedBulkReconciliation, processNextBulkReconciliation } from './bulk.js';
 import { listPendingTickets, listPendingDirectCosts, listCommitments } from './app.js';
@@ -557,13 +558,16 @@ export async function runScheduled(env, { maxRefreshes = 4 } = {}) {
 // Einbau ID (auth-worker, the suite's shared login). Only accounts granted
 // LEDGER in HELM get in — app ids are uppercase ("PUNCH", "SCOUT", …; see
 // HELM's apps.js). Fails closed if the verify response has no apps list.
+// Since the Einbau ID role matrix (2026-09-30), access to LEDGER is decided by
+// user.appRoles.LEDGER alone — see roles.js.
 export function hasLedgerApp(user) {
-  const apps = user?.apps;
-  return Array.isArray(apps) && apps.some(a => String(a).toUpperCase() === 'LEDGER');
+  return ledgerLevel(user) != null;
 }
 
-// { user, refreshedToken } for a valid LEDGER session, else null. Used by the
-// portfolio page AND (since 2026-09-28) every Procore-sidebar call.
+// For the portfolio page and every Procore-sidebar call:
+//   null                                — no valid Einbau ID session
+//   { denied: true }                    — valid session, but no LEDGER access
+//   { user, refreshedToken, level }     — LEDGER level per roles.js
 export async function verifyEinbauSession(request, env) {
   const auth = request.headers.get('Authorization') || '';
   if (!auth.startsWith('Bearer ')) return null;
@@ -575,15 +579,18 @@ export async function verifyEinbauSession(request, env) {
       body: '{}'
     });
     const data = await res.json().catch(() => ({}));
-    if (!data?.valid || !hasLedgerApp(data.user)) return null;
-    return { user: data.user, refreshedToken: data.refreshedToken || null };
+    if (!data?.valid) return null;
+    const level = ledgerLevel(data.user);
+    if (!level) return { denied: true };
+    return { user: data.user, refreshedToken: data.refreshedToken || null, level };
   } catch {
     return null;
   }
 }
 
 export async function verifyEinbauUser(request, env) {
-  return (await verifyEinbauSession(request, env))?.user || null;
+  const session = await verifyEinbauSession(request, env);
+  return session && !session.denied ? session.user : null;
 }
 
 // Stages the company page never shows (Ben, 2026-09-29): Overhead isn't a job

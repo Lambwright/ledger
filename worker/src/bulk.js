@@ -36,19 +36,8 @@ export const BULK_DISPOSITION_LABELS = {
   written_off: 'Written Off'
 };
 
-// LEDGER admin = the LEDGER role set in HELM (Einbau ID per-app roles, live
-// 2026-09-30: user.appRoles, always present, e.g. { "LEDGER": "admin" }).
-// Always read from LEDGER's own /auth/verify call, never from the page.
-// Roles: viewer | pm | accounting | admin; no LEDGER entry = LEDGER's default (pm).
-export const LEDGER_DEFAULT_ROLE = 'pm';
-
-export function ledgerRole(user) {
-  return String(user?.appRoles?.LEDGER || LEDGER_DEFAULT_ROLE).toLowerCase();
-}
-
-export function isLedgerAdmin(user) {
-  return ledgerRole(user) === 'admin';
-}
+// Who may queue or reopen a bulk reconciliation: roles.js can.bulkReconcile,
+// checked in index.js on every call.
 
 export async function queueBulkReconciliation(env, tenantId, { projectIds, disposition, notes, invoiceNumber, user }) {
   await ensureBulkSchema(env);

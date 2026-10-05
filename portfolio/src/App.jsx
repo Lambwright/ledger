@@ -94,6 +94,7 @@ export default function App() {
 
   // Bulk reconciliation (LEDGER admins only — the worker checks it too).
   const [isAdmin, setIsAdmin] = useState(false);
+  const [canSourceRecords, setCanSourceRecords] = useState(false); // admin-only drill-down
   const [selected, setSelected] = useState(() => new Set());
   const [bulkOpen, setBulkOpen] = useState(false);
   const [notice, setNotice] = useState(null);
@@ -131,6 +132,7 @@ export default function App() {
       .then((data) => {
         setProjects(data.projects || []);
         setIsAdmin(data.isLedgerAdmin === true);
+        setCanSourceRecords(data.canSourceRecords === true);
       })
       .catch((e) => (e.unauthorized ? handleLogout() : setError(e.message)))
       .finally(() => setLoading(false));
@@ -290,7 +292,7 @@ export default function App() {
         <Header user={user} onLogout={handleLogout} />
         <div className="container">
           <div className="card empty-state">
-            Your Einbau ID doesn't have LEDGER access yet. Ask an admin to grant it in HELM.
+            You don't have access to LEDGER — ask Ben to grant it in HELM.
           </div>
         </div>
       </>
@@ -499,7 +501,7 @@ export default function App() {
                             </div>
                           )}
                           {p.refresh_error && <div className="detail-note detail-error">{p.refresh_error}</div>}
-                          <SourceRecords projectId={p.project_id} onUnauthorized={handleLogout} />
+                          {canSourceRecords && <SourceRecords projectId={p.project_id} onUnauthorized={handleLogout} />}
                           <div className="detail-actions">
                             <button
                               className="btn btn-ghost btn-sm"

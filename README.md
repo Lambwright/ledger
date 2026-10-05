@@ -14,28 +14,47 @@ billed, budgeted or written off so nothing is billed twice.
 | `db/schema.sql` | Database layout (Neon Postgres) | — |
 | `api-directory/` | Every Procore endpoint LEDGER has verified live | — |
 
-## Access today
+## Access and roles
 
 - Everyone signs in with **Einbau ID** (auth-worker). The sidebar signs in
   through LEDGER's worker (`/auth/login`, `/auth/verify`), with 14-day
   remember-me sessions.
-- **Opening LEDGER** needs `LEDGER` in the user's `apps` list. This is checked
-  on every sidebar and dashboard request (`verifyEinbauSession` in
-  `worker/src/portfolio.js`).
-- **Role:** `user.appRoles.LEDGER`, read from LEDGER's own `/auth/verify` call
-  and never from the page (`ledgerRole` / `isLedgerAdmin` in
-  `worker/src/bulk.js`). If there's no LEDGER key, LEDGER treats the user as
-  `pm`. Only **admin** is enforced so far: it gates bulk project reconciliation
-  and Reopen project on the dashboard.
+- **Everything is decided by `user.appRoles.LEDGER`** from LEDGER's own
+  `/auth/verify` call, never from the page, and never from `user.role` or
+  `jobRole`. The rules live in one file: `worker/src/roles.js`.
+
+  | `appRoles.LEDGER` | What LEDGER does |
+  |---|---|
+  | `admin` | Everything, plus: undo anyone's marks, dashboard source records, bulk reconcile / Reopen project |
+  | `pm` | Billing (invoice, push to CO, standalone), Already Billed / Budgeted / Write Off, undo **own** marks, Project Settings |
+  | `accounting` | Same as `pm` for now, kept as its own branch: it may get narrower, never broader. Accounting people who need more are given admin |
+  | `viewer` | Dashboard and Review Project, read-only: no billing, dispositions, undo or settings, and the controls are hidden |
+  | `access` | LEDGER's "Live" switch in HELM is still off: behaves as LEDGER did before roles (everything except bulk reconcile) |
+  | `no_access`, missing, anything else | No access: "You don't have access to LEDGER — ask Ben to grant it in HELM." |
+
+- **Worker enforcement** (`worker/src/index.js`, the sidebar session branch):
+  - Actions in `READ_ACTIONS` (lists, details, previews, settings read,
+    project search, bulk banner, count upkeep) are open to every level.
+  - **Any other action needs write access, so a new action is closed to
+    viewers by default.**
+  - The undo actions add `reconciled_by = <username>` for pm and accounting.
+    Undoing someone else's mark returns "You can only undo items you marked
+    yourself".
+- **Dashboard** (`/portfolio`): `list` and `refresh_project` are open to
+  every level. `source_records` is admin only. `bulk_reconcile` and
+  `reopen_project` are admin only.
 - Other LEDGER apps call the worker with the `LEDGER_SERVICE_KEY` secret (for
   example HANDOFF's `set_project_rates`). That's full access, not tied to a
   person.
 
-## Coming change: Einbau ID role matrix (announced 2026-09-30)
+## Einbau ID role matrix: history
 
-Einbau ID permissions are moving to **company job roles plus a per-app
-matrix**. It's owned by the HELM/auth session and signed off by Ben. **No
-LEDGER code changes until it ships.**
+**2026-10-05: enforced in LEDGER** (see "Access and roles" above). Deployed with LEDGER's Live switch off; it takes effect when Ben flips it in HELM.
+
+Original announcement (2026-09-30):
+
+Einbau ID permissions moved to **company job roles plus a per-app matrix**,
+owned by the HELM/auth session and signed off by Ben.
 
 - **Job roles:** Super Admin (Ben only), Admin, Estimator, Project Manager,
   Project Coordinator, CRM, Accounting, Logistics. New users default to

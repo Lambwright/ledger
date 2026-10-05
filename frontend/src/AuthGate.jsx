@@ -5,8 +5,10 @@ import { applyAccentPreset } from './accentPresets';
 // Wraps the sidebar and its API-calling popouts: nothing renders until an
 // Einbau ID with LEDGER access is signed in. The worker enforces the same
 // rule on every call (this screen is just the front door).
-const hasLedger = (user) =>
-  Array.isArray(user?.apps) && user.apps.some((a) => String(a).toUpperCase() === 'LEDGER');
+// Access = a LEDGER level in user.appRoles (Einbau ID role matrix, 2026-09-30);
+// 'access' means LEDGER's Live switch in HELM is still off. Mirrors worker/src/roles.js.
+const LEDGER_LEVELS = ['admin', 'accounting', 'pm', 'viewer', 'access'];
+const hasLedger = (user) => LEDGER_LEVELS.includes(String(user?.appRoles?.LEDGER ?? '').toLowerCase());
 
 export default function AuthGate({ children }) {
   const [state, setState] = useState('checking'); // checking | out | in
