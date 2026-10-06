@@ -89,6 +89,17 @@ export default function App() {
   const [invoiceFilter, setInvoiceFilter] = useState(""); // "" | "open" | "done"
   const [sort, setSort] = useState({ key: "invoicing_remaining", dir: "desc" });
 
+  // Keep --header-h = the sticky page header's height (see .portfolio-scroll).
+  useEffect(() => {
+    const header = document.querySelector(".header");
+    if (!header) return undefined;
+    const set = () => document.documentElement.style.setProperty("--header-h", `${header.offsetHeight}px`);
+    set();
+    const observer = new ResizeObserver(set);
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, [authState]); // the header only exists once signed in
+
   const [openId, setOpenId] = useState(null);
   const [refreshingId, setRefreshingId] = useState(null);
 
@@ -394,7 +405,7 @@ export default function App() {
           <BulkDialog projects={selectedProjects} onCancel={() => setBulkOpen(false)} onConfirm={queueBulk} />
         )}
 
-        <div className="table-wrap">
+        <div className="table-wrap portfolio-scroll">
           <table className="table portfolio-table">
             <thead>
               <tr>
@@ -437,7 +448,7 @@ export default function App() {
                         {noBudget && <span className="badge badge-warn">Budget not set up</span>}
                         {p.budget_status === "no_view" && <span className="badge badge-muted">No budget view</span>}
                         {!p.refreshed_at && <span className="badge badge-muted">Not loaded</span>}
-                        <BulkBadge project={p} />
+                        <BulkBadge project={p} isAdmin={isAdmin} />
                       </div>
                     </td>
                     <td>{p.stage || "—"}</td>

@@ -214,6 +214,13 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
   overflow-x: auto;
   background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md);
 }
+/* Project table scrolls inside its own window-high box so the column headers
+   stay frozen while you scroll (Ben, 2026-10-06). --header-h is the sticky
+   page header's real height (it wraps on narrow screens), set in App.jsx, so
+   even with the page scrolled all the way down the frozen headers sit below it. */
+/* 64px = breathing room above the table + the page's bottom padding below it. */
+.portfolio-scroll { overflow: auto; max-height: calc(100vh - var(--header-h, 64px) - 64px); }
+.portfolio-scroll .table th { z-index: 2; box-shadow: 0 1px 0 var(--border-color); }
 .table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .table th {
   position: sticky; top: 0; background: var(--bg-card);

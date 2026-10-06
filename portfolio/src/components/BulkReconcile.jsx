@@ -14,19 +14,20 @@ const money = (v) =>
   v == null ? "—" : Number(v).toLocaleString("en-CA", { style: "currency", currency: "CAD", maximumFractionDigits: 0 });
 const day = (ts) => (ts ? new Date(ts).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }) : "");
 
-export function BulkBadge({ project: p }) {
+export function BulkBadge({ project: p, isAdmin }) {
   if (p.bulk_status === "queued" || p.bulk_status === "running") {
     return <span className="badge badge-muted">Reconciling…</span>;
   }
   if (p.bulk_status === "done") {
     return <span className="badge badge-ok">Reconciled · {BULK_LABELS[p.bulk_disposition]}</span>;
   }
-  if (p.bulk_status === "failed") return <span className="badge badge-warn">Reconcile failed</span>;
+  // Failures are admin business — only admins can retry or reopen.
+  if (p.bulk_status === "failed" && isAdmin) return <span className="badge badge-warn">Reconcile failed</span>;
   return null;
 }
 
 export function BulkDetail({ project: p, isAdmin, onReopen, busy }) {
-  if (!p.bulk_status) return null;
+  if (!p.bulk_status || (p.bulk_status === "failed" && !isAdmin)) return null;
   const label = BULK_LABELS[p.bulk_disposition];
   return (
     <div className="bulk-detail">
