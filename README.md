@@ -47,6 +47,12 @@ billed, budgeted or written off so nothing is billed twice.
 - **Dashboard** (`/portfolio`): `list` and `refresh_project` are open to
   every level. `source_records` is admin only. `bulk_reconcile` and
   `reopen_project` are admin only.
+- **Departments** (Einbau ID `user.fields.department`, set in HELM): the
+  dashboard opens filtered to the signed-in person's department. This is a
+  default, not a restriction, and is cleared at sign-out. Department options
+  are built from the projects currently shown, so there is no hand-typed list
+  and no option that filters to nothing. LEDGER never writes a department
+  anywhere; it only copies project departments from Procore for display.
 - Other LEDGER apps call the worker with the `LEDGER_SERVICE_KEY` secret (for
   example HANDOFF's `set_project_rates`). That's full access, not tied to a
   person.

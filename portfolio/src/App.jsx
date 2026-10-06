@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getStoredToken, verify, hasLedgerAccess, logout as doLogout } from "./auth.js";
 import { api } from "./api.js";
 import Header from "./components/Header.jsx";
@@ -120,6 +120,9 @@ export default function App() {
 
   const handleLogout = useCallback(() => {
     doLogout();
+    // The next person to sign in gets their own department default.
+    deptDefaulted.current = false;
+    setDept("");
     applyAccentPreset(null);
     setUser(null);
     setProjects([]);
@@ -169,7 +172,26 @@ export default function App() {
 
   const stages = useMemo(() => uniqueValues(projects, "stage"), [projects]);
   const regions = useMemo(() => uniqueValues(projects, "region"), [projects]);
-  const depts = useMemo(() => uniqueValues(projects, "departments"), [projects]);
+  // Department options come from the projects actually shown (Ben, 2026-10-06):
+  // never a hand-typed list, never a department that would filter to nothing.
+  const depts = useMemo(
+    () => uniqueValues(projects.filter((p) => showAll || isReportable(p)), "departments"),
+    [projects, showAll]
+  );
+  // The signed-in person's Procore department (Einbau ID user.fields.department,
+  // set in HELM). The page opens filtered to it — a default, not a restriction.
+  const myDept = user?.fields?.department && !user.fields.department.missing ? user.fields.department.name : null;
+  const myDeptOption = myDept ? depts.find((d) => d.trim().toLowerCase() === myDept.trim().toLowerCase()) || null : null;
+  const deptDefaulted = useRef(false);
+  useEffect(() => {
+    if (deptDefaulted.current || projects.length === 0) return;
+    deptDefaulted.current = true;
+    if (myDeptOption) setDept(myDeptOption);
+  }, [projects, myDeptOption]);
+  // A picked department that no longer has shown projects is cleared.
+  useEffect(() => {
+    if (dept && !depts.includes(dept)) setDept("");
+  }, [dept, depts]);
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -362,7 +384,7 @@ export default function App() {
           </select>
           <select value={dept} onChange={(e) => setDept(e.target.value)} aria-label="Department">
             <option value="">All departments</option>
-            {depts.map((s) => <option key={s}>{s}</option>)}
+            {depts.map((s) => <option key={s} value={s}>{s === myDeptOption ? `${s} (yours)` : s}</option>)}
           </select>
           <select value={invoiceFilter} onChange={(e) => setInvoiceFilter(e.target.value)} aria-label="Invoicing">
             <option value="">All invoicing</option>
