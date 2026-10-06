@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>LEDGER — User Guide</title>
+<!-- Source for docs/user-guide/LEDGER-User-Guide.pdf. Regenerate with:
+     msedge --headless --no-pdf-header-footer --print-to-pdf=LEDGER-User-Guide.pdf ledger-user-guide.html -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
+<style>
+  /* LEDGER house style (matches the app): warm near-black, cream ink,
+     marigold accent, rust for danger, sage for success, 4px radius.
+     Oswald only for the wordmark. Dashboard pieces use its blue accent. */
+  :root {
+    --bg: #1e1c1a; --surface: #2a2724; --surface-2: #26221d; --border: #3a3733; --border-input: #4a473f;
+    --ink: #f1ece1; --ink-dim: #c9c0ac; --ink-soft: #b8af9e; --ink-muted: #8a8375;
+    --accent: #e2871a; --accent-dark: #b56a14; --danger: #c1401c; --success: #5b8c5a;
+    --blue: #5B9BE0;
+    --paper: #ffffff; --paper-ink: #24211e; --paper-soft: #5a544b; --paper-rule: #e6dfd2; --paper-tint: #faf6ef;
+  }
+  @page { size: Letter; margin: 0.7in 0.75in 0.75in; }
+  @page :first { margin: 0; }
+  @page { @bottom-right { content: counter(page); font-family: 'JetBrains Mono', monospace; font-size: 8pt; color: #8a8375; } }
+  @page :first { @bottom-right { content: none; } }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', 'Segoe UI', sans-serif; font-size: 10pt; line-height: 1.5; color: var(--paper-ink);
+    -webkit-print-color-adjust: exact; print-color-adjust: exact; background: var(--paper);
+  }
+
+  /* ---------- cover ---------- */
+  .cover {
+    width: 8.5in; height: 11in; background: var(--bg); color: var(--ink); position: relative; overflow: hidden;
+    background-image: radial-gradient(circle at 18% 14%, rgba(226,135,26,0.12), transparent 48%),
+                      radial-gradient(circle at 90% 95%, rgba(91,155,224,0.08), transparent 40%);
+    padding: 1.1in 0.9in; display: flex; flex-direction: column; break-after: page;
+  }
+  .cover-mark { width: 74px; height: 74px; }
+  .wordmark { font-family: 'Oswald', sans-serif; font-weight: 700; font-size: 64pt; letter-spacing: 0.04em; line-height: 1; margin-top: 0.55in; }
+  .cover-sub { font-family: 'JetBrains Mono', monospace; font-weight: 500; font-size: 11pt; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-muted); margin-top: 10px; }
+  .cover-rule { width: 64px; height: 4px; background: var(--accent); margin: 0.45in 0 0.3in; border-radius: 2px; }
+  .cover-title { font-size: 24pt; font-weight: 600; line-height: 1.25; max-width: 5.6in; }
+  .cover-lede { font-size: 11.5pt; color: var(--ink-dim); max-width: 5.4in; margin-top: 14px; line-height: 1.55; }
+  .cover-foot { margin-top: auto; display: flex; justify-content: space-between; align-items: flex-end; font-family: 'JetBrains Mono', monospace; font-size: 8.5pt; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-muted); }
+  .cover-foot strong { color: var(--ink-dim); font-weight: 700; }
+
+  /* ---------- section openers ---------- */
+  .opener {
+    background: var(--bg); color: var(--ink); border-radius: 4px; padding: 22px 26px; margin: 0 0 22px;
+    background-image: radial-gradient(circle at 12% 0%, rgba(226,135,26,0.16), transparent 55%);
+    break-inside: avoid;
+  }
+  .opener.blue { background-image: radial-gradient(circle at 12% 0%, rgba(91,155,224,0.18), transparent 55%); }
+  .opener .num { font-family: 'JetBrains Mono', monospace; font-size: 9pt; font-weight: 700; letter-spacing: 0.14em; color: var(--accent); }
+  .opener.blue .num { color: var(--blue); }
+  .opener h1 { font-size: 22pt; margin: 6px 0 4px; font-weight: 700; line-height: 1.15; }
+  .opener p { margin: 0; color: var(--ink-dim); font-size: 10.5pt; max-width: 6in; }
+  .opener .where { margin-top: 10px; font-family: 'JetBrains Mono', monospace; font-size: 8.5pt; color: var(--ink-soft); }
+  .break { break-before: page; }
+
+  /* ---------- body type ---------- */
+  h2 { font-size: 13.5pt; margin: 22px 0 6px; font-weight: 700; break-after: avoid; }
+  h2 + p, h2 + table, h2 + ol, h2 + ul, h2 + .two { break-before: avoid; }
+  h2 .tag { font-family: 'JetBrains Mono', monospace; font-size: 8pt; font-weight: 700; letter-spacing: 0.1em; color: var(--accent-dark); margin-right: 8px; vertical-align: 1px; }
+  .s2 h2 .tag { color: #3f7cc0; }
+  h3 { font-size: 10.5pt; margin: 14px 0 4px; font-weight: 700; break-after: avoid; }
+  p { margin: 0 0 8px; }
+  ul, ol { margin: 4px 0 10px; padding-left: 18px; }
+  li { margin: 3px 0; }
+  .label { font-family: 'JetBrains Mono', monospace; font-size: 8pt; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--paper-soft); }
+  .btn { display: inline-block; font-family: 'JetBrains Mono', monospace; font-size: 7.5pt; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 1px 6px; border-radius: 3px; border: 1px solid var(--paper-rule); background: var(--paper-tint); color: var(--paper-ink); white-space: nowrap; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  .note { border-left: 3px solid var(--accent); background: var(--paper-tint); padding: 8px 12px; border-radius: 0 4px 4px 0; margin: 10px 0; font-size: 9.5pt; break-inside: avoid; }
+  .note.blue { border-left-color: var(--blue); }
+  .note.warn { border-left-color: var(--danger); }
+  .muted { color: var(--paper-soft); }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+  .keep { break-inside: avoid; }
+
+  /* ---------- status chips ---------- */
+  .chips { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 10px 0 6px; }
+  .chip { border: 1px solid var(--paper-rule); border-radius: 4px; padding: 8px 10px; background: var(--paper); break-inside: avoid; }
+  .chip .k { font-family: 'JetBrains Mono', monospace; font-size: 8pt; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+  .chip p { margin: 4px 0 0; font-size: 8.5pt; color: var(--paper-soft); line-height: 1.4; }
+  .chip.unbilled { border-top: 3px solid var(--accent); }
+  .chip.billed { border-top: 3px solid var(--success); }
+  .chip.budgeted { border-top: 3px solid #9a8f7c; }
+  .chip.written { border-top: 3px solid var(--danger); }
+
+  /* ---------- step lists ---------- */
+  ol.steps { list-style: none; padding: 0; counter-reset: s; }
+  ol.steps > li { counter-increment: s; position: relative; padding-left: 30px; margin: 7px 0; break-inside: avoid; }
+  ol.steps > li::before {
+    content: counter(s); position: absolute; left: 0; top: 0; width: 20px; height: 20px; border-radius: 50%;
+    background: var(--bg); color: var(--accent); font-family: 'JetBrains Mono', monospace; font-size: 8.5pt; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .s2 ol.steps > li::before { color: var(--blue); }
+
+  /* ---------- app mock-ups (drawn in LEDGER's own style) ---------- */
+  .screen { background: var(--bg); border-radius: 6px; padding: 14px 14px 12px; color: var(--ink); font-size: 8.5pt; break-inside: avoid; box-shadow: 0 1px 0 rgba(0,0,0,0.04); }
+  .screen .caption { font-family: 'JetBrains Mono', monospace; font-size: 7.5pt; letter-spacing: 0.08em; text-transform: uppercase; color: var(--paper-soft); margin-top: 6px; }
+  .s-head { display: flex; align-items: baseline; gap: 6px; }
+  .s-logo { font-family: 'Oswald', sans-serif; font-weight: 700; font-size: 15pt; letter-spacing: 0.04em; }
+  .s-sub { font-family: 'JetBrains Mono', monospace; font-size: 6pt; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-muted); }
+  .s-badge { margin-left: auto; font-family: 'JetBrains Mono', monospace; font-size: 6pt; font-weight: 700; padding: 1px 5px; border-radius: 3px; background: rgba(226,135,26,0.15); color: var(--accent); }
+  .s-hint { font-family: 'JetBrains Mono', monospace; font-size: 6.5pt; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-muted); margin: 10px 0 6px; }
+  .s-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .s-btn { font-family: 'JetBrains Mono', monospace; font-size: 6.5pt; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; text-align: center; padding: 10px 4px; border-radius: 4px; border: 1px solid var(--border-input); color: var(--ink-soft); }
+  .s-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  .s-tabs { display: flex; gap: 10px; border-bottom: 1px solid var(--border); margin: 8px 0; }
+  .s-tab { font-family: 'JetBrains Mono', monospace; font-size: 6.5pt; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-muted); padding-bottom: 4px; }
+  .s-tab.on { color: var(--accent); border-bottom: 2px solid var(--accent); }
+  .s-card { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 7px 9px; margin-bottom: 5px; }
+  .s-card.co { margin-left: 12px; border-left: 3px solid var(--accent); }
+  .s-row { display: flex; align-items: baseline; gap: 6px; }
+  .s-box { width: 9px; height: 9px; border: 1px solid var(--ink-muted); border-radius: 2px; display: inline-block; }
+  .s-box.on { background: var(--accent); border-color: var(--accent); }
+  .s-num { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 7.5pt; }
+  .s-amt { margin-left: auto; font-family: 'JetBrains Mono', monospace; font-weight: 700; color: var(--accent); font-size: 7.5pt; }
+  .s-meta { color: var(--ink-muted); font-size: 6.8pt; margin-top: 2px; }
+  .s-bar { margin-top: 8px; display: flex; align-items: center; gap: 6px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px; font-size: 7pt; }
+  .s-bar .s-btn { padding: 4px 6px; }
+
+  .dash { background: #1b1d1f; border-radius: 6px; padding: 12px; color: #e8eaec; font-size: 8pt; break-inside: avoid; }
+  .d-hero { display: grid; grid-template-columns: 1.1fr 1fr; gap: 8px; }
+  .d-card { background: #232628; border: 1px solid #34383b; border-radius: 4px; padding: 9px 10px; }
+  .d-label { font-family: 'JetBrains Mono', monospace; font-size: 6pt; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #8b9196; }
+  .d-big { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 15pt; line-height: 1.15; }
+  .d-big.muted { color: #8b9196; }
+  .d-big.blue { color: var(--blue); }
+  .d-cap { font-size: 6.5pt; color: #8b9196; }
+  .d-gap { font-family: 'JetBrains Mono', monospace; font-size: 7pt; font-weight: 700; color: #d1a93f; background: rgba(209,169,63,0.14); padding: 1px 5px; border-radius: 3px; }
+  .d-row { display: flex; gap: 14px; align-items: flex-end; margin-top: 4px; }
+  .d-counts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 4px; }
+  .d-kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-top: 8px; }
+  .d-kpis .d-card { padding: 7px 8px; }
+  .d-kpis .v { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 8.5pt; margin-top: 2px; }
+  .d-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 7pt; }
+  .d-table th { font-family: 'JetBrains Mono', monospace; font-size: 5.8pt; letter-spacing: 0.06em; text-transform: uppercase; color: #8b9196; text-align: left; padding: 4px 5px; border-bottom: 1px solid #34383b; font-weight: 700; }
+  .d-table td { padding: 5px; border-bottom: 1px solid #2b2f32; }
+  .d-table .r { text-align: right; font-family: 'JetBrains Mono', monospace; }
+  .pos { color: #6fb35c; } .warn { color: #d1a93f; } .neg { color: #d14343; } .key { color: var(--blue); font-weight: 700; }
+  .q { font-family: 'JetBrains Mono', monospace; font-size: 5.5pt; border: 1px solid #34383b; border-radius: 2px; padding: 0 2px; color: #5a5f63; margin-left: 2px; }
+  .d-badge { font-family: 'JetBrains Mono', monospace; font-size: 5.5pt; font-weight: 700; text-transform: uppercase; padding: 1px 4px; border-radius: 2px; background: rgba(111,179,92,0.14); color: #6fb35c; margin-left: 4px; }
+
+  /* ---------- tables ---------- */
+  table.plain { width: 100%; border-collapse: collapse; margin: 8px 0 12px; font-size: 9pt; break-inside: avoid; }
+  table.plain th { text-align: left; font-family: 'JetBrains Mono', monospace; font-size: 7.5pt; letter-spacing: 0.08em; text-transform: uppercase; color: var(--paper-soft); border-bottom: 2px solid var(--paper-ink); padding: 5px 8px 5px 0; }
+  table.plain td { border-bottom: 1px solid var(--paper-rule); padding: 6px 8px 6px 0; vertical-align: top; }
+  table.plain td:first-child { font-weight: 600; white-space: nowrap; }
+
+  /* ---------- roadmap ---------- */
+  .road { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; }
+  .road-item { border: 1px solid var(--paper-rule); border-radius: 4px; padding: 8px 11px; break-inside: avoid; background: var(--paper); }
+  .road-item .when { font-family: 'JetBrains Mono', monospace; font-size: 7.5pt; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; }
+  .road-item h4 { margin: 3px 0 4px; font-size: 10.5pt; }
+  .road-item p { margin: 0; font-size: 9pt; color: var(--paper-soft); line-height: 1.45; }
+  .when.now { color: var(--success); } .when.next { color: var(--accent-dark); } .when.later { color: #3f7cc0; }
+  .road-item.feature { grid-column: span 2; background: var(--bg); border-color: var(--bg); color: var(--ink);
+    background-image: radial-gradient(circle at 0% 0%, rgba(226,135,26,0.18), transparent 60%); }
+  .road-item.feature p { color: var(--ink-dim); }
+  .road-item.feature .when { color: var(--accent); }
+  .road-item.feature ul { margin: 6px 0 0; color: var(--ink-dim); font-size: 9pt; }
+</style>
+</head>
+<body>
+
+<!-- ======================= COVER ======================= -->
+<section class="cover">
+  <svg class="cover-mark" viewBox="0 0 100 100" aria-hidden="true">
+    <rect width="100" height="100" rx="20" fill="#2a2724"/>
+    <rect x="27" y="22" width="16" height="56" fill="#e2871a"/>
+    <rect x="27" y="64" width="48" height="14" fill="#e2871a"/>
+    <rect x="51" y="25" width="24" height="7" fill="#f1ece1"/>
+    <rect x="51" y="42" width="24" height="7" fill="#f1ece1"/>
+  </svg>
+  <div class="wordmark">LEDGER</div>
+  <div class="cover-sub">Project Billing Reconciliation</div>
+  <div class="cover-rule"></div>
+  <div class="cover-title">User guide: billing every hour, cost and subcontract — once, and only once.</div>
+  <div class="cover-lede">
+    LEDGER sits beside Procore and turns the costs on a project into client invoices and change orders, while keeping
+    track of what has already been billed, budgeted or written off. This guide covers the project sidebar, the company
+    dashboard, and what's coming next.
+  </div>
+  <div class="cover-foot">
+    <div><strong>An Einbau Product</strong><br />Einbau Services</div>
+    <div style="text-align:right">Version 1.0<br />October 2026</div>
+  </div>
+</section>
+
+<!-- ======================= INTRO ======================= -->
+<h2 style="margin-top:0"><span class="tag">00</span>What LEDGER is for</h2>
+<p>
+  Every project collects costs in Procore: T&amp;M tickets from the field, direct costs (receipts, expenses, payroll),
+  subcontracts and purchase orders, and the change orders on them. Some of those costs get billed to the client;
+  some are already covered by the contract; some we choose not to bill. Without a single record of which is which,
+  costs slip through unbilled — or get billed twice.
+</p>
+<p>
+  <strong>LEDGER is that record.</strong> It lists every billable cost on a project, lets you bill it to the client in a few
+  clicks (it builds the Change Event, Change Order and invoice in Procore for you), and remembers what happened to every
+  item, so the next person on the project sees exactly what's left.
+</p>
+
+<h3>Every record has one of four statuses</h3>
+<div class="chips">
+  <div class="chip unbilled"><div class="k">Unbilled</div><p>Still needs a decision. This is the list to work down.</p></div>
+  <div class="chip billed"><div class="k">Billed</div><p>On a client invoice or draft change order — by LEDGER, or marked <em>Already Billed</em>.</p></div>
+  <div class="chip budgeted"><div class="k">Budgeted</div><p>Covered by the contract or budget. Never billed separately.</p></div>
+  <div class="chip written"><div class="k">Written off</div><p>Not billed to the client, with a reason (warranty, goodwill, PM decision…).</p></div>
+</div>
+<p class="muted" style="font-size:9pt">A record can be a whole T&amp;M ticket, direct cost or commitment, or individual lines on one — so you can bill part of something and decide on the rest later.</p>
+
+<h3>Two ways in</h3>
+<div class="two">
+  <div class="note">
+    <div class="label" style="color:var(--accent-dark)">Section 1 · Project level</div>
+    <strong>The LEDGER sidebar</strong> — opens inside Procore on any project (or on your phone). This is where you
+    bill, mark and review a project's costs.
+  </div>
+  <div class="note blue">
+    <div class="label" style="color:#3f7cc0">Section 2 · Company level</div>
+    <strong>The LEDGER dashboard</strong> — a web page with every project at once: margin, invoicing and how many records
+    are still unbilled, by PM, region and stage.
+  </div>
+</div>
+
+<h3>Signing in and access</h3>
+<p>
+  Both use your <strong>Einbau ID</strong> — the same login as PUNCH, TALLY, HANDOFF and the other Einbau apps. Access is set
+  in HELM. Most people have one of four LEDGER levels:
+</p>
+<table class="plain">
+  <tr><th>Level</th><th>In short</th></tr>
+  <tr><td>Viewer</td><td>Can see everything, change nothing.</td></tr>
+  <tr><td>PM / Accounting</td><td>Can bill, mark records and change Project Settings; can undo their own marks.</td></tr>
+  <tr><td>Admin</td><td>All of the above, plus undo anyone's marks, source-record drill-down and bulk reconciliation.</td></tr>
+</table>
+<p class="muted" style="font-size:9pt">If LEDGER says you don't have access, ask Ben to grant it in HELM. If a button you expect isn't there, your level doesn't include it.</p>
+<div class="note"><strong>LEDGER prepares; a person submits.</strong> Invoices LEDGER creates are left as drafts in Procore for you to review and submit. Questions or problems: contact Ben Wright.</div>
+
+<!-- ======================= SECTION 1 ======================= -->
+<div class="break"></div>
+<div class="opener">
+  <div class="num">SECTION 01</div>
+  <h1>The project sidebar</h1>
+  <p>Bill, mark and review the costs on one project — without leaving Procore.</p>
+  <div class="where">Procore → any project → side panel → LEDGER &nbsp;·&nbsp; or ledger-sidebar.pages.dev</div>
+</div>
+
+<div class="two">
+  <div>
+    <h2 style="margin-top:0"><span class="tag">1.1</span>Opening LEDGER</h2>
+    <ol class="steps">
+      <li>Open the project in Procore (the Prime Contract page is a good place — LEDGER will bill to that contract).</li>
+      <li>Open the side panel and choose <strong>LEDGER</strong>.</li>
+      <li>Sign in with your Einbau ID the first time. LEDGER keeps you signed in for about two weeks of use.</li>
+    </ol>
+    <p>
+      Away from Procore — on a phone or laptop — go to <strong>ledger-sidebar.pages.dev</strong>, search for a project by name
+      or number, and pick it. On a phone, use <em>Add to Home Screen</em> and LEDGER opens like an app.
+    </p>
+    <p>The <span class="btn">⧉</span> button pops LEDGER out into a full browser window when the sidebar feels cramped.</p>
+  </div>
+  <div class="screen">
+    <div class="s-head"><span class="s-logo">LEDGER</span><span class="s-sub">Project Billing Reconciliation</span><span class="s-badge">T&amp;M</span></div>
+    <div class="s-sub" style="margin-top:2px">An Einbau Product</div>
+    <div class="s-hint">What would you like to do?</div>
+    <div class="s-grid">
+      <div class="s-btn primary">Create Invoice</div>
+      <div class="s-btn">Push to CO (draft)</div>
+      <div class="s-btn">Review Project</div>
+      <div class="s-btn">Project Settings</div>
+    </div>
+    <div class="caption" style="color:var(--ink-muted)">The four starting points</div>
+  </div>
+</div>
+
+<h2><span class="tag">1.2</span>Pick what you're doing first</h2>
+<table class="plain">
+  <tr><th>Choose</th><th>When</th></tr>
+  <tr><td>Create Invoice</td><td>You're ready to bill: LEDGER builds the change order, approves it, creates the invoice and fills every line to 100%. You review and submit the invoice in Procore.</td></tr>
+  <tr><td>Push to CO (draft)</td><td>You want a draft Change Order to review with the client or a PM first. Nothing is invoiced.</td></tr>
+  <tr><td>Review Project</td><td>See everything on the project by status, mark records, and undo past marks. No billing here.</td></tr>
+  <tr><td>Project Settings</td><td>Set this project's default rates, markups and grouping so you don't retype them every time.</td></tr>
+</table>
+
+<h2><span class="tag">1.3</span>Project Settings</h2>
+<p>
+  Per-project defaults that pre-fill every invoice: labour rates (regular, overtime, double time, per diem), markup for direct
+  costs and for commitments, how lines are grouped, the billing mode (T&amp;M or fixed price — normally taken from the Procore
+  project type), and a default Prime Contract. Leave a field blank to use the company default. You can still override any of
+  them on a single invoice.
+</p>
+
+<h2><span class="tag">1.4</span>Creating an invoice</h2>
+<div class="two">
+  <div>
+    <ol class="steps">
+      <li><strong>Pick items.</strong> Three tabs: <em>T&amp;M Tickets</em>, <em>Direct Costs</em> and <em>Commitments</em>. Tick whole items, or expand one and tick individual lines. You can mix all three in one invoice.</li>
+      <li><strong>Configure.</strong> Check the Prime Contract, invoice number (LEDGER suggests the next one), billing date and billing period. Adjust rates, markups and how lines are grouped. Your Project Settings fill these in.</li>
+      <li><strong>Invoice as…</strong> choose <em>Change Order on the Prime Contract</em> (normal) or <em>Standalone</em> — a new Prime Contract just for these costs, for pass-through items like materials or travel.</li>
+      <li><strong>Preview.</strong> See exactly what the client will see. Edit line descriptions; pop the preview out if it's long.</li>
+      <li><strong>Confirm</strong> and watch the progress. When it's done you get a link to the draft invoice — open it in Procore and submit it as usual.</li>
+    </ol>
+  </div>
+  <div class="screen">
+    <div class="s-tabs"><span class="s-tab">T&amp;M Tickets</span><span class="s-tab">Direct Costs</span><span class="s-tab on">Commitments</span></div>
+    <div class="s-card"><div class="s-row"><span class="s-box on"></span><span class="s-num">SC-0042</span><span class="s-amt">$12,400</span></div><div class="s-meta">ML Solutions · Subcontract · Approved</div></div>
+    <div class="s-card co"><div class="s-row"><span class="s-box on"></span><span class="s-num">SC-0042 · CO #001</span><span class="s-amt">$680</span></div><div class="s-meta">Change Order to SC-0042 · Approved</div></div>
+    <div class="s-card"><div class="s-row"><span class="s-box"></span><span class="s-num">PO-0017</span><span class="s-amt">$2,275</span></div><div class="s-meta">Home Depot · Purchase order · Approved</div></div>
+    <div class="s-bar"><span><strong>2</strong> items · $13,080</span><span style="margin-left:auto" class="s-btn primary">Configure →</span><span class="s-btn">Already Billed</span></div>
+    <div class="caption" style="color:var(--ink-muted)">Commitment change orders sit under their commitment</div>
+  </div>
+</div>
+
+<h3>Good to know</h3>
+<ul>
+  <li><strong>Markup</strong> is added for direct costs and commitments; T&amp;M bills at your labour rates. Both default from Project Settings.</li>
+  <li><strong>Commitment change orders</strong> (approved only) appear right under their subcontract, or on their own once the subcontract is billed.</li>
+  <li><strong>Hours already billed</strong> on a T&amp;M ticket can't be billed again from a subcontract (and vice versa). LEDGER blocks it.</li>
+  <li><strong>Labour on a subcontract</strong> gets a warning first — it's usually better billed from the T&amp;M ticket or marked as budgeted.</li>
+  <li><strong>Older projects</strong> (created before October 11, 2026) show a reminder to clean up first: mark what's already been billed, budgeted or written off before billing commitments.</li>
+</ul>
+
+<h2><span class="tag">1.5</span>Marking records you won't bill through LEDGER</h2>
+<p>From any list you can mark ticked items instead of billing them. Each mark moves them out of Unbilled:</p>
+<table class="plain">
+  <tr><th>Mark</th><th>Use it when</th></tr>
+  <tr><td>Already Billed</td><td>It was invoiced outside LEDGER (by hand in Procore, or before LEDGER). Add the invoice number. It counts as billed and can't be billed again.</td></tr>
+  <tr><td>Mark as Budgeted</td><td>It's covered by the contract or budget — the client won't see it as a separate charge.</td></tr>
+  <tr><td>Write Off</td><td>We're absorbing it. Pick a reason (warranty, service call, goodwill, PM decision, other) and add a note.</td></tr>
+</table>
+
+<h2><span class="tag">1.6</span>Reviewing a project</h2>
+<p>
+  <strong>Review Project</strong> opens with a summary table — T&amp;M, direct costs and commitments against Unbilled, Billed,
+  Written off and Budgeted — then a tab for each status. Use it to work down the Unbilled list, check what's been billed and
+  on which invoice, and <strong>Undo</strong> a mark or a draft push if something was wrong.
+</p>
+<div class="note">
+  <strong>Undo only changes LEDGER's record.</strong> If you undo an invoice, delete it (and its change order) in Procore first —
+  LEDGER will then let you bill those items again. PMs can undo their own marks; admins can undo anyone's.
+</div>
+<div class="note blue">
+  <strong>"Reconciled as Already Billed by…" banner?</strong> An admin closed out this project's old records in bulk from the
+  dashboard. Anything new since then shows as Unbilled as normal. Those bulk records can only be reopened together, by an admin.
+</div>
+
+<!-- ======================= SECTION 2 ======================= -->
+<div class="break"></div>
+<div class="s2">
+<div class="opener blue">
+  <div class="num">SECTION 02</div>
+  <h1>The company dashboard</h1>
+  <p>Every project at once: how much is invoiced, how margin is tracking against budget, and how much is still waiting to be billed.</p>
+  <div class="where">lambwright.github.io/ledger &nbsp;·&nbsp; or the LEDGER tile in any Einbau app's switcher</div>
+</div>
+
+<div class="dash">
+  <div class="d-hero">
+    <div class="d-card">
+      <div class="d-label">Margin to date vs budgeted</div>
+      <div class="d-row">
+        <div><div class="d-big">36.7%</div><div class="d-cap">to date · $4,126,433</div></div>
+        <div class="d-cap" style="padding-bottom:10px">vs</div>
+        <div><div class="d-big muted">37.9%</div><div class="d-cap">budgeted</div></div>
+        <span class="d-gap" style="margin-bottom:12px">▼ 1.2 pts</span>
+      </div>
+    </div>
+    <div class="d-card">
+      <div class="d-label">LEDGER records</div>
+      <div class="d-counts">
+        <div><div class="d-big blue">1,284</div><div class="d-cap">unbilled</div></div>
+        <div><div class="d-big muted">412</div><div class="d-cap">billed</div></div>
+        <div><div class="d-big muted">37</div><div class="d-cap">written off</div></div>
+        <div><div class="d-big muted">96</div><div class="d-cap">budgeted</div></div>
+      </div>
+    </div>
+  </div>
+  <div class="d-kpis">
+    <div class="d-card"><div class="d-label">Total costs</div><div class="v">$7,126,352</div></div>
+    <div class="d-card"><div class="d-label">Total invoiced</div><div class="v">$11,252,786</div></div>
+    <div class="d-card"><div class="d-label">Contract value</div><div class="v">$12,376,646</div></div>
+    <div class="d-card"><div class="d-label">Left to invoice</div><div class="v">$1,123,861</div></div>
+    <div class="d-card"><div class="d-label">Commitments left</div><div class="v">$166,590</div></div>
+  </div>
+  <table class="d-table">
+    <tr><th>Project</th><th>Stage</th><th class="r">Margin %</th><th class="r">Budgeted %</th><th class="r">Unbilled</th><th class="r">Invoiced</th><th class="r">Left to invoice</th></tr>
+    <tr><td>AB - KPS - Costco Lloydminster<span class="d-badge">Reconciled · Already Billed</span></td><td>Course of Construction 75%</td><td class="r pos">41.0%</td><td class="r">39.1%<span class="q">Q</span></td><td class="r key">8</td><td class="r">$241,464</td><td class="r">$40,947</td></tr>
+    <tr><td>ON - Coletech - DCL 6th and 7th</td><td>Course of Construction</td><td class="r neg">-6.8%</td><td class="r">43.7%</td><td class="r key">23</td><td class="r">$60,980</td><td class="r">$19,020</td></tr>
+    <tr><td>ON - Tamarack - 1559 Brackenrig</td><td>Billing Review Required</td><td class="r warn">33.4%</td><td class="r">40.0%<span class="q">Q</span></td><td class="r">0</td><td class="r">$12,460</td><td class="r">$0</td></tr>
+  </table>
+</div>
+<p class="muted" style="font-size:8.5pt;margin-top:4px">Illustration — figures are examples.</p>
+
+<h2><span class="tag">2.1</span>Reading the headline</h2>
+<ul>
+  <li><strong>Margin to date vs budgeted</strong> — margin earned so far on what's been invoiced, next to the margin the job was budgeted at. Green when a project is at or above budget, amber when behind, red when negative.</li>
+  <li><strong>LEDGER records</strong> — how many T&amp;M tickets, direct costs and commitments are Unbilled, Billed, Written off and Budgeted. <em>Unbilled</em> is the number to drive down.</li>
+  <li><strong>Totals</strong> — costs, invoicing, contract value, what's left to invoice, and what's left to pay out on subcontracts.</li>
+</ul>
+<p>Every headline number follows your filters: pick a department and you're looking at that PM's projects only.</p>
+<div class="note blue">
+  <strong>Budgeted % marked <span class="q" style="color:var(--paper-soft)">Q</span></strong> is the original quote — original
+  contract against original budget, excluding pass-through contracts — held until the project's budget is changed in Procore.
+  This stops change orders from making budgeted margin look better than it is. Once budget changes are made, it follows
+  Procore's live budget.
+</div>
+
+<h2><span class="tag">2.2</span>Finding projects</h2>
+<p>
+  Search by name or number, and filter by <strong>stage</strong> (tick several at once), <strong>region</strong>,
+  <strong>department</strong> (our PMs) and <strong>invoicing</strong> (not fully invoiced / fully invoiced). Click any column
+  heading to sort. Cancelled, warranty, overhead and inactive projects are left out.
+</p>
+
+<h2><span class="tag">2.3</span>Opening a project</h2>
+<ol class="steps">
+  <li>Click a row. LEDGER refreshes that project from Procore so you're looking at today's numbers.</li>
+  <li>The detail shows direct costs, subcontractor invoices, committed costs and record counts.</li>
+  <li><span class="btn primary">Open in LEDGER ↗</span> jumps straight into that project's sidebar to bill or review it; <span class="btn">Open in Procore ↗</span> opens the project itself.</li>
+  <li>Admins also get <span class="btn">Show source records</span> — every direct cost, subcontractor invoice and owner invoice behind the numbers, with a warning if costs are sitting on codes that aren't in the budget.</li>
+</ol>
+
+<h2><span class="tag">2.4</span>Clearing old records in bulk <span class="muted" style="font-weight:500;font-size:9pt">(admins)</span></h2>
+<p>
+  Older projects carry hundreds of records nobody will review line by line. Admins can tick projects (or filter and tick all),
+  choose <strong>Mark reconciled…</strong>, and set everything still Unbilled on them to <em>Already Billed</em>,
+  <em>Budgeted</em> or <em>Written Off</em> in one go. LEDGER works through them in the background and flags each project
+  "Reconciled". Records that arrive later still show as Unbilled. An admin can <strong>Reopen project</strong> to put the whole
+  batch back to Unbilled.
+</p>
+
+<h2><span class="tag">2.5</span>How fresh are the numbers?</h2>
+<p>
+  LEDGER refreshes every active project from Procore at least daily on its own, and immediately when you open one. It pauses its
+  background work whenever someone is using LEDGER, so billing is never slowed down by it. The <em>Updated</em> column shows when
+  each project was last refreshed.
+</p>
+</div>
+
+<!-- ======================= ROADMAP ======================= -->
+<div class="break"></div>
+<div class="opener">
+  <div class="num">ROADMAP</div>
+  <h1>Where LEDGER is going</h1>
+  <p>What's planned, roughly in order. Plans change as the team uses LEDGER — tell Ben what would help you most.</p>
+</div>
+
+<div class="road">
+  <div class="road-item">
+    <div class="when now">Now</div>
+    <h4>Permissions by role</h4>
+    <p>Each person's LEDGER access follows their job role, set once in HELM — viewers can look, PMs and accounting can bill, admins can tidy up.</p>
+  </div>
+  <div class="road-item">
+    <div class="when now">Now</div>
+    <h4>LEDGER on your phone</h4>
+    <p>Already installable from the browser. Next: full details shown inside the app, and larger, easier-to-tap controls for invoicing from site.</p>
+  </div>
+  <div class="road-item">
+    <div class="when next">Next</div>
+    <h4>Budgeted margin from the estimate</h4>
+    <p>Use the margin on the approved estimate as each job's budgeted margin, so the dashboard compares every job to what it was sold at.</p>
+  </div>
+  <div class="road-item">
+    <div class="when next">Next</div>
+    <h4>Projects that start set up</h4>
+    <p>When a won bid is handed off in HANDOFF, the new project arrives in LEDGER with its labour rates and markups already set.</p>
+  </div>
+  <div class="road-item">
+    <div class="when next">Next</div>
+    <h4>Project overview</h4>
+    <p>One page per project: billed versus cost by source, what's waiting and for how long — plus, for quoted jobs, which billing periods have been invoiced and where the gaps are.</p>
+  </div>
+  <div class="road-item">
+    <div class="when next">Next</div>
+    <h4>Instant updates</h4>
+    <p>The dashboard updates the moment something changes in Procore, instead of on its daily round.</p>
+  </div>
+  <div class="road-item feature">
+    <div class="when">Later · AI-assisted</div>
+    <h4>A LEDGER assistant that knows your projects</h4>
+    <p>Built on the project information already gathered by SCOUT and HANDOFF — the PO, the quote, the handoff brief — and on LEDGER's own billing records.</p>
+    <ul>
+      <li><strong>Scope review</strong> — "Is this ticket in scope?" answered against the actual PO and quote, before you bill or write it off.</li>
+      <li><strong>Agentic billing</strong> — ask in Teams: "bill this week's T&amp;M on KPS". It prepares the invoice, shows you, and only submits once you confirm. Every action is logged.</li>
+      <li><strong>Quoted-project billing</strong> — progress invoices on fixed-price jobs prepared automatically against the contract's schedule of values.</li>
+      <li><strong>Answers on demand</strong> — "What's unbilled on Chris's jobs?" or "How is margin tracking on Costco?" without opening a report.</li>
+    </ul>
+  </div>
+  <div class="road-item" style="grid-column: span 2">
+    <div class="when later">Also later</div>
+    <p><strong style="color:var(--paper-ink)">Travel and per diem rules</strong> — mileage, per diem and travel time billed the same way on every job.
+    &nbsp;<strong style="color:var(--paper-ink)">Flag a cost for removal</strong> — mark a cost that doesn't belong on the project so accounting can move it.</p>
+  </div>
+</div>
+
+
+</body>
+</html>
