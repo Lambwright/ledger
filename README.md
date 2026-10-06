@@ -40,6 +40,10 @@ billed, budgeted or written off so nothing is billed twice.
   - The undo actions add `reconciled_by = <username>` for pm and accounting.
     Undoing someone else's mark returns "You can only undo items you marked
     yourself".
+  - Each record in the sidebar lists carries `myMarks` (which kinds of mark the
+    signed-in user made, bulk excluded), so pm and accounting only see the Undo
+    links they can use. Admin and `access` see all of them. The worker check
+    above stays the real gate.
 - **Dashboard** (`/portfolio`): `list` and `refresh_project` are open to
   every level. `source_records` is admin only. `bulk_reconcile` and
   `reopen_project` are admin only.

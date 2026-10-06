@@ -101,10 +101,12 @@ function reconciliationKey(tc) {
 // needed to show the reason on the new Written-off tab (Ben's ask
 // 2026-09-17) without a second round trip per record.
 async function getBilledRecordMap(env, tenantId, projectId, recordType) {
+  await ensureBulkSchema(env); // bulk_reconciliation_id below
   const rows = await dbQuery(
     env,
     `select br.procore_record_id, br.status, br.invoice_number, br.invoice_id, br.amount_billed, br.write_off_reason,
-            br.billed_outside_ledger, wo.reason_category, wo.reason_notes
+            br.billed_outside_ledger, br.reconciled_by, br.bulk_reconciliation_id is not null as bulk,
+            wo.reason_category, wo.reason_notes
      from billing_records br
      left join write_offs wo on wo.billing_record_id = br.id
      where br.tenant_id = $1 and br.project_id = $2 and br.record_type = $3`,
@@ -127,11 +129,31 @@ async function getBilledRecordMap(env, tenantId, projectId, recordType) {
         reasonNotes: r.reason_notes || r.write_off_reason || null,
         // "Already Billed" (Ben's ask 2026-09-25): billed on an invoice LEDGER
         // didn't create — counts as billed everywhere, but has its own undo.
-        billedOutsideLedger: r.billed_outside_ledger === true
+        billedOutsideLedger: r.billed_outside_ledger === true,
+        // Who made the mark, for "undo your own marks" (pm/accounting).
+        reconciledBy: r.reconciled_by || null,
+        bulk: r.bulk === true
       });
     }
   }
   return map;
+}
+
+// Which kinds of mark on a record the signed-in user made themselves — so the
+// sidebar shows a pm/accounting user only the Undo links that will work (Ben,
+// 2026-10-06). The worker's own-marks check on undo stays the real gate. Bulk
+// rows never count: they're only ever reopened together, by an admin.
+function marksOf(rows, me) {
+  const marks = { draft: false, invoice: false, outside: false, writtenOff: false, budgeted: false };
+  if (!me) return marks;
+  for (const r of rows) {
+    if (!r || r.bulk || r.reconciledBy !== me) continue;
+    if (r.status === 'draft_co') marks.draft = true;
+    else if (r.status === 'billed') marks[r.billedOutsideLedger ? 'outside' : 'invoice'] = true;
+    else if (r.status === 'written_off') marks.writtenOff = true;
+    else if (r.status === 'reconciled_to_period') marks.budgeted = true;
+  }
+  return marks;
 }
 
 // Also folds in hours billed through a COMMITMENT line (Einvoice builds one
@@ -789,7 +811,7 @@ function ticketLabel(numbers) {
 // its unbilled timecard lines (still actionable) and its billed / draft-CO
 // lines (history), with dollar totals for both. The frontend's "Unbilled" and
 // "Billed" tabs are both rendered from this one response.
-export async function listPendingTickets(env, { tenantId, projectId, selfHeal = true }) {
+export async function listPendingTickets(env, { tenantId, projectId, selfHeal = true, me = null }) {
   // Self-heal first — if a PM deleted a draft CO directly in Procore, the
   // billing_records rows for it need to disappear before we compute what's
   // billed vs. unbilled below, or the ticket stays wrongly "billed" forever.
@@ -908,7 +930,8 @@ export async function listPendingTickets(env, { tenantId, projectId, selfHeal = 
       writtenOffAmount,
       budgetedCount: budgetedLines.length,
       budgetedLines,
-      budgetedAmount
+      budgetedAmount,
+      myMarks: marksOf(allTimecards.map(tc => billedMap.get(reconciliationKey(tc))), me)
     };
   });
 
@@ -2078,7 +2101,7 @@ function partialDispositionFields(billedRows, writtenOffRows, budgetedRows) {
   };
 }
 
-export async function listPendingDirectCosts(env, { tenantId, projectId }) {
+export async function listPendingDirectCosts(env, { tenantId, projectId, me = null }) {
   const [dcRes, billedMap, lineMap] = await Promise.all([
     requestWithRetry(env, 'GET', `/rest/v1.0/projects/${projectId}/direct_costs?per_page=300`, null),
     getBilledDirectCostMap(env, tenantId, projectId),
@@ -2119,7 +2142,8 @@ export async function listPendingDirectCosts(env, { tenantId, projectId }) {
       description: dc.description || '',
       date: dc.direct_cost_date || null,
       amount: round2(rawAmount),
-      status: dc.status || null
+      status: dc.status || null,
+      myMarks: marksOf([billedInfo, ...(lineRowsByDc.get(key) || [])], me)
     };
     // 'written_off' and 'reconciled_to_period' ("Budgeted", Ben's ask
     // 2026-09-21) each get their own bucket — same reasoning as
@@ -3419,7 +3443,7 @@ function changeOrderFields(c) {
 // budgeted priority, partialBilled/breakdown fields for a commitment mid
 // partial-billing). One list call covers every commitment's total; line items
 // are only fetched for commitments with existing billing activity, same as DC.
-export async function listCommitments(env, { tenantId, projectId }) {
+export async function listCommitments(env, { tenantId, projectId, me = null }) {
   const [headers, lineMap, legacy] = await Promise.all([
     fetchCommitmentHeaders(env, projectId),
     getBilledCommitmentLineMap(env, tenantId, projectId),
@@ -3455,6 +3479,7 @@ export async function listCommitments(env, { tenantId, projectId }) {
     };
 
     const lineRows = lineRowsByCommitment.get(String(c.id)) || [];
+    record.myMarks = marksOf(lineRows, me);
     if (lineRows.length === 0) {
       unbilled.push(record);
       continue;

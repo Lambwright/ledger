@@ -177,7 +177,13 @@ export default function App({ user, onSignOut }) {
   const params = new URLSearchParams(window.location.search);
   // LEDGER level (Einbau ID role matrix). Viewers are read-only: the worker
   // refuses their writes, and these controls are hidden so they never hit one.
-  const viewOnly = String(user?.appRoles?.LEDGER ?? '').toLowerCase() === 'viewer';
+  const ledgerLevel = String(user?.appRoles?.LEDGER ?? '').toLowerCase();
+  const viewOnly = ledgerLevel === 'viewer';
+  // Undo: admin (and 'access', before the Live switch) can undo anyone's
+  // marks; pm/accounting only their own — each record's myMarks (worker)
+  // says which kinds the signed-in user made. The worker re-checks on undo.
+  const canUndoAnyone = ledgerLevel === 'admin' || ledgerLevel === 'access';
+  const canUndo = (rec, kind) => !viewOnly && (canUndoAnyone || rec?.myMarks?.[kind] === true);
 
   const [projectId, setProjectId] = useState(resolveProjectId(params));
   const [contractId, setContractId] = useState(resolveContractId(params));
@@ -1689,7 +1695,7 @@ export default function App({ user, onSignOut }) {
                             <button
                               className="undo-link"
                               disabled={revertingId === t.id}
-                              onClick={e => { e.stopPropagation(); handleUndoDraft(t); }}
+                              hidden={!canUndo(t, 'draft')} onClick={e => { e.stopPropagation(); handleUndoDraft(t); }}
                             >
                               {revertingId === t.id ? 'Undoing…' : 'Undo draft push'}
                             </button>
@@ -1698,7 +1704,7 @@ export default function App({ user, onSignOut }) {
                             <button
                               className="undo-link"
                               disabled={revertingId === t.id}
-                              onClick={e => { e.stopPropagation(); handleUndoOutsideBilled('tm', t, `T&M #${t.number}`); }}
+                              hidden={!canUndo(t, 'outside')} onClick={e => { e.stopPropagation(); handleUndoOutsideBilled('tm', t, `T&M #${t.number}`); }}
                             >
                               {revertingId === t.id ? 'Undoing…' : 'Undo "Already Billed"'}
                             </button>
@@ -1707,7 +1713,7 @@ export default function App({ user, onSignOut }) {
                             <button
                               className="undo-link undo-link-danger"
                               disabled={revertingId === t.id}
-                              onClick={e => { e.stopPropagation(); handleUndoInvoice(t); }}
+                              hidden={!canUndo(t, 'invoice')} onClick={e => { e.stopPropagation(); handleUndoInvoice(t); }}
                               title="Only if the invoice was already deleted in Procore"
                             >
                               {revertingId === t.id ? 'Undoing…' : 'Undo invoice (deleted in Procore)'}
@@ -1760,7 +1766,7 @@ export default function App({ user, onSignOut }) {
                           <button
                             className="undo-link"
                             disabled={revertingId === d.id}
-                            onClick={e => { e.stopPropagation(); handleUndoDcDraft(d); }}
+                            hidden={!canUndo(d, 'draft')} onClick={e => { e.stopPropagation(); handleUndoDcDraft(d); }}
                           >
                             {revertingId === d.id ? 'Undoing…' : 'Undo draft push'}
                           </button>
@@ -1770,7 +1776,7 @@ export default function App({ user, onSignOut }) {
                           <button
                             className="undo-link"
                             disabled={revertingId === d.id}
-                            onClick={e => { e.stopPropagation(); handleUndoOutsideBilled('dc', d, `"${d.vendor || d.description}"`); }}
+                            hidden={!canUndo(d, 'outside')} onClick={e => { e.stopPropagation(); handleUndoOutsideBilled('dc', d, `"${d.vendor || d.description}"`); }}
                           >
                             {revertingId === d.id ? 'Undoing…' : 'Undo "Already Billed"'}
                           </button>
@@ -1779,7 +1785,7 @@ export default function App({ user, onSignOut }) {
                           <button
                             className="undo-link undo-link-danger"
                             disabled={revertingId === d.id}
-                            onClick={e => { e.stopPropagation(); handleUndoDcInvoice(d); }}
+                            hidden={!canUndo(d, 'invoice')} onClick={e => { e.stopPropagation(); handleUndoDcInvoice(d); }}
                             title="Only if the invoice was already deleted in Procore"
                           >
                             {revertingId === d.id ? 'Undoing…' : 'Undo invoice (deleted in Procore)'}
@@ -1816,7 +1822,7 @@ export default function App({ user, onSignOut }) {
                       <button
                         className="undo-link"
                         disabled={revertingId === t.id}
-                        onClick={e => { e.stopPropagation(); handleUndoWriteOff(t); }}
+                        hidden={!canUndo(t, 'writtenOff')} onClick={e => { e.stopPropagation(); handleUndoWriteOff(t); }}
                       >
                         {revertingId === t.id ? 'Undoing…' : 'Undo write-off'}
                       </button>
@@ -1851,7 +1857,7 @@ export default function App({ user, onSignOut }) {
                       <button
                         className="undo-link"
                         disabled={revertingId === d.id}
-                        onClick={e => { e.stopPropagation(); handleUndoDcWriteOff(d); }}
+                        hidden={!canUndo(d, 'writtenOff')} onClick={e => { e.stopPropagation(); handleUndoDcWriteOff(d); }}
                       >
                         {revertingId === d.id ? 'Undoing…' : 'Undo write-off'}
                       </button>
@@ -1886,7 +1892,7 @@ export default function App({ user, onSignOut }) {
                       <button
                         className="undo-link"
                         disabled={revertingId === t.id}
-                        onClick={e => { e.stopPropagation(); handleUndoBudgeted(t); }}
+                        hidden={!canUndo(t, 'budgeted')} onClick={e => { e.stopPropagation(); handleUndoBudgeted(t); }}
                       >
                         {revertingId === t.id ? 'Undoing…' : 'Undo'}
                       </button>
@@ -1913,7 +1919,7 @@ export default function App({ user, onSignOut }) {
                       <button
                         className="undo-link"
                         disabled={revertingId === d.id}
-                        onClick={e => { e.stopPropagation(); handleUndoDcBudgeted(d); }}
+                        hidden={!canUndo(d, 'budgeted')} onClick={e => { e.stopPropagation(); handleUndoDcBudgeted(d); }}
                       >
                         {revertingId === d.id ? 'Undoing…' : 'Undo'}
                       </button>
@@ -1950,13 +1956,13 @@ export default function App({ user, onSignOut }) {
                     </div>
                     <div className="ticket-links">
                       {c.billedStatus === 'draft_co' && (
-                        <button className="undo-link" disabled={revertingId === c.id} onClick={() => handleUndoCm(c, 'draft')}>
+                        <button className="undo-link" disabled={revertingId === c.id} hidden={!canUndo(c, 'draft')} onClick={() => handleUndoCm(c, 'draft')}>
                           {revertingId === c.id ? 'Undoing…' : 'Undo draft push'}
                         </button>
                       )}
                       <a href={commitmentUrl(c)} target="_blank" rel="noreferrer">Open in Procore ↗</a>
                       {c.outsideLedgerLineCount > 0 && (
-                        <button className="undo-link" disabled={revertingId === c.id} onClick={() => handleUndoOutsideBilled('cm', c, c.number)}>
+                        <button className="undo-link" disabled={revertingId === c.id} hidden={!canUndo(c, 'outside')} onClick={() => handleUndoOutsideBilled('cm', c, c.number)}>
                           {revertingId === c.id ? 'Undoing…' : 'Undo "Already Billed"'}
                         </button>
                       )}
@@ -1964,7 +1970,7 @@ export default function App({ user, onSignOut }) {
                         <button
                           className="undo-link undo-link-danger"
                           disabled={revertingId === c.id}
-                          onClick={() => handleUndoCm(c, 'invoice')}
+                          hidden={!canUndo(c, 'invoice')} onClick={() => handleUndoCm(c, 'invoice')}
                           title="Only if the invoice was already deleted in Procore"
                         >
                           {revertingId === c.id ? 'Undoing…' : 'Undo invoice (deleted in Procore)'}
@@ -1994,7 +2000,7 @@ export default function App({ user, onSignOut }) {
                       {c.reasonNotes ? ` — ${c.reasonNotes}` : ''}
                     </div>
                     <div className="ticket-links">
-                      <button className="undo-link" disabled={revertingId === c.id} onClick={() => handleUndoCm(c, 'writeoff')}>
+                      <button className="undo-link" disabled={revertingId === c.id} hidden={!canUndo(c, 'writtenOff')} onClick={() => handleUndoCm(c, 'writeoff')}>
                         {revertingId === c.id ? 'Undoing…' : 'Undo write-off'}
                       </button>
                     </div>
@@ -2017,7 +2023,7 @@ export default function App({ user, onSignOut }) {
                     <div className="ticket-description">{c.vendor || c.title || 'Unknown vendor'}</div>
                     {c.reasonNotes && <div className="ticket-meta">{c.reasonNotes}</div>}
                     <div className="ticket-links">
-                      <button className="undo-link" disabled={revertingId === c.id} onClick={() => handleUndoCm(c, 'budgeted')}>
+                      <button className="undo-link" disabled={revertingId === c.id} hidden={!canUndo(c, 'budgeted')} onClick={() => handleUndoCm(c, 'budgeted')}>
                         {revertingId === c.id ? 'Undoing…' : 'Undo'}
                       </button>
                     </div>

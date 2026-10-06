@@ -477,7 +477,7 @@ async function handleAction(env, body, ctx) {
     if (!tenant_id || !project_id) {
       return json({ error: 'tenant_id and project_id are required' }, 400);
     }
-    const tickets = await listPendingTickets(env, { tenantId: tenant_id, projectId: project_id });
+    const tickets = await listPendingTickets(env, { tenantId: tenant_id, projectId: project_id, me: body.user_id || null });
     // Opening a project in the sidebar keeps its portfolio row current.
     ctx?.waitUntil(refreshIfStale(env, tenant_id, project_id).catch(() => {}));
     return json(tickets, 200);
@@ -588,7 +588,7 @@ async function handleAction(env, body, ctx) {
     if (!tenant_id || !project_id) {
       return json({ error: 'tenant_id and project_id are required' }, 400);
     }
-    const result = await listPendingDirectCosts(env, { tenantId: tenant_id, projectId: project_id });
+    const result = await listPendingDirectCosts(env, { tenantId: tenant_id, projectId: project_id, me: body.user_id || null });
     return json(result, 200);
   }
 
@@ -635,7 +635,7 @@ async function handleAction(env, body, ctx) {
     if (!tenant_id || !project_id) {
       return json({ error: 'tenant_id and project_id are required' }, 400);
     }
-    const result = await listCommitments(env, { tenantId: tenant_id, projectId: project_id });
+    const result = await listCommitments(env, { tenantId: tenant_id, projectId: project_id, me: body.user_id || null });
     return json(result, 200);
   }
 
