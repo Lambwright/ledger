@@ -85,6 +85,23 @@ const RESERVED_REQUESTS = 12;
 
 class RateBudgetExhausted extends Error {}
 
+// Routine background refreshing happens overnight (Ben, 2026-10-07: the
+// daytime sweep competed with PMs for Procore's 25/minute). Quiet hours are
+// 9 pm – 6 am Eastern on weekdays, and all weekend. During the day only
+// projects that changed recently (webhook-marked) are refreshed, one per run.
+const QUIET_TZ = 'America/Toronto';
+const RECENT_CHANGE_HOURS = 2; // daytime: only changes newer than this
+
+export function isQuietHours(date = new Date()) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-CA', { timeZone: QUIET_TZ, weekday: 'short', hour: 'numeric', hourCycle: 'h23' })
+      .formatToParts(date)
+      .map((p) => [p.type, p.value])
+  );
+  const hour = Number(parts.hour);
+  return parts.weekday === 'Sat' || parts.weekday === 'Sun' || hour >= 21 || hour < 6;
+}
+
 async function procoreGet(env, path) {
   const res = await procoreRequest(env, 'GET', path);
   const remaining = Number(res.headers?.['x-rate-limit-remaining']);
@@ -563,13 +580,16 @@ export function keepUserActive(env) {
 // One scheduled pass, paced to leave RESERVED_REQUESTS free for PMs:
 //   1. re-list all projects if that's more than 12 hours old,
 //   2. refresh projects a webhook marked dirty (quiet for 90s+),
-//   3. sweep stale ones: open projects daily, closed ones monthly,
+//   3. sweep stale ones: open projects nightly, closed ones monthly,
 //   4. recount one project's LEDGER records (Ben's ask 2026-09-29) — same
-//      daily/monthly cadence, skipping stages the company page hides.
-export async function runScheduled(env, { maxRefreshes = 4 } = {}) {
+//      cadence, skipping stages the company page hides.
+// Steps 3 and 4 (and older dirty marks) wait for quiet hours; see isQuietHours.
+export async function runScheduled(env) {
   const tenantId = String(env.PROCORE_COMPANY_ID);
   const log = [];
   let lastRemaining = null;
+  const night = isQuietHours();
+  const maxRefreshes = night ? 4 : 1;
   try {
     await ensureActivityColumn(env);
     const state = await dbQuery(env, `select projects_listed_at, user_active_at from portfolio_sync_state where tenant_id = $1`, [tenantId]);
@@ -603,16 +623,17 @@ export async function runScheduled(env, { maxRefreshes = 4 } = {}) {
       env,
       `select project_id from portfolio_projects
        where tenant_id = $1 and (
-         (dirty_at is not null and dirty_at < now() - interval '90 seconds')
-         or (dirty_at is null and active is not false and (
+         (dirty_at is not null and dirty_at < now() - interval '90 seconds'
+           and ($4 or dirty_at > now() - make_interval(hours => $5)))
+         or ($4 and dirty_at is null and active is not false and (
            refreshed_at is null
-           or (coalesce(stage, '') <> all($2::text[]) and refreshed_at < now() - interval '24 hours')
+           or (coalesce(stage, '') <> all($2::text[]) and refreshed_at < now() - interval '20 hours')
            or (stage = any($2::text[]) and refreshed_at < now() - interval '30 days')
          ))
        )
-       order by dirty_at asc nulls last, refreshed_at asc nulls first
+       order by dirty_at desc nulls last, refreshed_at asc nulls first
        limit $3`,
-      [tenantId, CLOSED_STAGES, maxRefreshes]
+      [tenantId, CLOSED_STAGES, maxRefreshes, night, RECENT_CHANGE_HOURS]
     );
     for (const { project_id } of due) {
       const remaining = await refreshProjectSnapshot(env, tenantId, project_id);
@@ -621,6 +642,7 @@ export async function runScheduled(env, { maxRefreshes = 4 } = {}) {
       if (remaining != null && remaining < RESERVED_REQUESTS) throw new RateBudgetExhausted();
     }
 
+    if (!night) return log; // record recounts are overnight work
     const countDue = await dbQuery(
       env,
       `select project_id from portfolio_projects
