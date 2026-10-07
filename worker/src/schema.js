@@ -46,3 +46,20 @@ export async function ensureBulkSchema(env) {
   }
   bulkSchemaReady = true;
 }
+
+let prefsSchemaReady = false;
+
+// Per-person view preferences (Ben, 2026-10-06: dashboard column setup), keyed
+// by Einbau ID username. Only ever the person's own view — never billing data.
+export async function ensurePrefsSchema(env) {
+  if (prefsSchemaReady) return;
+  await dbQuery(env, `create table if not exists user_preferences (
+    tenant_id text not null,
+    username text not null,
+    pref_key text not null,
+    value jsonb not null,
+    updated_at timestamptz not null default now(),
+    primary key (tenant_id, username, pref_key)
+  )`, []);
+  prefsSchemaReady = true;
+}

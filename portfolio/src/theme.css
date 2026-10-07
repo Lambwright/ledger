@@ -335,3 +335,22 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .bulk-option input { padding: 0; margin-top: 3px; accent-color: var(--accent); }
 .modal .field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); }
 .modal .field input { width: 100%; }
+
+/* Per-person column setup (components/ColumnPicker.jsx) */
+.column-picker { position: relative; }
+.column-picker-menu {
+  position: absolute; top: calc(100% + 4px); right: 0; z-index: 300; width: 290px; max-height: 70vh; overflow-y: auto;
+  background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-sm); box-shadow: var(--shadow-md); padding: 6px 0;
+}
+.column-picker-row { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 13px; }
+.column-picker-row:hover { background: rgba(var(--accent-rgb), 0.06); }
+.column-picker-row input { padding: 0; accent-color: var(--accent); }
+.column-picker-row.is-off .column-picker-label { color: var(--text-tertiary); }
+.column-picker-row.is-locked { opacity: 0.7; }
+.column-picker-label { flex: 1; }
+.column-move {
+  background: none; border: 1px solid var(--border-color); border-radius: 3px; color: var(--text-secondary);
+  width: 22px; height: 22px; padding: 0; cursor: pointer; font-size: 11px; line-height: 1;
+}
+.column-move:disabled { opacity: 0.3; cursor: default; }
+.column-picker-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px 4px; border-top: 1px solid var(--border-color); margin-top: 4px; }

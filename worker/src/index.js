@@ -36,6 +36,7 @@ import {
 } from './portfolio.js';
 import { queueBulkReconciliation, reopenProject, projectReconciliation } from './bulk.js';
 import { can, READ_ACTIONS, UNDO_ACTIONS, NO_ACCESS_MESSAGE } from './roles.js';
+import { getPrefs, savePref } from './prefs.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -729,6 +730,8 @@ async function handlePortfolio(request, env) {
   if (body.action === 'list') {
     return json({
       projects: await listPortfolio(env, tenantId),
+      // This person's own view settings (column setup) — see prefs.js.
+      prefs: await getPrefs(env, tenantId, user.username).catch(() => ({})),
       // For showing/hiding controls only — every action below re-checks.
       ledgerRole: level,
       isLedgerAdmin: can.bulkReconcile(level),
@@ -760,6 +763,10 @@ async function handlePortfolio(request, env) {
     await refreshProjectCounts(env, tenantId, body.project_id);
     const rows = await dbQuery(env, 'select * from portfolio_projects where tenant_id = $1 and project_id = $2', [tenantId, String(body.project_id)]);
     return json({ project: rows[0] || null }, 200);
+  }
+  // Saving your own view settings — every level (it only changes your own view).
+  if (body.action === 'save_prefs') {
+    return json(await savePref(env, tenantId, user.username, body.key, body.value), 200);
   }
   if (body.action === 'source_records') {
     if (!can.sourceRecords(level)) return json({ error: 'Source records are for LEDGER admins.' }, 403);

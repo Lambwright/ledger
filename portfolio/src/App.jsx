@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getStoredToken, verify, hasLedgerAccess, logout as doLogout } from "./auth.js";
 import { api } from "./api.js";
 import Header from "./components/Header.jsx";
@@ -6,6 +6,7 @@ import LoginScreen from "./components/LoginScreen.jsx";
 import { applyAccentPreset } from "./accentPresets.js";
 import SourceRecords from "./components/SourceRecords.jsx";
 import MultiSelect from "./components/MultiSelect.jsx";
+import ColumnPicker from "./components/ColumnPicker.jsx";
 import { BulkBadge, BulkDetail, BulkDialog, hasActiveBatch, reopenMessage } from "./components/BulkReconcile.jsx";
 
 const PROCORE_ORIGIN = "https://us02.procore.com";
@@ -35,24 +36,127 @@ const isReportable = (p) => p.budget_status === "ok" || p.budget_status === "no_
 const commitmentsLeft = (p) =>
   p.committed_costs == null ? null : (n(p.committed_costs) || 0) - (n(p.sub_invoices) || 0);
 
-// Ordered by importance (Ben, 2026-09-29): margin vs budget, LEDGER's record
-// counts, then cost / invoicing / contract / what's left.
-const COLUMNS = [
-  { key: "name", label: "Project", sort: (p) => (p.name || "").toLowerCase() },
-  { key: "stage", label: "Stage", sort: (p) => p.stage || "" },
-  { key: "margin_to_date_pct", label: "Margin %", num: true },
-  { key: "budgeted_margin_pct", label: "Budgeted %", num: true },
-  { key: "unbilled_count", label: "Unbilled", num: true },
-  { key: "billed_count", label: "Billed", num: true },
-  { key: "written_off_count", label: "Written off", num: true },
-  { key: "budgeted_count", label: "Budgeted", num: true },
-  { key: "jtd_cost", label: "Cost", num: true },
-  { key: "invoiced", label: "Invoiced", num: true },
-  { key: "revised_contract", label: "Contract", num: true },
-  { key: "invoicing_remaining", label: "Left to invoice", num: true },
-  { key: "commitments_left", label: "Commitments left", num: true, sort: commitmentsLeft },
-  { key: "refreshed_at", label: "Updated", sort: (p) => (p.refreshed_at ? new Date(p.refreshed_at).getTime() : 0) },
+// Every column the table can show (Ben, 2026-10-06: each person picks, hides
+// and orders their own — see ColumnPicker; saved per Einbau ID on the worker).
+// Catalogue order = the default order, by importance (Ben, 2026-09-29): margin
+// vs budget, LEDGER's record counts, then cost / invoicing / contract / what's
+// left. `hidden: true` = available but off until someone turns it on.
+// "Project" is always first and can't be hidden.
+const noBudgetFor = (p) => p.budget_status === "no_budget";
+const moneyCell = (key, extra = "") => (p) => (
+  <td className={`num${extra}${n(p[key]) < 0 ? " neg" : ""}`}>{money(p[key])}</td>
+);
+const countCell = (key, muted = true) => (p) => (
+  <td className={`num${muted ? " cell-muted" : ""}`}>{p[key] ?? "—"}</td>
+);
+
+const COLUMN_CATALOG = [
+  {
+    key: "name", label: "Project", locked: true, sort: (p) => (p.name || "").toLowerCase(),
+    cell: (p, { isAdmin }) => (
+      <td className="cell-name">
+        <div>{p.name}</div>
+        <div className="cell-sub">
+          {[p.project_number, p.region, p.departments].filter(Boolean).join(" · ")}
+          {noBudgetFor(p) && <span className="badge badge-warn">Budget not set up</span>}
+          {p.budget_status === "no_view" && <span className="badge badge-muted">No budget view</span>}
+          {!p.refreshed_at && <span className="badge badge-muted">Not loaded</span>}
+          <BulkBadge project={p} isAdmin={isAdmin} />
+        </div>
+      </td>
+    ),
+  },
+  { key: "stage", label: "Stage", sort: (p) => p.stage || "", cell: (p) => <td>{p.stage || "—"}</td> },
+  {
+    key: "margin_to_date_pct", label: "Margin %", num: true,
+    cell: (p) => (
+      <td className={`num${marginClass(p)}`} title={p.margin_to_date != null ? `${money(p.margin_to_date)} margin to date` : undefined}>
+        {pct(p.margin_to_date_pct)}
+      </td>
+    ),
+  },
+  {
+    key: "margin_to_date", label: "Margin $", num: true,
+    cell: (p) => <td className={`num${marginClass(p)}`}>{money(p.margin_to_date)}</td>,
+  },
+  {
+    key: "budgeted_margin_pct", label: "Budgeted %", num: true,
+    cell: (p) => (
+      <td
+        className="num cell-muted"
+        title={p.budget_basis === "original"
+          ? `Original quote: ${money(p.original_contract)} contract vs ${money(p.original_budget)} budget (no budget changes yet)`
+          : p.budget_basis === "live" ? "Live budget (budget changes have been made)" : undefined}
+      >
+        {noBudgetFor(p) ? "—" : pct(p.budgeted_margin_pct)}
+        {!noBudgetFor(p) && p.budget_basis === "original" && <span className="basis-mark">Q</span>}
+      </td>
+    ),
+  },
+  {
+    key: "budgeted_margin", label: "Budgeted margin $", num: true, hidden: true,
+    cell: (p) => <td className="num cell-muted">{noBudgetFor(p) ? "—" : money(p.budgeted_margin)}</td>,
+  },
+  { key: "unbilled_count", label: "Unbilled", num: true, cell: (p) => <td className={`num${n(p.unbilled_count) > 0 ? " cell-key" : ""}`}>{p.unbilled_count ?? "—"}</td> },
+  { key: "billed_count", label: "Billed", num: true, cell: countCell("billed_count") },
+  { key: "written_off_count", label: "Written off", num: true, cell: countCell("written_off_count") },
+  { key: "budgeted_count", label: "Budgeted", num: true, cell: countCell("budgeted_count") },
+  { key: "jtd_cost", label: "Cost", num: true, cell: moneyCell("jtd_cost") },
+  { key: "direct_costs", label: "Direct costs", num: true, hidden: true, cell: moneyCell("direct_costs") },
+  { key: "sub_invoices", label: "Sub invoices", num: true, hidden: true, cell: moneyCell("sub_invoices") },
+  { key: "committed_costs", label: "Committed", num: true, hidden: true, cell: moneyCell("committed_costs") },
+  { key: "revised_budget", label: "Revised budget", num: true, hidden: true, cell: moneyCell("revised_budget") },
+  { key: "invoiced", label: "Invoiced", num: true, cell: moneyCell("invoiced") },
+  { key: "pct_invoiced", label: "% Invoiced", num: true, hidden: true, cell: (p) => <td className="num">{pct(p.pct_invoiced)}</td> },
+  { key: "revised_contract", label: "Contract", num: true, cell: moneyCell("revised_contract") },
+  { key: "original_contract", label: "Original contract", num: true, hidden: true, cell: moneyCell("original_contract") },
+  {
+    key: "invoicing_remaining", label: "Left to invoice", num: true,
+    cell: (p) => (
+      <td className="num">
+        <div className="pct-cell">
+          <span>{money(p.invoicing_remaining)}</span>
+          {n(p.pct_invoiced) != null && (
+            <span className="pct-bar" title={`${pct(p.pct_invoiced)} invoiced`}>
+              <span style={{ width: `${Math.min(100, Math.max(0, n(p.pct_invoiced)))}%` }} />
+            </span>
+          )}
+        </div>
+      </td>
+    ),
+  },
+  { key: "commitments_left", label: "Commitments left", num: true, sort: commitmentsLeft, cell: (p) => <td className="num">{money(commitmentsLeft(p))}</td> },
+  { key: "region", label: "Region", hidden: true, sort: (p) => p.region || "", cell: (p) => <td>{p.region || "—"}</td> },
+  { key: "departments", label: "Department", hidden: true, sort: (p) => p.departments || "", cell: (p) => <td>{p.departments || "—"}</td> },
+  { key: "refreshed_at", label: "Updated", sort: (p) => (p.refreshed_at ? new Date(p.refreshed_at).getTime() : 0), cell: (p) => <td className="cell-sub">{ago(p.refreshed_at)}</td> },
 ];
+const CATALOG_BY_KEY = new Map(COLUMN_CATALOG.map((c) => [c.key, c]));
+
+// Default setup: catalogue order, catalogue defaults.
+const defaultColumnSetup = () => ({
+  order: COLUMN_CATALOG.map((c) => c.key),
+  hidden: COLUMN_CATALOG.filter((c) => c.hidden).map((c) => c.key),
+});
+
+// A saved setup → the columns to draw. Unknown keys are dropped; columns added
+// to the catalogue since someone saved show up in their default position and
+// default visibility, so nobody misses a new column.
+function resolveColumns(setup) {
+  const saved = setup && Array.isArray(setup.order) ? setup.order.filter((k) => CATALOG_BY_KEY.has(k)) : null;
+  if (!saved) return COLUMN_CATALOG.filter((c) => !c.hidden);
+  const order = [...saved];
+  COLUMN_CATALOG.forEach((c, i) => {
+    if (!order.includes(c.key)) {
+      const before = COLUMN_CATALOG.slice(0, i).map((x) => x.key).filter((k) => order.includes(k)).pop();
+      order.splice(before ? order.indexOf(before) + 1 : 0, 0, c.key);
+    }
+  });
+  const known = new Set(saved);
+  const hidden = new Set((setup.hidden || []).filter((k) => CATALOG_BY_KEY.has(k)));
+  COLUMN_CATALOG.forEach((c) => { if (!known.has(c.key) && c.hidden) hidden.add(c.key); });
+  const ordered = ["name", ...order.filter((k) => k !== "name")];
+  return ordered.map((k) => CATALOG_BY_KEY.get(k)).filter((c) => c.locked || !hidden.has(c.key));
+}
 
 // Margin % coloured against the project's own budget: red below zero,
 // amber when trailing budget, green at or above it.
@@ -106,6 +210,8 @@ export default function App() {
   // Bulk reconciliation (LEDGER admins only — the worker checks it too).
   const [isAdmin, setIsAdmin] = useState(false);
   const [canSourceRecords, setCanSourceRecords] = useState(false); // admin-only drill-down
+  // This person's column setup ({order, hidden}); null = the default.
+  const [columnSetup, setColumnSetup] = useState(null);
   const [selected, setSelected] = useState(() => new Set());
   const [bulkOpen, setBulkOpen] = useState(false);
   const [notice, setNotice] = useState(null);
@@ -147,6 +253,7 @@ export default function App() {
         setProjects(data.projects || []);
         setIsAdmin(data.isLedgerAdmin === true);
         setCanSourceRecords(data.canSourceRecords === true);
+        setColumnSetup(data.prefs?.portfolio_columns || null);
       })
       .catch((e) => (e.unauthorized ? handleLogout() : setError(e.message)))
       .finally(() => setLoading(false));
@@ -195,7 +302,7 @@ export default function App() {
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const col = COLUMNS.find((c) => c.key === sort.key);
+    const col = CATALOG_BY_KEY.get(sort.key);
     const valueOf = col?.sort || ((p) => n(p[sort.key]));
     return projects
       .filter((p) => showAll || isReportable(p))
@@ -268,7 +375,14 @@ export default function App() {
   const selectable = visible.filter((p) => !hasActiveBatch(p));
   const selectedProjects = projects.filter((p) => selected.has(p.project_id));
   const allSelected = selectable.length > 0 && selectable.every((p) => selected.has(p.project_id));
-  const colCount = COLUMNS.length + (isAdmin ? 1 : 0);
+  const visibleColumns = resolveColumns(columnSetup);
+  const colCount = visibleColumns.length + (isAdmin ? 1 : 0);
+
+  // Saved straight away; a failed save keeps the change on screen and says so.
+  function changeColumns(next) {
+    setColumnSetup(next);
+    api.savePrefs("portfolio_columns", next).catch((e) => setError(`Couldn't save your columns: ${e.message}`));
+  }
 
   function toggleSelected(id) {
     setSelected((prev) => {
@@ -394,6 +508,12 @@ export default function App() {
           <label className="filter-toggle" title="Overhead projects, projects without the Custom Reporting budget view, and projects not loaded yet">
             <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} /> Show {hiddenCount} hidden (no budget view or not loaded yet)
           </label>
+          <ColumnPicker
+            catalog={COLUMN_CATALOG}
+            setup={columnSetup || defaultColumnSetup()}
+            onChange={changeColumns}
+            onReset={() => changeColumns(defaultColumnSetup())}
+          />
           <button className="btn btn-ghost btn-sm" onClick={load} disabled={loading}>{loading ? "Loading…" : "Reload"}</button>
         </div>
 
@@ -436,7 +556,7 @@ export default function App() {
                     <input type="checkbox" aria-label="Select all shown projects" checked={allSelected} onChange={toggleSelectAll} />
                   </th>
                 )}
-                {COLUMNS.map((c) => (
+                {visibleColumns.map((c) => (
                   <th key={c.key} className={c.num ? "num" : ""} aria-sort={sort.key === c.key ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}>
                     <button type="button" className="th-sort" onClick={() => toggleSort(c.key)}>
                       {c.label}{sort.key === c.key ? (sort.dir === "asc" ? " ▲" : " ▼") : ""}
@@ -463,48 +583,7 @@ export default function App() {
                         />
                       </td>
                     )}
-                    <td className="cell-name">
-                      <div>{p.name}</div>
-                      <div className="cell-sub">
-                        {[p.project_number, p.region, p.departments].filter(Boolean).join(" · ")}
-                        {noBudget && <span className="badge badge-warn">Budget not set up</span>}
-                        {p.budget_status === "no_view" && <span className="badge badge-muted">No budget view</span>}
-                        {!p.refreshed_at && <span className="badge badge-muted">Not loaded</span>}
-                        <BulkBadge project={p} isAdmin={isAdmin} />
-                      </div>
-                    </td>
-                    <td>{p.stage || "—"}</td>
-                    <td className={`num${marginClass(p)}`} title={p.margin_to_date != null ? `${money(p.margin_to_date)} margin to date` : undefined}>
-                      {pct(p.margin_to_date_pct)}
-                    </td>
-                    <td
-                      className="num cell-muted"
-                      title={p.budget_basis === "original"
-                        ? `Original quote: ${money(p.original_contract)} contract vs ${money(p.original_budget)} budget (no budget changes yet)`
-                        : p.budget_basis === "live" ? "Live budget (budget changes have been made)" : undefined}
-                    >
-                      {noBudget ? "—" : pct(p.budgeted_margin_pct)}
-                      {!noBudget && p.budget_basis === "original" && <span className="basis-mark">Q</span>}
-                    </td>
-                    <td className={`num${n(p.unbilled_count) > 0 ? " cell-key" : ""}`}>{p.unbilled_count ?? "—"}</td>
-                    <td className="num cell-muted">{p.billed_count ?? "—"}</td>
-                    <td className="num cell-muted">{p.written_off_count ?? "—"}</td>
-                    <td className="num cell-muted">{p.budgeted_count ?? "—"}</td>
-                    <td className="num">{money(p.jtd_cost)}</td>
-                    <td className="num">{money(p.invoiced)}</td>
-                    <td className="num">{money(p.revised_contract)}</td>
-                    <td className="num">
-                      <div className="pct-cell">
-                        <span>{money(p.invoicing_remaining)}</span>
-                        {n(p.pct_invoiced) != null && (
-                          <span className="pct-bar" title={`${pct(p.pct_invoiced)} invoiced`}>
-                            <span style={{ width: `${Math.min(100, Math.max(0, n(p.pct_invoiced)))}%` }} />
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="num">{money(commitmentsLeft(p))}</td>
-                    <td className="cell-sub">{ago(p.refreshed_at)}</td>
+                    {visibleColumns.map((c) => <Fragment key={c.key}>{c.cell(p, { isAdmin })}</Fragment>)}
                   </tr>,
                   isOpen && (
                     <tr key={`${p.project_id}-detail`} className="detail-row">

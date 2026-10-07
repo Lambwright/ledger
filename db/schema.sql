@@ -295,3 +295,14 @@ create index if not exists bulk_reconciliations_project on bulk_reconciliations 
 alter table billing_records add column if not exists bulk_reconciliation_id uuid;
 -- write_offs.reason_category also allows 'already_billed' and 'bulk_reconciliation'
 -- (constraint write_offs_reason_category_check, replaced by ensureBulkSchema, NOT VALID).
+
+-- Per-person view preferences (2026-10-06), e.g. dashboard column setup.
+-- Created by the worker on first use (worker/src/schema.js ensurePrefsSchema).
+create table if not exists user_preferences (
+  tenant_id text not null,
+  username text not null,          -- Einbau ID username
+  pref_key text not null,          -- allow-listed in worker/src/prefs.js
+  value jsonb not null,
+  updated_at timestamptz not null default now(),
+  primary key (tenant_id, username, pref_key)
+);

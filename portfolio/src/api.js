@@ -28,4 +28,6 @@ export const api = {
   bulkReconcile: ({ projectIds, disposition, notes, invoiceNumber }) =>
     call("bulk_reconcile", { project_ids: projectIds, disposition, notes, invoice_number: invoiceNumber }),
   reopenProject: (projectId) => call("reopen_project", { project_id: projectId }),
+  // This person's own dashboard preferences (e.g. column setup), any level.
+  savePrefs: (key, value) => call("save_prefs", { key, value }),
 };
