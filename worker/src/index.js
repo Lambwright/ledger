@@ -32,7 +32,7 @@ import {
 } from './app.js';
 import {
   handleProcoreWebhook, refreshIfStale, refreshProjectSnapshot, refreshProjectCounts, saveProjectCounts, projectSourceRecords,
-  runScheduled, verifyEinbauUser, verifyEinbauSession, hasLedgerApp, listPortfolio, searchProjects, markUserActive
+  runScheduled, verifyEinbauUser, verifyEinbauSession, hasLedgerApp, listPortfolio, searchProjects, markUserActive, keepUserActive
 } from './portfolio.js';
 import { queueBulkReconciliation, reopenProject, projectReconciliation } from './bulk.js';
 import { can, READ_ACTIONS, UNDO_ACTIONS, NO_ACCESS_MESSAGE } from './roles.js';
@@ -753,16 +753,22 @@ async function handlePortfolio(request, env) {
     if (!body.project_id) return json({ error: 'project_id is required' }, 400);
     return json(await reopenProject(env, tenantId, body.project_id, user), 200);
   }
-  // Drill-ins call Procore live — background refreshing pauses for them too.
-  if (body.action === 'refresh_project' || body.action === 'source_records') {
-    await markUserActive(env).catch(() => {});
-  }
+  // Drill-ins call Procore live — background refreshing pauses for them too,
+  // for as long as they run.
   if (body.action === 'refresh_project') {
     if (!body.project_id) return json({ error: 'project_id is required' }, 400);
-    await refreshProjectSnapshot(env, tenantId, body.project_id);
-    await refreshProjectCounts(env, tenantId, body.project_id);
+    const stop = keepUserActive(env);
+    try {
+      await refreshProjectSnapshot(env, tenantId, body.project_id);
+      await refreshProjectCounts(env, tenantId, body.project_id);
+    } finally {
+      stop();
+    }
     const rows = await dbQuery(env, 'select * from portfolio_projects where tenant_id = $1 and project_id = $2', [tenantId, String(body.project_id)]);
     return json({ project: rows[0] || null }, 200);
+  }
+  if (body.action === 'source_records') {
+    await markUserActive(env).catch(() => {});
   }
   // Saving your own view settings — every level (it only changes your own view).
   if (body.action === 'save_prefs') {
@@ -774,6 +780,18 @@ async function handlePortfolio(request, env) {
     return json(await projectSourceRecords(env, tenantId, body.project_id), 200);
   }
   return json({ error: `unknown action: ${body.action}` }, 400);
+}
+
+// A copy of res (headers editable) that calls done() once its body has been
+// fully sent — for streamed actions that's when the work actually finishes.
+function whenBodyDone(res, done) {
+  if (!res.body) {
+    done();
+    return new Response(null, res);
+  }
+  // If the page goes away mid-stream flush never runs; keepUserActive's own
+  // 15-minute cap ends it then.
+  return new Response(res.body.pipeThrough(new TransformStream({ flush() { done(); } })), res);
 }
 
 export default {
@@ -844,13 +862,19 @@ export default {
           : null;
         // Every record is attributed to the signed-in person, never whatever the page sent.
         body.user_id = session.user.username;
-        // Background refreshing pauses while people are using LEDGER (see markUserActive).
-        ctx.waitUntil(markUserActive(env).catch(() => {}));
-        const res = await handleAction(env, body, ctx);
-        if (!session.refreshedToken) return res;
-        const withToken = new Response(res.body, res);
-        withToken.headers.set('X-Refreshed-Token', session.refreshedToken);
-        return withToken;
+        // Background refreshing pauses while people are using LEDGER — for the
+        // whole request, streamed invoices included (see keepUserActive).
+        const stop = keepUserActive(env);
+        let res;
+        try {
+          res = await handleAction(env, body, ctx);
+        } catch (e) {
+          stop();
+          throw e;
+        }
+        const out = whenBodyDone(res, stop);
+        if (session.refreshedToken) out.headers.set('X-Refreshed-Token', session.refreshedToken);
+        return out;
       }
       if (body.target === 'db') {
         return await handleGenericDb(env, body);

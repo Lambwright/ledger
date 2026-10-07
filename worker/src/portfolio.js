@@ -537,7 +537,7 @@ async function ensureActivityColumn(env) {
 }
 
 export async function markUserActive(env) {
-  if (Date.now() - lastActivityMark < 30 * 1000) return;
+  if (Date.now() - lastActivityMark < 25 * 1000) return;
   lastActivityMark = Date.now();
   await ensureActivityColumn(env);
   await dbQuery(
@@ -546,6 +546,18 @@ export async function markUserActive(env) {
      on conflict (tenant_id) do update set user_active_at = now()`,
     [String(env.PROCORE_COMPANY_ID)]
   );
+}
+
+// Holds the pause for as long as a person's request is still running, not just
+// when it starts: a refresh or invoice that outlasted the 3-minute pause let
+// the background sweep back in to compete for Procore's 25/min (Ben,
+// 2026-10-07). Re-marks every 30s, capped at 15 minutes; returns stop().
+export function keepUserActive(env) {
+  const tick = () => markUserActive(env).catch(() => {});
+  tick();
+  const timer = setInterval(tick, 30 * 1000);
+  const cap = setTimeout(() => clearInterval(timer), 15 * 60 * 1000);
+  return () => { clearInterval(timer); clearTimeout(cap); };
 }
 
 // One scheduled pass, paced to leave RESERVED_REQUESTS free for PMs:
