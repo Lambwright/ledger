@@ -245,6 +245,7 @@ create table if not exists portfolio_projects (
   budget_basis text,                  -- 'original' = original_contract vs original_budget (no budget changes yet); 'live' = Procore's revised figures
   budget_view_cost numeric,           -- budget view job-to-date cost; revised_contract/invoiced/jtd_cost come from the records since 2026-10-07
   budget_view_invoiced numeric,       -- budget view invoicing to date; a gap = money on codes not in the budget
+  fiscal_year text,                   -- the project's "Fiscal Year" custom field label (custom_field_562949954054370)
   retainage numeric,
   budget_status text,                 -- 'ok' | 'no_budget' | 'no_view'
   refresh_error text,

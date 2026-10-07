@@ -73,6 +73,7 @@ export async function ensurePortfolioActualsColumns(env) {
   if (portfolioActualsReady) return;
   await dbQuery(env, `alter table portfolio_projects
     add column if not exists budget_view_cost numeric,
-    add column if not exists budget_view_invoiced numeric`, []);
+    add column if not exists budget_view_invoiced numeric,
+    add column if not exists fiscal_year text`, []);
   portfolioActualsReady = true;
 }

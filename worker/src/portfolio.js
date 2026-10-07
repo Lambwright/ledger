@@ -42,6 +42,10 @@ const COLUMN_MAP = {
 // Percent columns are recomputed from the summed totals — never summed.
 const PERCENT_COLUMNS = new Set(['pct_invoiced', 'margin_to_date_pct', 'budgeted_margin_pct']);
 
+// The "Fiscal Year" project custom field (a dropdown; Ben, 2026-10-07). The
+// project show call already returns it as { id, label } — no extra request.
+const FISCAL_YEAR_FIELD = 'custom_field_562949954054370';
+
 // Einbau's convention for a Prime Contract that bills costs straight through
 // (LEDGER's standalone invoices use it too). Their revenue isn't part of the
 // quote the original budget was built for.
@@ -230,7 +234,9 @@ export async function refreshProjectSnapshot(env, tenantId, projectId) {
     values.budgeted_margin_pct = share(values.budgeted_margin, values.revised_contract);
   }
 
-  const cols = [...Object.keys(COLUMN_MAP), 'original_contract', 'budget_basis', 'budget_view_cost', 'budget_view_invoiced'];
+  values.fiscal_year = p.custom_fields?.[FISCAL_YEAR_FIELD]?.value?.label ?? null;
+
+  const cols = [...Object.keys(COLUMN_MAP), 'original_contract', 'budget_basis', 'budget_view_cost', 'budget_view_invoiced', 'fiscal_year'];
   const params = [
     tenantId, String(projectId),
     p.name || null, p.project_number || null, p.project_stage?.name || p.stage || null,

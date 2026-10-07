@@ -84,6 +84,7 @@ const COLUMN_CATALOG = [
     ),
   },
   { key: "stage", label: "Stage", sort: (p) => p.stage || "", cell: (p) => <td>{p.stage || "—"}</td> },
+  { key: "fiscal_year", label: "Fiscal year", sort: (p) => p.fiscal_year || "", cell: (p) => <td>{p.fiscal_year || "—"}</td> },
   {
     key: "margin_to_date_pct", label: "Margin %", num: true,
     cell: (p) => (
@@ -204,6 +205,7 @@ export default function App() {
 
   const [search, setSearch] = useState("");
   const [stageFilter, setStageFilter] = useState(() => new Set()); // empty = all stages
+  const [fiscalFilter, setFiscalFilter] = useState(() => new Set()); // empty = all fiscal years
   const [region, setRegion] = useState("");
   const [dept, setDept] = useState("");
   const [showAll, setShowAll] = useState(false);
@@ -295,6 +297,12 @@ export default function App() {
   }
 
   const stages = useMemo(() => uniqueValues(projects, "stage"), [projects]);
+  // Fiscal year options: the values on the projects shown, never a typed list.
+  const fiscalYears = useMemo(() => {
+    const shown = projects.filter((p) => showAll || isReportable(p));
+    const values = uniqueValues(shown, "fiscal_year");
+    return shown.some((p) => !p.fiscal_year) ? [...values, "(none)"] : values;
+  }, [projects, showAll]);
   const regions = useMemo(() => uniqueValues(projects, "region"), [projects]);
   // Department options come from the projects actually shown (Ben, 2026-10-06):
   // never a hand-typed list, never a department that would filter to nothing.
@@ -329,6 +337,7 @@ export default function App() {
         return invoiceFilter === "done" ? done : !done;
       })
       .filter((p) => stageFilter.size === 0 || stageFilter.has(p.stage))
+      .filter((p) => fiscalFilter.size === 0 || fiscalFilter.has(p.fiscal_year || "(none)"))
       .filter((p) => !region || p.region === region)
       .filter((p) => !dept || String(p.departments || "").split(", ").includes(dept))
       .filter((p) => !q || `${p.name} ${p.project_number || ""}`.toLowerCase().includes(q))
@@ -341,7 +350,7 @@ export default function App() {
         const cmp = va < vb ? -1 : va > vb ? 1 : 0;
         return sort.dir === "asc" ? cmp : -cmp;
       });
-  }, [projects, search, stageFilter, region, dept, showAll, invoiceFilter, sort]);
+  }, [projects, search, stageFilter, fiscalFilter, region, dept, showAll, invoiceFilter, sort]);
 
   // Headline figures always match the projects currently shown (Ben, 2026-09-29).
   const totals = useMemo(() => {
@@ -509,6 +518,7 @@ export default function App() {
         <div className="filters">
           <input className="filter-search" placeholder="Search project name or number" value={search} onChange={(e) => setSearch(e.target.value)} />
           <MultiSelect label="Stage" allLabel="All stages" options={stages} selected={stageFilter} onChange={setStageFilter} />
+          <MultiSelect label="Fiscal year" allLabel="All fiscal years" options={fiscalYears} selected={fiscalFilter} onChange={setFiscalFilter} />
           <select value={region} onChange={(e) => setRegion(e.target.value)} aria-label="Region">
             <option value="">All regions</option>
             {regions.map((s) => <option key={s}>{s}</option>)}
