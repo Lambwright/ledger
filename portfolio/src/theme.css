@@ -254,6 +254,8 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
   text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-tertiary);
 }
 .detail-grid dd { font-family: 'JetBrains Mono', monospace; font-size: 13px; margin-bottom: 6px; }
+.detail-grid dt.detail-total { color: var(--text-secondary); }
+.detail-grid dd.detail-total { font-weight: 700; }
 .detail-note { font-size: 12px; line-height: 1.5; color: var(--yellow); }
 .detail-error { color: #f1a3a3; }
 .detail-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

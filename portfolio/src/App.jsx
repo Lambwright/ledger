@@ -150,6 +150,34 @@ const COLUMN_CATALOG = [
 ];
 const CATALOG_BY_KEY = new Map(COLUMN_CATALOG.map((c) => [c.key, c]));
 
+// Header tooltips: what each figure is and where it comes from.
+const COLUMN_TIPS = {
+  stage: "The project's stage in Procore",
+  fiscal_year: "The project's Fiscal Year field in Procore",
+  margin_to_date_pct: "Margin to date: (invoiced − cost) ÷ invoiced. Red below zero, amber behind budgeted, green at or above it",
+  margin_to_date: "Margin to date in dollars: invoiced − cost",
+  budgeted_margin_pct: "Planned margin. Marked Q: the original quote (original contract vs original budget) until the budget changes; after that, contract − revised budget",
+  budgeted_margin: "Planned margin in dollars (see Budgeted %)",
+  unbilled_count: "T&M tickets, direct costs and commitments not yet billed, written off or marked budgeted in LEDGER",
+  billed_count: "Records billed through LEDGER (or marked Already Billed)",
+  written_off_count: "Records written off in LEDGER",
+  budgeted_count: "Records marked as budgeted in LEDGER",
+  jtd_cost: "Cost to date = direct costs + subcontractor invoices (drafts excluded)",
+  direct_costs: "Direct costs in Procore, drafts excluded",
+  sub_invoices: "Each commitment's latest subcontractor invoice to date, drafts excluded",
+  committed_costs: "Total value of commitments, from the project's budget",
+  revised_budget: "The project's budget after approved budget changes",
+  invoiced: "Owner invoices to date, before retainage, drafts excluded",
+  pct_invoiced: "Invoiced ÷ contract",
+  revised_contract: "Approved prime contracts, including approved change orders",
+  original_contract: "Approved prime contracts before change orders, pass-through contracts excluded",
+  invoicing_remaining: "Contract − invoiced",
+  commitments_left: "Committed − subcontractor invoices to date: what's still to be paid out on commitments",
+  region: "The project's region in Procore",
+  departments: "The project's department in Procore",
+  refreshed_at: "When LEDGER last refreshed this project from Procore. Click a row to refresh it now",
+};
+
 // Default setup: catalogue order, catalogue defaults.
 const defaultColumnSetup = () => ({
   order: COLUMN_CATALOG.map((c) => c.key),
@@ -545,8 +573,9 @@ export default function App() {
         </div>
 
         <div className="freshness">
-          {visible.length} project{visible.length === 1 ? "" : "s"} shown. Figures come from each project's budget
-          (Custom Reporting View) as of the "Updated" time; open a project for a live refresh.
+          {visible.length} project{visible.length === 1 ? "" : "s"} shown. Contract, invoicing and cost come from
+          Procore's records; budget and commitments from the project's budget (Custom Reporting View). All as of the
+          "Updated" time; open a project for a live refresh. Hover a column heading for what it means.
           {notLoaded > 0 && ` ${notLoaded} project${notLoaded === 1 ? " hasn't" : "s haven't"} been loaded yet.`}
           {" "}Budgeted % marked Q is the original quote (original contract vs original budget, pass-through contracts
           excluded), held until the project's budget changes.
@@ -584,7 +613,7 @@ export default function App() {
                   </th>
                 )}
                 {visibleColumns.map((c) => (
-                  <th key={c.key} className={c.num ? "num" : ""} aria-sort={sort.key === c.key ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}>
+                  <th key={c.key} className={c.num ? "num" : ""} title={COLUMN_TIPS[c.key]} aria-sort={sort.key === c.key ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}>
                     <button type="button" className="th-sort" onClick={() => toggleSort(c.key)}>
                       {c.label}{sort.key === c.key ? (sort.dir === "asc" ? " ▲" : " ▼") : ""}
                     </button>
@@ -619,7 +648,8 @@ export default function App() {
                           <BulkDetail project={p} isAdmin={isAdmin} onReopen={reopen} busy={reopeningId === p.project_id} />
                           <dl className="detail-grid">
                             <dt>Direct costs</dt><dd>{money(p.direct_costs)}</dd>
-                            <dt>Subcontractor invoices</dt><dd>{money(p.sub_invoices)}</dd>
+                            <dt>+ Subcontractor invoices</dt><dd>{money(p.sub_invoices)}</dd>
+                            <dt className="detail-total">= Cost to date</dt><dd className="detail-total">{money(p.jtd_cost)}</dd>
                             <dt>Committed costs</dt><dd>{money(p.committed_costs)}</dd>
                             <dt>Revised budget</dt><dd>{money(p.revised_budget)}</dd>
                           </dl>
@@ -635,8 +665,7 @@ export default function App() {
                           </div>
                           {noBudget && (
                             <div className="detail-note">
-                              This project's budget has no revised budget amount, so budgeted margin isn't meaningful yet. Costs on
-                              cost codes that aren't added to the budget don't show up in these figures at all.
+                              This project's budget has no revised budget amount, so budgeted margin isn't meaningful yet.
                             </div>
                           )}
                           {p.refresh_error && <div className="detail-note detail-error">{p.refresh_error}</div>}
