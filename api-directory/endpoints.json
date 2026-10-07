@@ -2,7 +2,7 @@
   "company_id": "562949953508586",
   "company_name": "Einbau",
   "test_project_id": "562949954996998",
-  "last_updated": "2026-09-29",
+  "last_updated": "2026-10-07",
   "test_project_name": "000_000_1 - Test Project 1",
   "endpoints": [
     {
@@ -333,8 +333,8 @@
       "query_params": {
         "project_id": "{project_id}"
       },
-      "verification": "doc_confirmed_untested",
-      "notes": "Simpler alternative to the prime_contracts-nested list when you just need a project's invoices without already knowing the prime_contract_id. Show/Delete single: /rest/v1.0/payment_applications/{id}?project_id=... (Delete is BETA)."
+      "verification": "verified",
+      "notes": "Simpler alternative to the prime_contracts-nested list when you just need a project's invoices without already knowing the prime_contract_id. Show/Delete single: /rest/v1.0/payment_applications/{id}?project_id=... (Delete is BETA). VERIFIED live 2026-10-07 on KPS: GET /rest/v1.0/payment_applications?project_id=&per_page=300 returns ALL owner invoices across all the project's Prime Contracts in one call (13 on KPS). Fields include status, total_amount_accrued_this_period (gross), g702, contract, billing_period. Sum of non-draft accrued = budget view 'Invoicing to Date' when all codes are in budget. LEDGER portfolio uses it for 'invoiced'. Note prime_contracts' owner_invoices_amount is NET of retainage (Victoria Secret WEM: 1494.84 vs 1660.94 accrued), so it's not used."
     },
     {
       "name": "List Prime Contracts",
@@ -604,6 +604,14 @@
       "status_code": 401,
       "verification": "verified",
       "notes": "Captured by Ben 2026-09-29 from the browser (web page https://us02.procore.com/webclients/host/companies/{company}/projects/{procore_project_id}/tools/estimating/estimate?proposalId={proposal_id}). Separate host, NOT api.procore.com. The Estimating project id differs from the Procore project id (562949954065278 vs 562949955178988 for the same job). Tested from LEDGER's worker with its client_credentials token: without X-Procore-Company-Id -> 500 'Missing X-Procore-Company-Id header'; with it (plus Procore-Company-Id, and with/without X-Procore-Project-Id) -> 401 {errorType:'NotLoggedIn','User is not logged in'}. Likely needs the browser's session, not an OAuth app token. Response bodies Ben shared: one has the estimate's settings (margin % by category, e.g. labor 31/41 = margin on SELL, laborCost $/hr, adjustments, summaryHash); another has totals (laborCost, laborSales, itemCost, itemSales, subtotal, total) — budgeted margin = (total - laborCost - itemCost) / total (30.66% on the sample: $56,153.55 on $183,140.49). Paths /proposal/{id} (405) and /proposals (404) don't exist."
+    },
+    {
+      "name": "Budget view blind spot — codes not in the budget",
+      "method": "GET",
+      "path": "/rest/v1.0/budget_views/{id}/summary_rows?project_id=",
+      "status_code": 200,
+      "verification": "verified",
+      "notes": "Verified 2026-10-07: the budget view only counts money on cost codes ADDED to the budget. Walmart 1095 Vaughan Survey (2026_0277, no budget) showed contract/invoiced $0 while its Prime Contract was $640 / $640 invoiced. KPS: view invoiced 241,774.74 vs real 246,734.17 (an under-review invoice and a contract whose codes weren't budgeted). LEDGER's portfolio now takes contract (approved/complete PCs' revised_contract_amount), invoiced (non-draft payment applications) and cost (non-draft DCs + per-commitment latest requisition to date) from the records, keeping budget/committed from the view."
     }
   ],
   "rate_limit": {

@@ -63,3 +63,16 @@ export async function ensurePrefsSchema(env) {
   )`, []);
   prefsSchemaReady = true;
 }
+
+let portfolioActualsReady = false;
+
+// The budget view's own cost and invoicing totals, kept beside the actuals so
+// the dashboard can flag a project whose budget doesn't cover everything
+// (2026-10-07). See refreshProjectSnapshot.
+export async function ensurePortfolioActualsColumns(env) {
+  if (portfolioActualsReady) return;
+  await dbQuery(env, `alter table portfolio_projects
+    add column if not exists budget_view_cost numeric,
+    add column if not exists budget_view_invoiced numeric`, []);
+  portfolioActualsReady = true;
+}

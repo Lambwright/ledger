@@ -243,6 +243,8 @@ create table if not exists portfolio_projects (
   budgeted_margin numeric,            -- per budget_basis below
   budgeted_margin_pct numeric,
   budget_basis text,                  -- 'original' = original_contract vs original_budget (no budget changes yet); 'live' = Procore's revised figures
+  budget_view_cost numeric,           -- budget view job-to-date cost; revised_contract/invoiced/jtd_cost come from the records since 2026-10-07
+  budget_view_invoiced numeric,       -- budget view invoicing to date; a gap = money on codes not in the budget
   retainage numeric,
   budget_status text,                 -- 'ok' | 'no_budget' | 'no_view'
   refresh_error text,

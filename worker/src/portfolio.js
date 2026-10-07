@@ -12,7 +12,7 @@
 import { procoreRequest } from './procore.js';
 import { dbQuery } from './db.js';
 import { ledgerLevel } from './roles.js';
-import { ensureBulkSchema } from './schema.js';
+import { ensureBulkSchema, ensurePortfolioActualsColumns } from './schema.js';
 import { hasQueuedBulkReconciliation, processNextBulkReconciliation } from './bulk.js';
 import { listPendingTickets, listPendingDirectCosts, listCommitments } from './app.js';
 
@@ -102,9 +102,67 @@ async function fetchReportingSummary(env, projectId) {
   return procoreGet(env, `/rest/v1.0/budget_views/${view.id}/summary_rows?project_id=${projectId}`);
 }
 
+// Every page of a v1.0 list (per_page 300). { ok, items, remaining }.
+async function fetchAllV1(env, path) {
+  const items = [];
+  let remaining = null;
+  for (let page = 1; page <= 10; page++) {
+    const res = await procoreGet(env, `${path}${path.includes('?') ? '&' : '?'}page=${page}&per_page=300`);
+    if (res.remaining != null) remaining = remaining == null ? res.remaining : Math.min(remaining, res.remaining);
+    if (res.status !== 200 || !Array.isArray(res.data)) return { ok: false, items: null, remaining };
+    items.push(...res.data);
+    if (res.data.length < 300) break;
+  }
+  return { ok: true, items, remaining };
+}
+
+// What the project has really been sold, invoiced and spent (Ben, 2026-10-07).
+// The budget view only counts money on cost codes that have been ADDED to the
+// budget, so a project with an incomplete budget showed $0 contract and
+// invoicing (Walmart 1095 Vaughan: really $640 / $640) and KPS was $4,959
+// under-invoiced. These come straight from the records instead:
+//   contract  = approved/complete Prime Contracts' revised amounts
+//   invoiced  = every non-draft owner invoice, gross of retainage — the same
+//               figure as the budget view's "Invoicing to Date" (one call:
+//               /payment_applications?project_id= lists all contracts' invoices)
+//   cost      = non-draft direct costs + each commitment's latest sub invoice
+//               to date (verified = budget view job-to-date cost on KPS, 2026-09-26)
+// A null part means that call failed; the caller keeps the budget view's figure.
+async function fetchProjectActuals(env, projectId) {
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const pcs = await fetchAllV1(env, `/rest/v1.0/prime_contracts?project_id=${projectId}`);
+  const invoices = await fetchAllV1(env, `/rest/v1.0/payment_applications?project_id=${projectId}`);
+  const dcs = await fetchAllV1(env, `/rest/v1.0/projects/${projectId}/direct_costs`);
+  const reqs = await fetchAllV1(env, `/rest/v1.0/requisitions?project_id=${projectId}`);
+  const live = (x) => String(x.status || '').toLowerCase() !== 'draft';
+
+  const contracts = pcs.ok ? pcs.items : null;
+  const contractValue = contracts
+    ? round2(contracts.filter(c => ['Approved', 'Complete'].includes(c.status)).reduce((s, c) => s + (num(c.revised_contract_amount) || 0), 0))
+    : null;
+  const invoiced = invoices.ok
+    ? round2(invoices.items.filter(live).reduce((s, p) => s + (num(p.total_amount_accrued_this_period) || 0), 0))
+    : null;
+  const directCosts = dcs.ok
+    ? round2(dcs.items.filter(live).reduce((s, d) => s + (num(d.grand_total ?? d.amount) || 0), 0))
+    : null;
+  let subInvoices = null;
+  if (reqs.ok) {
+    const toDate = new Map(); // latest cumulative total per commitment
+    for (const r of reqs.items.filter(live)) {
+      const v = num(r.summary?.total_completed_and_stored_to_date) || 0;
+      toDate.set(r.commitment_id, Math.max(toDate.get(r.commitment_id) ?? 0, v));
+    }
+    subInvoices = round2([...toDate.values()].reduce((s, v) => s + v, 0));
+  }
+  const remaining = [pcs, invoices, dcs, reqs].map(x => x.remaining).filter(r => r != null);
+  return { contracts, contractValue, invoiced, directCosts, subInvoices, remaining: remaining.length ? Math.min(...remaining) : null };
+}
+
 // Refreshes one project's row. Returns Procore's reported remaining requests
 // (lowest seen) so background callers can stop before starving the sidebar.
 export async function refreshProjectSnapshot(env, tenantId, projectId) {
+  await ensurePortfolioActualsColumns(env);
   const startedAt = new Date().toISOString();
   const show = await procoreGet(env, `/rest/v1.0/projects/${projectId}?company_id=${env.PROCORE_COMPANY_ID}`);
   if (show.status !== 200) {
@@ -135,22 +193,44 @@ export async function refreshProjectSnapshot(env, tenantId, projectId) {
   values.budgeted_margin_pct = pctOf(values.budgeted_margin, values.revised_contract);
   const budgetStatus = !rows ? 'no_view' : (values.revised_budget ?? 0) === 0 ? 'no_budget' : 'ok';
 
-  let contractsRes = null;
-  if (rows) {
-    contractsRes = await procoreGet(env, `/rest/v1.0/prime_contracts?project_id=${projectId}`);
-    const basis = budgetedMarginBasis(values, contractsRes.status === 200 ? contractsRes.data : null);
-    values.original_contract = basis.originalContract;
-    values.budget_basis = basis.basis;
-    if (basis.basis === 'original') {
-      values.budgeted_margin = basis.margin;
-      values.budgeted_margin_pct = basis.pct;
-    }
-  } else {
-    values.original_contract = null;
-    values.budget_basis = null;
+  // Keep the budget view's own totals (to flag money outside the budget)…
+  values.budget_view_cost = rows ? values.jtd_cost : null;
+  values.budget_view_invoiced = rows ? values.invoiced : null;
+
+  // …then use the real records for contract, invoicing and cost.
+  const actuals = await fetchProjectActuals(env, projectId);
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const share = (part, whole) => (part != null && whole ? Math.round((part / whole) * 10000) / 100 : null);
+  if (actuals.contractValue != null) values.revised_contract = actuals.contractValue;
+  if (actuals.invoiced != null) values.invoiced = actuals.invoiced;
+  if (actuals.directCosts != null && actuals.subInvoices != null) {
+    values.direct_costs = actuals.directCosts;
+    values.sub_invoices = actuals.subInvoices;
+    values.jtd_cost = round2(actuals.directCosts + actuals.subInvoices);
+  }
+  if (values.revised_contract != null && values.invoiced != null) {
+    values.invoicing_remaining = round2(values.revised_contract - values.invoiced);
+    values.pct_invoiced = share(values.invoiced, values.revised_contract);
+  }
+  if (values.invoiced != null && values.jtd_cost != null) {
+    values.margin_to_date = round2(values.invoiced - values.jtd_cost);
+    values.margin_to_date_pct = share(values.margin_to_date, values.invoiced);
   }
 
-  const cols = [...Object.keys(COLUMN_MAP), 'original_contract', 'budget_basis'];
+  // Budgeted margin: the original quote until the budget changes, then the
+  // live budget — both against the real contract (see budgetedMarginBasis).
+  const basis = budgetedMarginBasis(values, actuals.contracts);
+  values.original_contract = basis.originalContract;
+  values.budget_basis = rows ? basis.basis : null;
+  if (rows && basis.basis === 'original') {
+    values.budgeted_margin = basis.margin;
+    values.budgeted_margin_pct = basis.pct;
+  } else if (rows && (values.revised_budget ?? 0) > 0 && values.revised_contract != null) {
+    values.budgeted_margin = round2(values.revised_contract - values.revised_budget);
+    values.budgeted_margin_pct = share(values.budgeted_margin, values.revised_contract);
+  }
+
+  const cols = [...Object.keys(COLUMN_MAP), 'original_contract', 'budget_basis', 'budget_view_cost', 'budget_view_invoiced'];
   const params = [
     tenantId, String(projectId),
     p.name || null, p.project_number || null, p.project_stage?.name || p.stage || null,
@@ -172,7 +252,7 @@ export async function refreshProjectSnapshot(env, tenantId, projectId) {
        dirty_at = case when portfolio_projects.dirty_at <= $${allCols.length + 3}::timestamptz then null else portfolio_projects.dirty_at end`,
     params
   );
-  return Math.min(...[show.remaining, summary.remaining, contractsRes?.remaining].filter(r => r != null), 999);
+  return Math.min(...[show.remaining, summary.remaining, actuals.remaining].filter(r => r != null), 999);
 }
 
 // Record counts (Ben's ask 2026-09-25): how many T&M tickets, direct costs and
@@ -233,7 +313,7 @@ export async function projectSourceRecords(env, tenantId, projectId) {
        where tenant_id = $1 and project_id = $2 and record_type in ('direct_cost', 'direct_cost_line', 'commitment_line')`,
       [tenantId, String(projectId)]
     ),
-    dbQuery(env, `select direct_costs, sub_invoices, invoiced from portfolio_projects where tenant_id = $1 and project_id = $2`, [tenantId, String(projectId)])
+    dbQuery(env, `select direct_costs, sub_invoices, invoiced, budget_view_cost from portfolio_projects where tenant_id = $1 and project_id = $2`, [tenantId, String(projectId)])
   ]);
   for (const [label, res] of [['direct costs', dcRes], ['sub invoices', reqRes], ['prime contracts', pcRes]]) {
     if (res.status !== 200) throw new Error(`Couldn't load ${label} from Procore (${res.status})`);
@@ -312,7 +392,11 @@ export async function projectSourceRecords(env, tenantId, projectId) {
   const dcTotal = total(directCosts);
   const subTotal = total(subInvoices);
   const snap = snapshot[0] || {};
-  const budgetCost = (num(snap.direct_costs) || 0) + (num(snap.sub_invoices) || 0);
+  // Since 2026-10-07 the row's own cost comes from these same records, so the
+  // comparison is against the budget view's cost (budget_view_cost).
+  const budgetCost = snap.budget_view_cost != null
+    ? num(snap.budget_view_cost) || 0
+    : (num(snap.direct_costs) || 0) + (num(snap.sub_invoices) || 0);
   return {
     directCosts: directCosts.sort((a, b) => String(b.date).localeCompare(String(a.date))),
     subInvoices: subInvoices.sort((a, b) => String(b.billingDate).localeCompare(String(a.billingDate))),

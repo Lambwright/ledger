@@ -43,6 +43,15 @@ const commitmentsLeft = (p) =>
 // left. `hidden: true` = available but off until someone turns it on.
 // "Project" is always first and can't be hidden.
 const noBudgetFor = (p) => p.budget_status === "no_budget";
+// Money on cost codes that aren't in the project's budget (2026-10-07): the
+// figures shown come from the real records; the budget view only sees what's
+// budgeted. Any gap means the budget needs codes added.
+function outsideBudget(p) {
+  if (p.budget_view_cost == null && p.budget_view_invoiced == null) return null;
+  const cost = (n(p.jtd_cost) || 0) - (n(p.budget_view_cost) || 0);
+  const invoiced = (n(p.invoiced) || 0) - (n(p.budget_view_invoiced) || 0);
+  return Math.abs(cost) >= 1 || Math.abs(invoiced) >= 1 ? { cost, invoiced } : null;
+}
 const moneyCell = (key, extra = "") => (p) => (
   <td className={`num${extra}${n(p[key]) < 0 ? " neg" : ""}`}>{money(p[key])}</td>
 );
@@ -61,6 +70,14 @@ const COLUMN_CATALOG = [
           {noBudgetFor(p) && <span className="badge badge-warn">Budget not set up</span>}
           {p.budget_status === "no_view" && <span className="badge badge-muted">No budget view</span>}
           {!p.refreshed_at && <span className="badge badge-muted">Not loaded</span>}
+          {outsideBudget(p) && (
+            <span
+              className="badge badge-warn"
+              title={`Not in the budget: ${money(outsideBudget(p).cost)} of cost, ${money(outsideBudget(p).invoiced)} of invoicing. Add the cost codes to the project's budget in Procore.`}
+            >
+              Not all in budget
+            </span>
+          )}
           <BulkBadge project={p} isAdmin={isAdmin} />
         </div>
       </td>
