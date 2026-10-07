@@ -253,6 +253,7 @@ export default function App() {
 
   const [openId, setOpenId] = useState(null);
   const [refreshingId, setRefreshingId] = useState(null);
+  const [countingIds, setCountingIds] = useState(() => new Set());
 
   // Bulk reconciliation (LEDGER admins only — the worker checks it too).
   const [isAdmin, setIsAdmin] = useState(false);
@@ -310,17 +311,35 @@ export default function App() {
     if (authState === "in") load();
   }, [authState, load]);
 
+  const mergeProject = (project) =>
+    project && setProjects((prev) => prev.map((p) => (p.project_id === project.project_id ? { ...p, ...project } : p)));
+
+  // Money figures first (seconds), then the record recount (can take minutes
+  // on a project with many billed commitments) — the row is usable meanwhile.
   async function refreshProject(id) {
     setRefreshingId(id);
     setError(null);
     try {
-      const { project } = await api.refreshProject(id);
-      if (project) setProjects((prev) => prev.map((p) => (p.project_id === project.project_id ? { ...p, ...project } : p)));
+      mergeProject((await api.refreshProject(id)).project);
+    } catch (e) {
+      if (e.unauthorized) handleLogout();
+      else setError(e.message);
+      return;
+    } finally {
+      setRefreshingId(null);
+    }
+    setCountingIds((prev) => new Set(prev).add(id));
+    try {
+      mergeProject((await api.refreshCounts(id)).project);
     } catch (e) {
       if (e.unauthorized) handleLogout();
       else setError(e.message);
     } finally {
-      setRefreshingId(null);
+      setCountingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     }
   }
 
@@ -423,7 +442,7 @@ export default function App() {
     }
     setOpenId(p.project_id);
     const fresh = p.refreshed_at && p.counts_at && Date.now() - new Date(p.refreshed_at).getTime() < 2 * 60 * 1000;
-    if (!fresh && refreshingId !== p.project_id) refreshProject(p.project_id);
+    if (!fresh && refreshingId !== p.project_id && !countingIds.has(p.project_id)) refreshProject(p.project_id);
   }
 
   const selectable = visible.filter((p) => !hasActiveBatch(p));
@@ -661,7 +680,9 @@ export default function App() {
                           </dl>
                           <div className="cell-sub">
                             Records are T&amp;M tickets, direct costs and commitments; one partly billed counts in more than one column.
-                            {p.counts_at ? ` Counted ${ago(p.counts_at)}.` : " Not counted yet."}
+                            {countingIds.has(p.project_id)
+                              ? " Recounting from Procore… (a minute or two on big projects)"
+                              : p.counts_at ? ` Counted ${ago(p.counts_at)}.` : " Not counted yet."}
                           </div>
                           {noBudget && (
                             <div className="detail-note">
@@ -673,7 +694,7 @@ export default function App() {
                           <div className="detail-actions">
                             <button
                               className="btn btn-ghost btn-sm"
-                              disabled={refreshingId === p.project_id}
+                              disabled={refreshingId === p.project_id || countingIds.has(p.project_id)}
                               onClick={(e) => { e.stopPropagation(); refreshProject(p.project_id); }}
                             >
                               {refreshingId === p.project_id ? "Refreshing…" : "Refresh from Procore"}

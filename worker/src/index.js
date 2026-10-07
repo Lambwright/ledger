@@ -755,12 +755,15 @@ async function handlePortfolio(request, env) {
   }
   // Drill-ins call Procore live — background refreshing pauses for them too,
   // for as long as they run.
-  if (body.action === 'refresh_project') {
+  // Two calls, so the money figures come back in seconds: the record recount
+  // fetches lines for every billed commitment and can take minutes on a big
+  // project (Ben, 2026-10-07 — 2026_0342). The page asks for counts second.
+  if (body.action === 'refresh_project' || body.action === 'refresh_counts') {
     if (!body.project_id) return json({ error: 'project_id is required' }, 400);
     const stop = keepUserActive(env);
     try {
-      await refreshProjectSnapshot(env, tenantId, body.project_id);
-      await refreshProjectCounts(env, tenantId, body.project_id);
+      if (body.action === 'refresh_project') await refreshProjectSnapshot(env, tenantId, body.project_id);
+      else await refreshProjectCounts(env, tenantId, body.project_id);
     } finally {
       stop();
     }
