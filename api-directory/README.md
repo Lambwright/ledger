@@ -161,7 +161,17 @@ each with CREATE/UPDATE/DELETE. To revive it, point the URL back to
 `https://qbo-dashboard.smoothlink.net/webhook/procore/` and get a fresh Authorization
 value from smoothlink. The original value was lost on 2026-10-07.
 
-## Second, larger rate limit: 600 requests (2026-10-07)
+## Second, larger rate limit: 600 requests per hour (2026-10-07)
+
+**The shared, authoritative note for all Einbau apps is
+`C:\Users\main\projects\PROCORE-RATE-LIMITS.md`.** Keep it current. The TALLY/payroll
+session had already found this limit on 2026-10-06, but it never reached this file.
+
+Confirmed later the same night: the window is **1 hour from the first call after the
+last reset** (it opened 21:58, ran out at 22:30, reset 22:58), not the clock hour. So the
+background cap counts a rolling 60 minutes (table `portfolio_background_calls`), not the
+clock hour.
+
 
 Besides the 25-request short window (see below; HANDOFF measured its reset at about 10
 seconds out), Procore has a **600-request window**. Seen live at 9:57 pm: every call

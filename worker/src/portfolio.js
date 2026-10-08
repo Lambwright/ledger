@@ -105,10 +105,12 @@ function rateLimited(res) {
 // projects that changed recently (webhook-marked) are refreshed, one per run.
 const QUIET_TZ = 'America/Toronto';
 
-// Procore's second, larger limit (600 requests per window, probably an hour —
-// seen 2026-10-07). Background work stops after this many calls in a clock
-// hour, leaving the rest for people even at night. ~7 calls per refresh, so
-// about 50 refreshes an hour.
+// Procore's second, larger limit: 600 requests per hour, the hour starting at
+// the first call after the last reset — not on the clock hour (confirmed
+// 2026-10-07: window opened 21:58, hit at 22:30, reset 22:58). Background work
+// stops after this many calls in any rolling 60 minutes, which keeps it under
+// that share of whichever hour Procore is counting and leaves the rest for
+// people. ~7 calls per refresh, so about 50 refreshes an hour.
 const BACKGROUND_CALLS_PER_HOUR = 360;
 const RECENT_CHANGE_HOURS = 2; // daytime: only changes newer than this
 
@@ -616,11 +618,12 @@ export async function runScheduled(env) {
   await ensureBudgetColumns(env);
   const budget = await dbQuery(
     env,
-    `select coalesce(case when bg_hour = date_trunc('hour', now()) then bg_calls end, 0)::int as used
-     from portfolio_sync_state where tenant_id = $1`,
+    `select coalesce(sum(calls), 0)::int as used from portfolio_background_calls
+     where tenant_id = $1 and at > now() - interval '60 minutes'`,
     [tenantId]
   );
-  if ((budget[0]?.used ?? 0) >= BACKGROUND_CALLS_PER_HOUR) return ['hourly Procore budget used — waiting for the next hour'];
+  const used = budget[0]?.used ?? 0;
+  if (used >= BACKGROUND_CALLS_PER_HOUR) return [`hourly Procore budget used (${used} calls in the last 60 min) — waiting`];
   const callsBefore = procoreCallCount();
   try {
     return await runScheduledPass(env, tenantId);
@@ -629,12 +632,13 @@ export async function runScheduled(env) {
     if (used > 0) {
       await dbQuery(
         env,
-        `update portfolio_sync_state
-           set bg_calls = case when bg_hour = date_trunc('hour', now()) then coalesce(bg_calls, 0) + $2 else $2 end,
-               bg_hour = date_trunc('hour', now())
-         where tenant_id = $1`,
+        `insert into portfolio_background_calls (tenant_id, at, calls) values ($1, now(), $2)`,
         [tenantId, used]
       ).catch(() => {});
+      // Keep the table small: a day of history is plenty.
+      if (Math.random() < 0.02) {
+        await dbQuery(env, `delete from portfolio_background_calls where at < now() - interval '1 day'`, []).catch(() => {});
+      }
     }
   }
 }
@@ -642,9 +646,12 @@ export async function runScheduled(env) {
 let budgetColumnsReady = false;
 async function ensureBudgetColumns(env) {
   if (budgetColumnsReady) return;
-  await dbQuery(env, `alter table portfolio_sync_state
-    add column if not exists bg_hour timestamptz,
-    add column if not exists bg_calls integer`, []);
+  await dbQuery(env, `create table if not exists portfolio_background_calls (
+    tenant_id text not null,
+    at timestamptz not null default now(),
+    calls integer not null
+  )`, []);
+  await dbQuery(env, `create index if not exists portfolio_background_calls_at on portfolio_background_calls (tenant_id, at)`, []);
   budgetColumnsReady = true;
 }
 
