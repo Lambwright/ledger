@@ -815,6 +815,13 @@ export default {
     if (path === '/procore-webhook') {
       return handleProcoreWebhook(request, env);
     }
+    // Parking spot for Procore hook 186829 (the old QuickBooks dashboard hook,
+    // procore/v2 — unused since ~April 2026; Ben, 2026-10-07: keep it in case
+    // Einbau goes back to QBO at NetSuite renewal). Accepts and discards, so
+    // Procore never sees failures and no Einbau data leaves for a vendor.
+    if (path === '/procore-webhook-parked') {
+      return new Response(null, { status: 204 });
+    }
     if (path === '/auth/login' || path === '/auth/verify') {
       try {
         return await proxyAuth(request, env, path);

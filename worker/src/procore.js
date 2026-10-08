@@ -32,7 +32,13 @@ async function getAccessToken(env) {
 // object if Procore returned something non-JSON). Throws only on genuine
 // transport failure, never on a Procore-level error status — callers decide
 // what a given status means for their operation.
+// Calls made by this isolate — the scheduled run measures its own usage with
+// it (see runScheduled's hourly budget in portfolio.js).
+let callCount = 0;
+export const procoreCallCount = () => callCount;
+
 export async function procoreRequest(env, method, path, data) {
+  callCount++;
   if (!path || !path.startsWith('/rest/')) {
     throw new Error(`path must be a full Procore /rest/... path, got: ${path}`);
   }

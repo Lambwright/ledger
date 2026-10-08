@@ -9,7 +9,7 @@
 // the same view Ben reports from, custom calculated columns included — so
 // the dashboard matches Procore exactly.
 
-import { procoreRequest } from './procore.js';
+import { procoreRequest, procoreCallCount } from './procore.js';
 import { dbQuery } from './db.js';
 import { ledgerLevel } from './roles.js';
 import { ensureBulkSchema, ensurePortfolioActualsColumns } from './schema.js';
@@ -85,11 +85,31 @@ const RESERVED_REQUESTS = 12;
 
 class RateBudgetExhausted extends Error {}
 
+// Procore refused a call (429). Besides the 25-request short window there's a
+// larger one — seen live 2026-10-07: "x-rate-limit-limit: 600", remaining 0,
+// which blocked every LEDGER call for ~15 minutes overnight. A refresh that
+// hits either one must not write anything: a refused budget-view call used to
+// save the row as "no budget view" with blank figures (hiding the project).
+function rateLimited(res) {
+  const limit = res?.headers?.['x-rate-limit-limit'];
+  const reset = Number(res?.headers?.['x-rate-limit-reset']);
+  const secs = Number.isFinite(reset) ? Math.max(0, Math.round(reset - Date.now() / 1000)) : null;
+  return new RateBudgetExhausted(
+    `Procore's rate limit was reached${limit ? ` (${limit}-request window)` : ''}${secs != null ? `; it resets in about ${secs}s` : ''}. Nothing was changed — try again then.`
+  );
+}
+
 // Routine background refreshing happens overnight (Ben, 2026-10-07: the
 // daytime sweep competed with PMs for Procore's 25/minute). Quiet hours are
 // 9 pm – 6 am Eastern on weekdays, and all weekend. During the day only
 // projects that changed recently (webhook-marked) are refreshed, one per run.
 const QUIET_TZ = 'America/Toronto';
+
+// Procore's second, larger limit (600 requests per window, probably an hour —
+// seen 2026-10-07). Background work stops after this many calls in a clock
+// hour, leaving the rest for people even at night. ~7 calls per refresh, so
+// about 50 refreshes an hour.
+const BACKGROUND_CALLS_PER_HOUR = 360;
 const RECENT_CHANGE_HOURS = 2; // daytime: only changes newer than this
 
 export function isQuietHours(date = new Date()) {
@@ -116,8 +136,9 @@ function num(v) {
 
 async function fetchReportingSummary(env, projectId) {
   let res = await procoreGet(env, `/rest/v1.0/budget_views/${REPORTING_VIEW_ID}/summary_rows?project_id=${projectId}`);
-  if (res.status === 200) return res;
+  if (res.status === 200 || res.status === 429) return res;
   const views = await procoreGet(env, `/rest/v1.0/budget_views?project_id=${projectId}`);
+  if (views.status === 429) return views;
   const view = Array.isArray(views.data) ? views.data.find(v => v.name === REPORTING_VIEW_NAME) : null;
   if (!view) return { status: 404, data: null, remaining: views.remaining };
   return procoreGet(env, `/rest/v1.0/budget_views/${view.id}/summary_rows?project_id=${projectId}`);
@@ -130,7 +151,7 @@ async function fetchAllV1(env, path) {
   for (let page = 1; page <= 10; page++) {
     const res = await procoreGet(env, `${path}${path.includes('?') ? '&' : '?'}page=${page}&per_page=300`);
     if (res.remaining != null) remaining = remaining == null ? res.remaining : Math.min(remaining, res.remaining);
-    if (res.status !== 200 || !Array.isArray(res.data)) return { ok: false, items: null, remaining };
+    if (res.status !== 200 || !Array.isArray(res.data)) return { ok: false, items: null, remaining, refused: res.status === 429 ? res : null };
     items.push(...res.data);
     if (res.data.length < 300) break;
   }
@@ -177,7 +198,8 @@ async function fetchProjectActuals(env, projectId) {
     subInvoices = round2([...toDate.values()].reduce((s, v) => s + v, 0));
   }
   const remaining = [pcs, invoices, dcs, reqs].map(x => x.remaining).filter(r => r != null);
-  return { contracts, contractValue, invoiced, directCosts, subInvoices, remaining: remaining.length ? Math.min(...remaining) : null };
+  const refused = [pcs, invoices, dcs, reqs].find(x => x.refused)?.refused || null;
+  return { contracts, contractValue, invoiced, directCosts, subInvoices, refused, remaining: remaining.length ? Math.min(...remaining) : null };
 }
 
 // Refreshes one project's row. Returns Procore's reported remaining requests
@@ -186,6 +208,7 @@ export async function refreshProjectSnapshot(env, tenantId, projectId) {
   await ensurePortfolioActualsColumns(env);
   const startedAt = new Date().toISOString();
   const show = await procoreGet(env, `/rest/v1.0/projects/${projectId}?company_id=${env.PROCORE_COMPANY_ID}`);
+  if (show.status === 429) throw rateLimited(show);
   if (show.status !== 200) {
     await dbQuery(
       env,
@@ -198,6 +221,7 @@ export async function refreshProjectSnapshot(env, tenantId, projectId) {
   }
   const p = show.data;
   const summary = await fetchReportingSummary(env, projectId);
+  if (summary.status === 429) throw rateLimited(summary);
   // summary_rows returns one row for the project itself plus one per sub job
   // (KPS Lloydminster has 16) — the project's real totals are their sum, which
   // matches the budget view's Grand Totals row exactly (verified 2026-09-25).
@@ -220,6 +244,7 @@ export async function refreshProjectSnapshot(env, tenantId, projectId) {
 
   // …then use the real records for contract, invoicing and cost.
   const actuals = await fetchProjectActuals(env, projectId);
+  if (actuals.refused) throw rateLimited(actuals.refused);
   const round2 = (n) => Math.round(n * 100) / 100;
   const share = (part, whole) => (part != null && whole ? Math.round((part / whole) * 10000) / 100 : null);
   if (actuals.contractValue != null) values.revised_contract = actuals.contractValue;
@@ -588,6 +613,42 @@ export function keepUserActive(env) {
 // Steps 3 and 4 (and older dirty marks) wait for quiet hours; see isQuietHours.
 export async function runScheduled(env) {
   const tenantId = String(env.PROCORE_COMPANY_ID);
+  await ensureBudgetColumns(env);
+  const budget = await dbQuery(
+    env,
+    `select coalesce(case when bg_hour = date_trunc('hour', now()) then bg_calls end, 0)::int as used
+     from portfolio_sync_state where tenant_id = $1`,
+    [tenantId]
+  );
+  if ((budget[0]?.used ?? 0) >= BACKGROUND_CALLS_PER_HOUR) return ['hourly Procore budget used — waiting for the next hour'];
+  const callsBefore = procoreCallCount();
+  try {
+    return await runScheduledPass(env, tenantId);
+  } finally {
+    const used = procoreCallCount() - callsBefore;
+    if (used > 0) {
+      await dbQuery(
+        env,
+        `update portfolio_sync_state
+           set bg_calls = case when bg_hour = date_trunc('hour', now()) then coalesce(bg_calls, 0) + $2 else $2 end,
+               bg_hour = date_trunc('hour', now())
+         where tenant_id = $1`,
+        [tenantId, used]
+      ).catch(() => {});
+    }
+  }
+}
+
+let budgetColumnsReady = false;
+async function ensureBudgetColumns(env) {
+  if (budgetColumnsReady) return;
+  await dbQuery(env, `alter table portfolio_sync_state
+    add column if not exists bg_hour timestamptz,
+    add column if not exists bg_calls integer`, []);
+  budgetColumnsReady = true;
+}
+
+async function runScheduledPass(env, tenantId) {
   const log = [];
   let lastRemaining = null;
   const night = isQuietHours();
@@ -669,6 +730,7 @@ export async function runScheduled(env) {
         await refreshProjectCounts(env, tenantId, projectId);
         log.push(`counted ${projectId}`);
       } catch (e) {
+        if (e instanceof RateBudgetExhausted || /\b429\b|rate limit/i.test(e.message)) throw new RateBudgetExhausted(e.message);
         // Don't retry a failing project every minute — try again tomorrow.
         await saveProjectCounts(env, tenantId, projectId, {});
         log.push(`count failed ${projectId}: ${e.message}`);
@@ -676,7 +738,7 @@ export async function runScheduled(env) {
     }
   } catch (e) {
     if (!(e instanceof RateBudgetExhausted)) throw e;
-    log.push('stopped early to leave requests for PMs');
+    log.push(e.message ? `stopped: ${e.message}` : 'stopped early to leave requests for PMs');
   }
   return log;
 }

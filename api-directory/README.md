@@ -149,6 +149,37 @@ Packages, Budget Changes, Budget Line Items, Budget Modifications (each
 create/update/delete), plus Projects UPDATE. Timecard Entries were left out on purpose:
 payroll imports would flood it, and record counts are overnight work anyway.
 
+**The old QuickBooks hook is parked, not deleted (Ben, 2026-10-07: keep it in case
+Einbau goes back to QBO at the NetSuite renewal).** It's id 186829, procore/v2. Its URL
+is now `https://ledger.ben-a90.workers.dev/procore-webhook-parked`, a route that returns
+204 and discards, so Procore never logs failures and no Einbau data goes to a vendor.
+Its Authorization header is the dummy value "parked". (A PATCH with
+`destination_headers: {}` does NOT clear headers; it merges.) Its 27 triggers, kept as
+the template, are: Projects, Payment Applications, Draw Requests, Daily Logs, Purchase
+Order Contracts, Work Order Contracts, Timecard Entries, Company Vendors, Direct Costs,
+each with CREATE/UPDATE/DELETE. To revive it, point the URL back to
+`https://qbo-dashboard.smoothlink.net/webhook/procore/` and get a fresh Authorization
+value from smoothlink. The original value was lost on 2026-10-07.
+
+## Second, larger rate limit: 600 requests (2026-10-07)
+
+Besides the 25-request short window (see below; HANDOFF measured its reset at about 10
+seconds out), Procore has a **600-request window**. Seen live at 9:57 pm: every call
+returned 429 with `x-rate-limit-limit: 600`, `x-rate-limit-remaining: 0`, and a reset
+about a minute away. It had been blocking every LEDGER call for about 15 minutes. The
+headers report whichever limit is binding, so you can't see the 600's remaining until
+it runs low. The window length is unconfirmed but probably an hour.
+- The bucket is per app: HANDOFF (its own client id) had 24 of 25 left at the same
+  moment.
+- A heavy day (the 538-project re-refresh plus people) likely caused the 3:20 pm
+  "nothing responds" too.
+- LEDGER's fixes:
+  - A refresh that gets a 429 now writes NOTHING. It used to save the row as "no
+    budget view" with blanks, hiding the project.
+  - The scheduled run stops after `BACKGROUND_CALLS_PER_HOUR` (360) calls per clock
+    hour, counted via `procoreCallCount()` and stored in `portfolio_sync_state`
+    columns `bg_hour` and `bg_calls`.
+
 ## Real rate limit, confirmed via response headers (2026-09-14)
 
 Every Procore response carries `x-rate-limit-limit`, `x-rate-limit-remaining`,
