@@ -520,7 +520,9 @@ export async function handleProcoreWebhook(request, env) {
   } catch {
     return new Response('bad payload', { status: 400 });
   }
-  const projectId = payload?.project_id ?? payload?.metadata?.project_id;
+  // A "Projects" event (stage, fiscal year…) names the project as its resource.
+  const projectId = payload?.project_id ?? payload?.metadata?.project_id
+    ?? (payload?.resource_name === 'Projects' ? payload?.resource_id : null);
   if (projectId) {
     await dbQuery(
       env,

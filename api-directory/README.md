@@ -98,6 +98,57 @@ session memory. Ben caught the gap (2026-09-18: "we're still scraping every page
 recording all the endpoints right?") — this section is the backfill. Going forward,
 update this file in the same session as the discovery, not after.
 
+## Webhooks: creating one WITHOUT overwriting someone else's (2026-10-07)
+
+**Incident:** creating LEDGER's hook with `namespace: "procore"`, `api_version: "v2"`
+returned **201 with an existing hook's id (186829)**. It silently replaced the QuickBooks
+dashboard hook's `destination_url` and `Authorization` header (QBO had been unused for
+about 6 months, so nothing broke). Its triggers survived.
+
+**How hook identity works (tested live):**
+- `POST /rest/v1.0/webhooks/hooks?company_id=` is an **upsert keyed on namespace +
+  api_version** for the owner (company or project). A 201 does NOT prove a new hook was
+  made, so compare the returned `id` with the existing ones.
+- A new namespace made a genuinely new hook: `einbau-ledger`/v2 → id 19725765, and
+  procore/v2 and procore/v4.0 were untouched. The namespace is free text.
+- `GET /rest/v1.0/webhooks/hooks?company_id=` **only lists namespace "procore"**. With no
+  `namespace` param it returns exactly what `namespace=procore` returns. You can't list
+  "all namespaces", so other apps' hooks are invisible unless you know their namespace.
+  (Hooks made in Procore's Company Admin › Webhooks screen use "procore".)
+- Nothing exposes a hook's header VALUES afterwards: not the hook GET, not
+  `/deliveries`. Once overwritten, a secret is gone.
+- `api_version` must be inside the `hook` object (and inside `trigger` for triggers). At
+  the top level only, Procore returns 400 "param is missing … api_version".
+
+**Safe recipe:**
+1. List the hooks with `namespace=procore` AND with the namespace you plan to use. Save
+   the full output.
+2. Pick a namespace/api_version pair that both lists show is unused. Einbau apps should
+   use their own namespace (`einbau-<app>`), never "procore".
+3. POST the hook: `{ hook: { api_version, namespace, destination_url, destination_headers: { Authorization } } }`.
+4. Confirm the returned `id` is NOT one you saw in step 1 before adding anything.
+5. Add triggers one at a time:
+   `POST /webhooks/hooks/{id}/triggers?company_id=` with `{ api_version, trigger: { api_version, resource_name, event_type } }`.
+   Event types are `CREATE`/`UPDATE`/`DELETE`. 34 triggers fit inside the rate limit in
+   two batches of 16 and 18.
+
+**Resource names:**
+- A company-level hook can watch PROJECT resources across every project, even though
+  `/webhooks/resources?company_id=` lists only the 25 company resources. Use
+  `?project_id=` to see the 96 project resource names.
+- Owner invoices = "Payment Applications".
+- "Draw Requests" is probably subcontractor invoices (Requisitions) but is unconfirmed.
+  Check the first delivery after a sub invoice is created.
+
+**LEDGER's hook:** id 19725765, namespace `einbau-ledger`, v2, sending to
+`https://ledger.ben-a90.workers.dev/procore-webhook` with `Authorization: Bearer
+<PROCORE_WEBHOOK_SECRET>` (a worker secret Ben set; it's never been visible anywhere). It
+has 34 triggers: Direct Costs, Direct Cost Line Items, Payment Applications, Draw
+Requests, Prime Contracts, Purchase Order Contracts, Work Order Contracts, Change Order
+Packages, Budget Changes, Budget Line Items, Budget Modifications (each
+create/update/delete), plus Projects UPDATE. Timecard Entries were left out on purpose:
+payroll imports would flood it, and record counts are overnight work anyway.
+
 ## Real rate limit, confirmed via response headers (2026-09-14)
 
 Every Procore response carries `x-rate-limit-limit`, `x-rate-limit-remaining`,
