@@ -37,6 +37,7 @@ import {
 import { queueBulkReconciliation, reopenProject, projectReconciliation } from './bulk.js';
 import { can, READ_ACTIONS, UNDO_ACTIONS, NO_ACCESS_MESSAGE } from './roles.js';
 import { getPrefs, savePref } from './prefs.js';
+import { pushFinancialsToCrm, handleCrmRefresh } from './crm.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -800,6 +801,12 @@ function whenBodyDone(res, done) {
 export default {
   async scheduled(event, env, ctx) {
     ctx.waitUntil(runScheduled(env).then(log => console.log('[scheduled]', log.join('; ') || 'nothing due')));
+    // Project money to CRM every 15 minutes — no Procore calls (crm.js).
+    if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() % 15 === 0) {
+      ctx.waitUntil(pushFinancialsToCrm(env)
+        .then(msg => msg && console.log('[crm]', msg))
+        .catch(e => console.log('[crm] push failed:', e.message)));
+    }
   },
 
   async fetch(request, env, ctx) {
@@ -819,6 +826,9 @@ export default {
     // procore/v2 — unused since ~April 2026; Ben, 2026-10-07: keep it in case
     // Einbau goes back to QBO at NetSuite renewal). Accepts and discards, so
     // Procore never sees failures and no Einbau data leaves for a vendor.
+    if (path === '/crm/project-financials/refresh') {
+      return handleCrmRefresh(request, env);
+    }
     if (path === '/procore-webhook-parked') {
       return new Response(null, { status: 204 });
     }

@@ -94,9 +94,11 @@ function rateLimited(res) {
   const limit = res?.headers?.['x-rate-limit-limit'];
   const reset = Number(res?.headers?.['x-rate-limit-reset']);
   const secs = Number.isFinite(reset) ? Math.max(0, Math.round(reset - Date.now() / 1000)) : null;
-  return new RateBudgetExhausted(
+  const err = new RateBudgetExhausted(
     `Procore's rate limit was reached${limit ? ` (${limit}-request window)` : ''}${secs != null ? `; it resets in about ${secs}s` : ''}. Nothing was changed — try again then.`
   );
+  err.retryAfterSeconds = secs; // CRM's Refresh button passes this on (crm.js)
+  return err;
 }
 
 // Routine background refreshing happens overnight (Ben, 2026-10-07: the
@@ -280,7 +282,14 @@ export async function refreshProjectSnapshot(env, tenantId, projectId) {
 
   values.fiscal_year = p.custom_fields?.[FISCAL_YEAR_FIELD]?.value?.label ?? null;
 
-  const cols = [...Object.keys(COLUMN_MAP), 'original_contract', 'budget_basis', 'budget_view_cost', 'budget_view_invoiced', 'fiscal_year'];
+  // Contract value for CRM (crm.js): every approved/complete prime contract's
+  // original amount, pass-through included — unlike original_contract, which
+  // leaves pass-through out for budgeted margin.
+  values.pc_original_all = actuals.contracts
+    ? round2(actuals.contracts.filter(c => ['Approved', 'Complete'].includes(c.status)).reduce((s, c) => s + (num(c.grand_total) || 0), 0))
+    : null;
+
+  const cols = [...Object.keys(COLUMN_MAP), 'original_contract', 'budget_basis', 'budget_view_cost', 'budget_view_invoiced', 'fiscal_year', 'pc_original_all'];
   const params = [
     tenantId, String(projectId),
     p.name || null, p.project_number || null, p.project_stage?.name || p.stage || null,

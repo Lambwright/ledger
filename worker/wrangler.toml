@@ -10,6 +10,11 @@ compatibility_date = "2026-09-04"
 binding = "AUTH_WORKER"
 service = "auth"
 
+# Project money for CRM's SCOUT stats tab (src/crm.js), pushed every 15 min.
+[[services]]
+binding = "CRM_WORKER"
+service = "crm-worker"
+
 # Portfolio refresh (worker/src/portfolio.js runScheduled): every minute, up to
 # 4 projects, stopping early whenever Procore reports <12 requests left so the
 # sidebar always has headroom. Needs the paid Workers plan (cron slots).
