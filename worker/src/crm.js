@@ -58,6 +58,8 @@ export async function pushFinancialsToCrm(env) {
   const state = await dbQuery(env, `select crm_pushed_through from portfolio_sync_state where tenant_id = $1`, [tenantId]);
   let through = state[0]?.crm_pushed_through || null;
   let sent = 0;
+  let stored = 0;
+  const invalid = [];
   for (let round = 0; round < 4; round++) {
     const rows = await dbQuery(
       env,
@@ -76,12 +78,19 @@ export async function pushFinancialsToCrm(env) {
       body: JSON.stringify({ items: rows.map(financialsItem) })
     });
     if (!res.ok) return `CRM push refused (${res.status}) after ${sent} sent — will retry`;
+    // CRM answers { received, stored, invalid, invalid_ids }; log any shortfall.
+    const ack = await res.json().catch(() => null);
+    if (ack) {
+      stored += Number(ack.stored) || 0;
+      invalid.push(...(Array.isArray(ack.invalid_ids) ? ack.invalid_ids : []));
+    }
     through = rows[rows.length - 1].refreshed_at;
     await dbQuery(env, `update portfolio_sync_state set crm_pushed_through = $2 where tenant_id = $1`, [tenantId, through]);
     sent += rows.length;
     if (rows.length < BATCH) break;
   }
-  return sent ? `CRM push: ${sent} project${sent === 1 ? '' : 's'}` : null;
+  if (!sent) return null;
+  return `CRM push: sent ${sent}, CRM stored ${stored}` + (invalid.length ? `, invalid ids: ${invalid.slice(0, 10).join(', ')}` : '');
 }
 
 // CRM's Refresh button. 401 on a wrong key, 503 when not configured or when
