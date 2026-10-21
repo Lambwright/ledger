@@ -161,6 +161,50 @@ each with CREATE/UPDATE/DELETE. To revive it, point the URL back to
 `https://qbo-dashboard.smoothlink.net/webhook/procore/` and get a fresh Authorization
 value from smoothlink. The original value was lost on 2026-10-07.
 
+## Project custom fields, payroll DCs, sub-invoice lines (2026-10-21)
+
+**Custom field names:** `GET /rest/v1.0/custom_field_definitions/{id}?company_id=`
+returns `{label, data_type, variant, default_value}`. The dropdown options are at
+`.../custom_field_definitions/{id}/custom_field_lov_entries` (found by HANDOFF). The
+project show call (`GET /projects/{id}?company_id=`) returns every custom field as
+`custom_field_<id>: {data_type, value}`. Einbau's fields:
+
+| id | label | type |
+|---|---|---|
+| 562949954055994 | **Billing Staleness (Days)** (filled by Power Automate) | decimal |
+| 562949953942386 | **Currency** ("CAD $" / "USD $") | lov_entry |
+| 562949954054370 | Fiscal Year | lov_entry |
+| 562949953933248 | Payment Terms (Net 15/30/…) | lov_entry |
+| 562949953981021 | Contract Type (e.g. "Fixed") | lov_entry |
+| 562949953951224 | Market Sector (e.g. "Service Call") | lov_entry |
+| 562949953929326 | PO Number | string |
+| 562949953931741 | HST # (read-only, default text) | rich_text |
+| 562949954006022 | Last Follow up Date (Bid Board Only) | datetime |
+| 562949954014570 | Date Submitted (Bid Board Only) | datetime |
+| 73165 / 104287 | a vendor field / a sector-style dropdown (labels not looked up) | |
+
+**Payroll direct costs (TALLY, verified on Forte 2026_0183):**
+- The rule: `direct_cost_type == "payroll"` on the DC header. TALLY's expense postings are
+  `invoice` (vendor "MISC EMP Expenses" 562949966381888). Others are `expense`.
+- Payroll DCs carry vendor 562949959021641 ("Einbau") and the description `Payroll PE
+  <date> - <name>`. Their amounts are placeholders at the current wage until payroll is
+  paid.
+- **`?filters[direct_cost_type]=payroll` is IGNORED** (it returns every DC), so test the
+  field yourself. Cost codes don't separate payroll from other DCs.
+
+**Sub-invoice (Requisition) lines:**
+- `GET /rest/v1.0/requisitions/{id}/detail?project_id=` returns the SOV lines:
+  `{item_type, cost_code_id, description_of_work, scheduled_value,
+  total_completed_and_stored_to_date, …}`. Lines have only `cost_code_id`, with no code
+  string and no cost type.
+- `/items`, `/requisition_items` and v1.1 `/detail` all 404.
+- `GET /rest/v1.0/cost_codes/{id}?project_id=` gives `full_code` (e.g. "49-01-05-05") and
+  its allowed `line_item_types`, so to test codes, load the project's cost codes once and
+  map.
+- Requisition list fields: `id, status ("approved"…), commitment_id, commitment_type,
+  invoice_number, number, billing_date, payment_date, period_id, requisition_start/end,
+  summary{…}`.
+
 ## Second, larger rate limit: 600 requests per hour (2026-10-07)
 
 **The shared, authoritative note for all Einbau apps is
