@@ -913,6 +913,7 @@ export default {
       // streamed (see handleStreamingBillingAction), and report UNLINKED_TIMECARDS
       // / NON_BILLABLE_PROJECT as a {type:'error'} line inside their own stream.
       // Everything else (list_pending_tickets, ticket_detail, etc.) lands here.
+      console.log('[error]', body?.action || body?.target || 'passthrough', body?.project_id || '', e.message);
       return json({ error: e.message }, 500);
     }
   }
