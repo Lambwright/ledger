@@ -333,12 +333,30 @@ async function reconcileStaleDraftCOs(env, tenantId, projectId) {
   );
   if (rows.length === 0) return 0;
 
-  const { status, data } = await procoreRequest(env, 'GET', `/rest/v1.0/projects/${projectId}/prime_change_orders`);
-  if (status !== 200) return 0; // can't confirm either way — leave existing rows alone rather than guess
-  const liveIds = new Set(data.map(co => String(co.id)));
+  // Hardened 2026-10-21 (Ben): read EVERY page — one page silently treated
+  // drafts past the first 100 COs as deleted...
+  const liveIds = new Set();
+  for (let page = 1; page <= 20; page++) {
+    const { status, data } = await procoreRequest(env, 'GET', `/rest/v1.0/projects/${projectId}/prime_change_orders?page=${page}&per_page=100`);
+    if (status !== 200 || !Array.isArray(data)) return 0; // can't confirm either way — leave existing rows alone rather than guess
+    for (const co of data) liveIds.add(String(co.id));
+    if (data.length < 100) break;
+  }
+  const missing = rows.map(r => r.change_order_id).filter(id => !liveIds.has(String(id)));
+  if (missing.length === 0) return 0;
 
-  const staleCoIds = rows.map(r => r.change_order_id).filter(id => !liveIds.has(String(id)));
+  // ...and ask about each missing CO by id before believing it's gone: a draft
+  // a PM approved/executed directly in Procore also drops out of the list (see
+  // above) — the likely way KPS tickets #1–26 lost their records (2026-09-25).
+  // Only a clear 404 counts as deleted; 200 (still there, e.g. approved) or
+  // anything else (429, 5xx: can't tell) leaves the rows alone.
+  const staleCoIds = [];
+  for (const id of missing) {
+    const res = await procoreRequest(env, 'GET', `/rest/v1.0/projects/${projectId}/prime_change_orders/${id}`);
+    if (res.status === 404) staleCoIds.push(id);
+  }
   if (staleCoIds.length === 0) return 0;
+  console.log('[self-heal] draft COs deleted in Procore, clearing their billing records:', projectId, staleCoIds.join(','));
 
   const deleted = await dbQuery(
     env,
