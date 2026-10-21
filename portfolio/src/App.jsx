@@ -122,14 +122,8 @@ const COLUMN_CATALOG = [
   {
     key: "budgeted_margin_pct", label: "Budgeted %", num: true,
     cell: (p) => (
-      <td
-        className="num cell-muted"
-        title={p.budget_basis === "original"
-          ? `Original quote: ${money(p.original_contract)} contract vs ${money(p.original_budget)} budget (no budget changes yet)`
-          : p.budget_basis === "live" ? "Live budget (budget changes have been made)" : undefined}
-      >
+      <td className="num cell-muted">
         {noBudgetFor(p) ? "—" : pct(p.budgeted_margin_pct)}
-        {!noBudgetFor(p) && p.budget_basis === "original" && <span className="basis-mark">Q</span>}
       </td>
     ),
   },
@@ -183,7 +177,7 @@ const COLUMN_TIPS = {
   fiscal_year: "The project's Fiscal Year field in Procore",
   margin_to_date_pct: "Margin to date: (invoiced − cost) ÷ invoiced. Red below zero, amber behind budgeted, green at or above it",
   margin_to_date: "Margin to date in dollars: invoiced − cost",
-  budgeted_margin_pct: "Planned margin. Marked Q: the original quote (original contract vs original budget) until the budget changes; after that, contract − revised budget",
+  budgeted_margin_pct: "Budgeted margin from the project's budget (its Budgeted Margin column). An approved change order raises it until a matching budget change is entered",
   budgeted_margin: "Planned margin in dollars (see Budgeted %)",
   unbilled_count: "T&M tickets, direct costs and commitments not yet billed, written off or marked budgeted in LEDGER",
   billed_count: "Records billed through LEDGER (or marked Already Billed)",
@@ -466,9 +460,8 @@ export default function App() {
     // Budgeted margin only from projects that actually have a budget — one
     // with no revised budget reports a meaningless 100%.
     const budgetedProjects = visible.filter((p) => p.budget_status === "ok");
-    // Each project's budgeted margin is measured against its original quote
-    // until its budget changes, then against the revised contract.
-    const basisContract = (p) => (p.budget_basis === "original" ? p.original_contract : p.revised_contract);
+    // Each project's budgeted margin is measured against the budget's own contract.
+    const basisContract = (p) => p.budget_view_contract ?? p.revised_contract;
     const budgetedContract = sumOf(budgetedProjects, basisContract);
     const counted = visible.filter((p) => p.counts_at);
     return {
@@ -793,8 +786,7 @@ export default function App() {
           Procore's records; budget and commitments from the project's budget (Custom Reporting View). All as of the
           "Updated" time; open a project for a live refresh. Hover a column heading for what it means.
           {notLoaded > 0 && ` ${notLoaded} project${notLoaded === 1 ? " hasn't" : "s haven't"} been loaded yet.`}
-          {" "}Budgeted % marked Q is the original quote (original contract vs original budget, pass-through contracts
-          excluded), held until the project's budget changes.
+          {" "}Budgeted % is the budget's own Budgeted Margin.
         </div>
 
         {error && <div className="banner-error">{error}</div>}

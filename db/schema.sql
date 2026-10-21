@@ -246,6 +246,7 @@ create table if not exists portfolio_projects (
   budget_view_cost numeric,           -- budget view job-to-date cost; revised_contract/invoiced/jtd_cost come from the records since 2026-10-07
   budget_view_invoiced numeric,       -- budget view invoicing to date; a gap = money on codes not in the budget
   fiscal_year text,
+  budget_view_contract numeric,       -- the budget view's own revised contract; budgeted margin % is measured against it
   billing_staleness numeric,          -- Procore "Billing Staleness (Days)" custom field, calculated by Power Automate (LEDGER only reads it)
   est_tm numeric,                     -- estimated billing value parts (see portfolio.js): every T&M hour × the project's current rates,
   est_dc numeric,                     --   non-payroll direct costs (direct_cost_type <> 'payroll'),

@@ -329,6 +329,7 @@ export async function refreshProjectSnapshot(env, tenantId, projectId) {
   // Keep the budget view's own totals (to flag money outside the budget)…
   values.budget_view_cost = rows ? values.jtd_cost : null;
   values.budget_view_invoiced = rows ? values.invoiced : null;
+  values.budget_view_contract = rows ? values.revised_contract : null; // the budget's own contract — budgeted % is measured against it
 
   // …then use the real records for contract, invoicing and cost.
   const actuals = await fetchProjectActuals(env, projectId);
@@ -351,18 +352,14 @@ export async function refreshProjectSnapshot(env, tenantId, projectId) {
     values.margin_to_date_pct = share(values.margin_to_date, values.invoiced);
   }
 
-  // Budgeted margin: the original quote until the budget changes, then the
-  // live budget — both against the real contract (see budgetedMarginBasis).
-  const basis = budgetedMarginBasis(values, actuals.contracts);
-  values.original_contract = basis.originalContract;
-  values.budget_basis = rows ? basis.basis : null;
-  if (rows && basis.basis === 'original') {
-    values.budgeted_margin = basis.margin;
-    values.budgeted_margin_pct = basis.pct;
-  } else if (rows && (values.revised_budget ?? 0) > 0 && values.revised_contract != null) {
-    values.budgeted_margin = round2(values.revised_contract - values.revised_budget);
-    values.budgeted_margin_pct = share(values.budgeted_margin, values.revised_contract);
-  }
+  // Budgeted margin comes straight from the budget's own "Budgeted Margin"
+  // column (Ben, 2026-10-21) — no original-quote stand-in, no estimate. An
+  // approved CO without a matching budget change inflates it; the plan is to
+  // automate budget changes so the budget stays right. (Until 2026-10-21 this
+  // used the original quote until the budget changed — budget_basis 'original'
+  // / 'live'; budget_basis is now always null.)
+  values.original_contract = budgetedMarginBasis(values, actuals.contracts).originalContract;
+  values.budget_basis = null;
 
   values.fiscal_year = p.custom_fields?.[FISCAL_YEAR_FIELD]?.value?.label ?? null;
 
@@ -377,7 +374,7 @@ export async function refreshProjectSnapshot(env, tenantId, projectId) {
     ? round2(actuals.contracts.filter(c => ['Approved', 'Complete'].includes(c.status)).reduce((s, c) => s + (num(c.grand_total) || 0), 0))
     : null;
 
-  const cols = [...Object.keys(COLUMN_MAP), 'original_contract', 'budget_basis', 'budget_view_cost', 'budget_view_invoiced', 'fiscal_year', 'pc_original_all', 'billing_staleness', 'est_dc', 'est_sub'];
+  const cols = [...Object.keys(COLUMN_MAP), 'original_contract', 'budget_basis', 'budget_view_cost', 'budget_view_invoiced', 'fiscal_year', 'pc_original_all', 'billing_staleness', 'est_dc', 'est_sub', 'budget_view_contract'];
   const params = [
     tenantId, String(projectId),
     p.name || null, p.project_number || null, p.project_stage?.name || p.stage || null,
