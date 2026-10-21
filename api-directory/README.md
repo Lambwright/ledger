@@ -161,6 +161,32 @@ each with CREATE/UPDATE/DELETE. To revive it, point the URL back to
 `https://qbo-dashboard.smoothlink.net/webhook/procore/` and get a fresh Authorization
 value from smoothlink. The original value was lost on 2026-10-07.
 
+## Estimating: the public API works for LEDGER's app (2026-10-21)
+
+Procore replied to Ben on 2026-10-07 (forwarded to HANDOFF) with a beta for estimate
+summaries on the normal REST API. `estimating-tool.procore.com/api/...` is Procore's
+browser-only web tier: it always returns 401 NotLoggedIn for app tokens, so don't use
+it. Verified with LEDGER's own client on KPS and 140 Lake Drive East (all v2.0, under
+`/rest/v2.0/companies/{co}/projects/{project_id}/estimating/`):
+
+- `estimating_project` returns the linked estimating project:
+  `{id, name, status, project_number, project_id, stats{total}, ...}`.
+- `proposals` lists every proposal: `{id, name, type (ESTIMATE|CHANGE_ORDER), is_primary,
+  include_in_primary_estimate, total, quote_nr, updated_at, inclusions, exclusions,
+  notes}`. Exactly one has `is_primary: true`.
+- `proposals/{id}` is the same object for one proposal.
+- **`proposals/{id}/line_items`** returns one row per estimate line: `{item_cost,
+  item_sales, labor_cost, labor_sales, profit, takeoff_quantity, name, group_id,
+  cost_item{type, unit_labor, unit_labor_rate, ...}}`. It pages with
+  `?page=&per_page=100` (page 2 comes back empty when everything fits).
+  **Σ(item_sales + labor_sales) = the proposal `total` exactly** (KPS $194,967; Lake
+  Drive $489,378). Cost = Σ(item_cost + labor_cost), so margin = (sales − cost) / sales.
+  Both came out at 40.0%.
+- `proposals/{id}/summary` (the beta Procore opened) returns SETTINGS, not totals: waste,
+  margin and tax rates per category, `labor_cost` ($/hr), and markups. It's not enough
+  for a margin.
+- 404s: `proposals/{id}/items`, `/totals`, `/cost_summary`, `estimating_project/summary`.
+
 ## Project custom fields, payroll DCs, sub-invoice lines (2026-10-21)
 
 **Custom field names:** `GET /rest/v1.0/custom_field_definitions/{id}?company_id=`
