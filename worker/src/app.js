@@ -2868,6 +2868,42 @@ function commitmentsBase(env, projectId) {
   return `/rest/v2.0/companies/${env.PROCORE_COMPANY_ID}/projects/${projectId}/commitment_contracts`;
 }
 
+// The dashboard's estimated billing value (Ben, 2026-10-21): every T&M hour on
+// the project — billed, unbilled, written off or budgeted alike — at the
+// project's CURRENT rate for its time type (project override, else company
+// default). An estimate of value, not what was actually billed.
+export async function tmValueAtRates(env, tenantId, projectId, tickets) {
+  const rates = await getRateLookup(env, tenantId, projectId);
+  let total = 0;
+  for (const t of tickets || []) {
+    for (const l of [...(t.unbilledLines || []), ...(t.billedLines || []), ...(t.writtenOffLines || []), ...(t.budgetedLines || [])]) {
+      const rate = rates[`${REGION_PLACEHOLDER}|${l.timeType}`];
+      if (rate != null) total += rate * (Number(l.hours) || 0);
+    }
+  }
+  return Math.round(total * 100) / 100;
+}
+
+// The cost types on a commitment's lines — the suffix of each budget code
+// ("49-04-01.L" → "L"). Purchase orders often have an empty flat_code, which
+// contributes nothing. Returns { types }, { refused: res } on a 429, or null
+// if Procore couldn't say. No retries: the caller treats unknown as unknown.
+export async function commitmentCostTypes(env, projectId, commitmentId) {
+  const types = new Set();
+  for (let page = 1; page <= 5; page++) {
+    const res = await procoreRequest(env, 'GET', `${commitmentsBase(env, projectId)}/${commitmentId}/line_items?page=${page}&per_page=100`);
+    if (res.status === 429) return { refused: res };
+    if (res.status !== 200) return null;
+    const items = res.data?.data || [];
+    for (const li of items) {
+      const m = /\.([A-Za-z]+)$/.exec(li.wbs_code?.flat_code || '');
+      if (m) types.add(m[1].toUpperCase());
+    }
+    if (items.length < 100) break;
+  }
+  return { types: [...types] };
+}
+
 async function getBilledCommitmentLineMap(env, tenantId, projectId) {
   return getBilledRecordMap(env, tenantId, projectId, 'commitment_line');
 }

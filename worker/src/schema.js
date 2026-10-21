@@ -75,6 +75,17 @@ export async function ensurePortfolioActualsColumns(env) {
     add column if not exists budget_view_cost numeric,
     add column if not exists budget_view_invoiced numeric,
     add column if not exists fiscal_year text,
-    add column if not exists pc_original_all numeric`, []);
+    add column if not exists pc_original_all numeric,
+    add column if not exists billing_staleness numeric,
+    add column if not exists est_dc numeric,
+    add column if not exists est_sub numeric,
+    add column if not exists est_tm numeric`, []);
+  await dbQuery(env, `create table if not exists commitment_cost_types (
+    tenant_id text not null,
+    commitment_id text not null,
+    cost_types text[] not null,
+    checked_at timestamptz not null default now(),
+    primary key (tenant_id, commitment_id)
+  )`, []);
   portfolioActualsReady = true;
 }

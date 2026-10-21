@@ -59,6 +59,22 @@ const countCell = (key, muted = true) => (p) => (
   <td className={`num${muted ? " cell-muted" : ""}`}>{p[key] ?? "—"}</td>
 );
 
+// Estimated billing value (Ben, 2026-10-21), everything to date: T&M hours at
+// the project's rates + 20% on non-payroll direct costs and non-labour sub
+// invoices. null until all three parts are known (see worker portfolio.js).
+const ESTIMATE_MARKUP = 0.2;
+function estimatedBilling(p) {
+  const tm = n(p.est_tm), dc = n(p.est_dc), sub = n(p.est_sub);
+  if (tm == null || dc == null || sub == null) return null;
+  return Math.round((tm + (dc + sub) * (1 + ESTIMATE_MARKUP)) * 100) / 100;
+}
+
+function stalenessClass(p) {
+  const d = n(p.billing_staleness);
+  if (d == null) return "";
+  return d > 60 ? " neg" : d > 30 ? " warn" : "";
+}
+
 const COLUMN_CATALOG = [
   {
     key: "name", label: "Project", locked: true, sort: (p) => (p.name || "").toLowerCase(),
@@ -82,6 +98,11 @@ const COLUMN_CATALOG = [
         </div>
       </td>
     ),
+  },
+  {
+    key: "billing_staleness", label: "Staleness", num: true,
+    sort: (p) => n(p.billing_staleness) ?? -1,
+    cell: (p) => <td className={`num${stalenessClass(p)}`}>{n(p.billing_staleness) == null ? "—" : `${Math.round(n(p.billing_staleness))} d`}</td>,
   },
   { key: "stage", label: "Stage", sort: (p) => p.stage || "", cell: (p) => <td>{p.stage || "—"}</td> },
   { key: "fiscal_year", label: "Fiscal year", sort: (p) => p.fiscal_year || "", cell: (p) => <td>{p.fiscal_year || "—"}</td> },
@@ -125,6 +146,10 @@ const COLUMN_CATALOG = [
   { key: "committed_costs", label: "Committed", num: true, hidden: true, cell: moneyCell("committed_costs") },
   { key: "revised_budget", label: "Revised budget", num: true, hidden: true, cell: moneyCell("revised_budget") },
   { key: "invoiced", label: "Invoiced", num: true, cell: moneyCell("invoiced") },
+  {
+    key: "est_billing", label: "Est. billing value", num: true, sort: (p) => estimatedBilling(p) ?? -Infinity,
+    cell: (p) => <td className="num">{money(estimatedBilling(p))}</td>,
+  },
   { key: "pct_invoiced", label: "% Invoiced", num: true, hidden: true, cell: (p) => <td className="num">{pct(p.pct_invoiced)}</td> },
   { key: "revised_contract", label: "Contract", num: true, cell: moneyCell("revised_contract") },
   { key: "original_contract", label: "Original contract", num: true, hidden: true, cell: moneyCell("original_contract") },
@@ -152,6 +177,7 @@ const CATALOG_BY_KEY = new Map(COLUMN_CATALOG.map((c) => [c.key, c]));
 
 // Header tooltips: what each figure is and where it comes from.
 const COLUMN_TIPS = {
+  billing_staleness: "Billing Staleness (Days), calculated in Procore by Power Automate. Amber over 30 days, red over 60",
   stage: "The project's stage in Procore",
   fiscal_year: "The project's Fiscal Year field in Procore",
   margin_to_date_pct: "Margin to date: (invoiced − cost) ÷ invoiced. Red below zero, amber behind budgeted, green at or above it",
@@ -168,6 +194,7 @@ const COLUMN_TIPS = {
   committed_costs: "Total value of commitments, from the project's budget",
   revised_budget: "The project's budget after approved budget changes",
   invoiced: "Owner invoices to date, before retainage, drafts excluded",
+  est_billing: "Estimated billing value to date: every T&M hour at the project's rates + 20% on non-payroll direct costs and on approved sub invoices without labour (no S or L cost-type lines). Blank until LEDGER has worked out all three parts",
   pct_invoiced: "Invoiced ÷ contract",
   revised_contract: "Approved prime contracts, including approved change orders",
   original_contract: "Approved prime contracts before change orders, pass-through contracts excluded",

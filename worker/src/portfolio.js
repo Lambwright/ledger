@@ -14,7 +14,7 @@ import { dbQuery } from './db.js';
 import { ledgerLevel } from './roles.js';
 import { ensureBulkSchema, ensurePortfolioActualsColumns } from './schema.js';
 import { hasQueuedBulkReconciliation, processNextBulkReconciliation } from './bulk.js';
-import { listPendingTickets, listPendingDirectCosts, listCommitments } from './app.js';
+import { listPendingTickets, listPendingDirectCosts, listCommitments, tmValueAtRates, commitmentCostTypes } from './app.js';
 
 // Company-level budget view; resolved by name if a project doesn't have it.
 const REPORTING_VIEW_ID = '562949953553505';
@@ -45,6 +45,19 @@ const PERCENT_COLUMNS = new Set(['pct_invoiced', 'margin_to_date_pct', 'budgeted
 // The "Fiscal Year" project custom field (a dropdown; Ben, 2026-10-07). The
 // project show call already returns it as { id, label } — no extra request.
 const FISCAL_YEAR_FIELD = 'custom_field_562949954054370';
+// "Billing Staleness (Days)" — calculated on every project by Power Automate
+// (Ben, 2026-10-21); LEDGER only reads it.
+const BILLING_STALENESS_FIELD = 'custom_field_562949954055994';
+
+// Estimated billing value (Ben, 2026-10-21), everything to date:
+//   T&M hours × the project's rates (est_tm, from the record count)
+//   + (non-payroll direct costs (est_dc) + approved sub invoices that aren't
+//      labour (est_sub)) × (1 + ESTIMATE_MARKUP)
+// A sub invoice counts only if its commitment has NO line with cost type
+// S (Commitment) or L (Labour) — that drops subcontracted labour but keeps
+// materials bought on contract. Each commitment is checked once and remembered.
+const LABOUR_COST_TYPES = ['S', 'L'];
+const COST_TYPE_CHECKS_PER_REFRESH = 20; // bounds the extra calls on big projects
 
 // Einbau's convention for a Prime Contract that bills costs straight through
 // (LEDGER's standalone invoices use it too). Their revenue isn't part of the
@@ -203,7 +216,78 @@ async function fetchProjectActuals(env, projectId) {
   }
   const remaining = [pcs, invoices, dcs, reqs].map(x => x.remaining).filter(r => r != null);
   const refused = [pcs, invoices, dcs, reqs].find(x => x.refused)?.refused || null;
-  return { contracts, contractValue, invoiced, directCosts, subInvoices, refused, remaining: remaining.length ? Math.min(...remaining) : null };
+  // For the estimated billing value: non-payroll direct costs (payroll DCs are
+  // direct_cost_type "payroll" — Procore's list filter for it is ignored, so
+  // test each one), and the sub invoices themselves.
+  const nonPayrollDirectCosts = dcs.ok
+    ? round2(dcs.items.filter(live).filter(d => d.direct_cost_type !== 'payroll').reduce((s, d) => s + (num(d.grand_total ?? d.amount) || 0), 0))
+    : null;
+  return {
+    contracts, contractValue, invoiced, directCosts, subInvoices, nonPayrollDirectCosts,
+    requisitions: reqs.ok ? reqs.items.filter(live) : null,
+    refused, remaining: remaining.length ? Math.min(...remaining) : null
+  };
+}
+
+// Approved sub invoices whose commitment has no S/L line, each counted for
+// what it added that period (cumulative to date minus the previous invoice on
+// the same commitment). null = not known yet: the list failed, or some
+// commitments still need their cost types checked (at most
+// COST_TYPE_CHECKS_PER_REFRESH per refresh, so a big project fills in over a
+// few refreshes). A 429 throws, so nothing is written (see rateLimited).
+async function nonLabourSubInvoices(env, tenantId, projectId, requisitions) {
+  if (!requisitions) return null;
+  const byCommitment = new Map();
+  for (const r of requisitions) {
+    const key = String(r.commitment_id);
+    if (!byCommitment.has(key)) byCommitment.set(key, []);
+    byCommitment.get(key).push(r);
+  }
+  const approvedIds = [...byCommitment.entries()]
+    .filter(([, list]) => list.some(r => String(r.status).toLowerCase() === 'approved'))
+    .map(([id]) => id);
+  if (approvedIds.length === 0) return 0;
+
+  const cached = await dbQuery(
+    env,
+    `select commitment_id, cost_types from commitment_cost_types
+     where tenant_id = $1 and commitment_id = any($2::text[]) and checked_at > now() - interval '30 days'`,
+    [tenantId, approvedIds]
+  );
+  const typesById = new Map(cached.map(r => [r.commitment_id, r.cost_types]));
+  let unknown = false;
+  let checks = 0;
+  for (const id of approvedIds) {
+    if (typesById.has(id)) continue;
+    if (checks >= COST_TYPE_CHECKS_PER_REFRESH) { unknown = true; continue; }
+    checks++;
+    const res = await commitmentCostTypes(env, projectId, id);
+    if (res?.refused) throw rateLimited(res.refused);
+    if (!res) { unknown = true; continue; }
+    typesById.set(id, res.types);
+    await dbQuery(
+      env,
+      `insert into commitment_cost_types (tenant_id, commitment_id, cost_types, checked_at) values ($1, $2, $3, now())
+       on conflict (tenant_id, commitment_id) do update set cost_types = excluded.cost_types, checked_at = now()`,
+      [tenantId, id, res.types]
+    );
+  }
+  if (unknown) return null;
+
+  const round2 = (n) => Math.round(n * 100) / 100;
+  let total = 0;
+  for (const id of approvedIds) {
+    if ((typesById.get(id) || []).some(t => LABOUR_COST_TYPES.includes(t))) continue;
+    const list = byCommitment.get(id).slice().sort((a, b) =>
+      String(a.billing_date || a.created_at || '').localeCompare(String(b.billing_date || b.created_at || '')) || Number(a.number || 0) - Number(b.number || 0));
+    let previous = 0;
+    for (const r of list) {
+      const toDate = num(r.summary?.total_completed_and_stored_to_date) || 0;
+      if (String(r.status).toLowerCase() === 'approved') total += toDate - previous;
+      previous = toDate;
+    }
+  }
+  return round2(total);
 }
 
 // Refreshes one project's row. Returns Procore's reported remaining requests
@@ -282,6 +366,10 @@ export async function refreshProjectSnapshot(env, tenantId, projectId) {
 
   values.fiscal_year = p.custom_fields?.[FISCAL_YEAR_FIELD]?.value?.label ?? null;
 
+  values.billing_staleness = num(p.custom_fields?.[BILLING_STALENESS_FIELD]?.value);
+  values.est_dc = actuals.nonPayrollDirectCosts;
+  values.est_sub = await nonLabourSubInvoices(env, tenantId, projectId, actuals.requisitions);
+
   // Contract value for CRM (crm.js): every approved/complete prime contract's
   // original amount, pass-through included — unlike original_contract, which
   // leaves pass-through out for budgeted margin.
@@ -289,7 +377,7 @@ export async function refreshProjectSnapshot(env, tenantId, projectId) {
     ? round2(actuals.contracts.filter(c => ['Approved', 'Complete'].includes(c.status)).reduce((s, c) => s + (num(c.grand_total) || 0), 0))
     : null;
 
-  const cols = [...Object.keys(COLUMN_MAP), 'original_contract', 'budget_basis', 'budget_view_cost', 'budget_view_invoiced', 'fiscal_year', 'pc_original_all'];
+  const cols = [...Object.keys(COLUMN_MAP), 'original_contract', 'budget_basis', 'budget_view_cost', 'budget_view_invoiced', 'fiscal_year', 'pc_original_all', 'billing_staleness', 'est_dc', 'est_sub'];
   const params = [
     tenantId, String(projectId),
     p.name || null, p.project_number || null, p.project_stage?.name || p.stage || null,
@@ -353,6 +441,8 @@ export async function refreshProjectCounts(env, tenantId, projectId) {
     listCommitments(env, { tenantId, projectId }).catch(() => null)
   ]);
   await saveProjectCounts(env, tenantId, projectId, countRecords(tm.tickets, dc, cm));
+  const estTm = await tmValueAtRates(env, tenantId, projectId, tm.tickets);
+  await dbQuery(env, `update portfolio_projects set est_tm = $3 where tenant_id = $1 and project_id = $2`, [tenantId, String(projectId), estTm]);
 }
 
 // Dashboard drill-down (Ben's ask 2026-09-26): the source records behind a
