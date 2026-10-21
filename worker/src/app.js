@@ -1137,9 +1137,13 @@ async function findOrCreateBillingPeriod(env, projectId, billingPeriodId, newPer
     const created = await procoreRequest(env, 'POST', `/rest/v1.0/projects/${projectId}/billing_periods`, {
       billing_period: {
         start_date: newPeriod.startDate, end_date: newPeriod.endDate,
-        due_date: newPeriod.dueDate || newPeriod.endDate
+        due_date: newPeriod.dueDate || newPeriod.endDate,
+        // Procore started requiring this (2026-10-21: 422 'status is not
+        // included in the list' without it). 'open' is what invoicing needs.
+        status: 'open'
       }
     });
+    console.log('[billing-period] create', projectId, JSON.stringify(newPeriod), '->', created.status, JSON.stringify(created.data).slice(0, 800));
     if (created.status !== 201) {
       throw new Error(`Failed to create billing period: ${created.status} ${JSON.stringify(created.data)}`);
     }
@@ -1151,7 +1155,7 @@ async function findOrCreateBillingPeriod(env, projectId, billingPeriodId, newPer
 
   const today = new Date().toISOString().slice(0, 10);
   const created = await procoreRequest(env, 'POST', `/rest/v1.0/projects/${projectId}/billing_periods`, {
-    billing_period: { start_date: today, end_date: today, due_date: today }
+    billing_period: { start_date: today, end_date: today, due_date: today, status: 'open' }
   });
   if (created.status !== 201) {
     throw new Error(`Failed to create billing period: ${created.status} ${JSON.stringify(created.data)}`);

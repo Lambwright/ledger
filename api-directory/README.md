@@ -318,8 +318,14 @@ for the full incident.
 
 ## Create Billing Period (2026-09-14)
 
-**`POST /rest/v1.0/projects/{project_id}/billing_periods`** — body `{billing_period:
-{start_date, end_date, due_date}}`. `due_date` — LEDGER defaults it to `end_date` when the
+**`POST /rest/v1.0/projects/{project_id}/billing_periods`**, body `{billing_period:
+{start_date, end_date, due_date, status: "open"}}`.
+
+**`status` is now REQUIRED (2026-10-21).** Without it Procore returns `422
+{"errors":{"status":["is not included in the list"]}}`, which blocked every invoice built
+on a new period. In September the same call worked without `status`, so Procore changed
+it in between. With `status: "open"` the create succeeded (Ben, project
+562949954996998). The status values seen on existing periods include `open`. `due_date` — LEDGER defaults it to `end_date` when the
 caller doesn't supply one explicitly; not yet confirmed whether Procore itself requires
 `due_date` or would accept its absence (LEDGER never actually omits it, so this hasn't
 been tested bare).
