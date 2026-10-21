@@ -6,7 +6,9 @@ import { dbQuery } from './db.js';
 import { ensurePrefsSchema } from './schema.js';
 
 // Only these keys may be stored, each with a size cap.
-const ALLOWED = { portfolio_columns: 4000 };
+// portfolio_views: this person's saved dashboard views (up to ~20);
+// portfolio_active_view: which one they had open last ("p:<id>", "s:<id>" or "").
+const ALLOWED = { portfolio_columns: 4000, portfolio_views: 60000, portfolio_active_view: 200 };
 
 export async function getPrefs(env, tenantId, username) {
   await ensurePrefsSchema(env);

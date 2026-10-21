@@ -7,6 +7,7 @@ import { applyAccentPreset } from "./accentPresets.js";
 import SourceRecords from "./components/SourceRecords.jsx";
 import MultiSelect from "./components/MultiSelect.jsx";
 import ColumnPicker from "./components/ColumnPicker.jsx";
+import ViewBar from "./components/ViewBar.jsx";
 import { BulkBadge, BulkDetail, BulkDialog, hasActiveBatch, reopenMessage } from "./components/BulkReconcile.jsx";
 
 const PROCORE_ORIGIN = "https://us02.procore.com";
@@ -72,7 +73,7 @@ function estimatedBilling(p) {
 function stalenessClass(p) {
   const d = n(p.billing_staleness);
   if (d == null) return "";
-  return d > 60 ? " neg" : d > 30 ? " warn" : "";
+  return d > 21 ? " neg" : d > 10 ? " warn" : ""; // Ben, 2026-10-21
 }
 
 const COLUMN_CATALOG = [
@@ -177,7 +178,7 @@ const CATALOG_BY_KEY = new Map(COLUMN_CATALOG.map((c) => [c.key, c]));
 
 // Header tooltips: what each figure is and where it comes from.
 const COLUMN_TIPS = {
-  billing_staleness: "Billing Staleness (Days), calculated in Procore by Power Automate. Amber over 30 days, red over 60",
+  billing_staleness: "Billing Staleness (Days), calculated in Procore by Power Automate. Only calculated for projects in active stages, and resets when there's invoicing activity. Amber over 10 days, red over 21",
   stage: "The project's stage in Procore",
   fiscal_year: "The project's Fiscal Year field in Procore",
   margin_to_date_pct: "Margin to date: (invoiced − cost) ÷ invoiced. Red below zero, amber behind budgeted, green at or above it",
@@ -250,6 +251,8 @@ function uniqueValues(projects, key) {
   return [...set].sort();
 }
 
+const DEFAULT_SORT = { key: "invoicing_remaining", dir: "desc" };
+
 export default function App() {
   const [authState, setAuthState] = useState("checking"); // checking | out | noaccess | in
   const [user, setUser] = useState(null);
@@ -265,7 +268,7 @@ export default function App() {
   const [dept, setDept] = useState("");
   const [showAll, setShowAll] = useState(false);
   const [invoiceFilter, setInvoiceFilter] = useState(""); // "" | "open" | "done"
-  const [sort, setSort] = useState({ key: "invoicing_remaining", dir: "desc" });
+  const [sort, setSort] = useState(DEFAULT_SORT);
 
   // Keep --header-h = the sticky page header's height (see .portfolio-scroll).
   useEffect(() => {
@@ -287,6 +290,14 @@ export default function App() {
   const [canSourceRecords, setCanSourceRecords] = useState(false); // admin-only drill-down
   // This person's column setup ({order, hidden}); null = the default.
   const [columnSetup, setColumnSetup] = useState(null);
+  // Saved views (ViewBar). "My default" keeps the auto-saved column setup and
+  // the department default; a picked view brings its own columns, filters, sort.
+  const [personalViews, setPersonalViews] = useState([]);
+  const [sharedViews, setSharedViews] = useState([]);
+  const [activeView, setActiveView] = useState(""); // "" | "p:<id>" | "s:<id>"
+  const [viewBusy, setViewBusy] = useState(false);
+  const defaultColumns = useRef(null); // the "My default" column setup
+  const viewRestored = useRef(false);
   const [selected, setSelected] = useState(() => new Set());
   const [bulkOpen, setBulkOpen] = useState(false);
   const [notice, setNotice] = useState(null);
@@ -303,6 +314,8 @@ export default function App() {
     doLogout();
     // The next person to sign in gets their own department default.
     deptDefaulted.current = false;
+    viewRestored.current = false;
+    setActiveView("");
     setDept("");
     applyAccentPreset(null);
     setUser(null);
@@ -328,7 +341,25 @@ export default function App() {
         setProjects(data.projects || []);
         setIsAdmin(data.isLedgerAdmin === true);
         setCanSourceRecords(data.canSourceRecords === true);
-        setColumnSetup(data.prefs?.portfolio_columns || null);
+        defaultColumns.current = data.prefs?.portfolio_columns || null;
+        setPersonalViews(Array.isArray(data.prefs?.portfolio_views) ? data.prefs.portfolio_views : []);
+        setSharedViews(Array.isArray(data.sharedViews) ? data.sharedViews : []);
+        if (!viewRestored.current) {
+          viewRestored.current = true;
+          const last = typeof data.prefs?.portfolio_active_view === "string" ? data.prefs.portfolio_active_view : "";
+          const found = last.startsWith("s:")
+            ? (data.sharedViews || []).find((v) => `s:${v.id}` === last)
+            : last.startsWith("p:")
+            ? (data.prefs?.portfolio_views || []).find((v) => `p:${v.id}` === last)
+            : null;
+          if (found) {
+            deptDefaulted.current = true; // the view's own filters win
+            setActiveView(last);
+            applyViewConfig(found.config);
+          } else {
+            setColumnSetup(defaultColumns.current);
+          }
+        }
       })
       .catch((e) => (e.unauthorized ? handleLogout() : setError(e.message)))
       .finally(() => setLoading(false));
@@ -479,9 +510,135 @@ export default function App() {
   const colCount = visibleColumns.length + (isAdmin ? 1 : 0);
 
   // Saved straight away; a failed save keeps the change on screen and says so.
+  // On "My default" a column change saves straight away; inside a view it
+  // stays on screen until the view is saved.
   function changeColumns(next) {
     setColumnSetup(next);
+    if (activeView) return;
+    defaultColumns.current = next;
     api.savePrefs("portfolio_columns", next).catch((e) => setError(`Couldn't save your columns: ${e.message}`));
+  }
+
+  // ---- Saved views ----
+  const currentConfig = {
+    columns: columnSetup || defaultColumnSetup(),
+    filters: {
+      stages: [...stageFilter].sort(), fiscal: [...fiscalFilter].sort(),
+      region, dept, invoice: invoiceFilter, showAll,
+    },
+    sort,
+  };
+  function normalizedConfig(cfg) {
+    const f = cfg?.filters || {};
+    return JSON.stringify({
+      columns: cfg?.columns || defaultColumnSetup(),
+      filters: {
+        stages: [...(f.stages || [])].sort(), fiscal: [...(f.fiscal || [])].sort(),
+        region: f.region || "", dept: f.dept || "", invoice: f.invoice || "", showAll: !!f.showAll,
+      },
+      sort: cfg?.sort || DEFAULT_SORT,
+    });
+  }
+  function applyViewConfig(cfg) {
+    const f = cfg?.filters || {};
+    setColumnSetup(cfg?.columns || null);
+    setStageFilter(new Set(f.stages || []));
+    setFiscalFilter(new Set(f.fiscal || []));
+    setRegion(f.region || "");
+    setDept(f.dept || "");
+    setInvoiceFilter(f.invoice || "");
+    setShowAll(!!f.showAll);
+    setSort(cfg?.sort || DEFAULT_SORT);
+  }
+  const activeViewObj = activeView.startsWith("s:")
+    ? sharedViews.find((v) => `s:${v.id}` === activeView)
+    : activeView.startsWith("p:")
+    ? personalViews.find((v) => `p:${v.id}` === activeView)
+    : null;
+  const viewDirty = !!activeViewObj && normalizedConfig(activeViewObj.config) !== normalizedConfig(currentConfig);
+
+  function rememberActive(value) {
+    api.savePrefs("portfolio_active_view", value).catch(() => {});
+  }
+  function selectView(value) {
+    setActiveView(value);
+    rememberActive(value);
+    if (!value) {
+      // My default: saved columns, no filters except your department.
+      applyViewConfig({ columns: defaultColumns.current, filters: { dept: myDeptOption || "" }, sort: DEFAULT_SORT });
+      return;
+    }
+    const v = value.startsWith("s:")
+      ? sharedViews.find((x) => `s:${x.id}` === value)
+      : personalViews.find((x) => `p:${x.id}` === value);
+    if (v) applyViewConfig(v.config);
+  }
+  async function savePersonal(list) {
+    setPersonalViews(list);
+    await api.savePrefs("portfolio_views", list);
+  }
+  async function viewAction(fn) {
+    setViewBusy(true);
+    setError(null);
+    try {
+      await fn();
+    } catch (e) {
+      if (e.unauthorized) handleLogout();
+      else setError(`Couldn't save the view: ${e.message}`);
+    } finally {
+      setViewBusy(false);
+    }
+  }
+  function saveView() {
+    viewAction(async () => {
+      if (activeView.startsWith("s:")) {
+        const v = activeViewObj;
+        await api.saveSharedView({ id: v.id, name: v.name, config: currentConfig });
+        setSharedViews((prev) => prev.map((x) => (x.id === v.id ? { ...x, config: currentConfig, updated_by: user?.username } : x)));
+        setNotice(`Saved “${v.name}” for everyone.`);
+      } else {
+        await savePersonal(personalViews.map((x) => (`p:${x.id}` === activeView ? { ...x, config: currentConfig } : x)));
+        setNotice("View saved.");
+      }
+    });
+  }
+  function saveAsNew() {
+    const name = window.prompt("Name this view (only you will see it):", activeViewObj ? `${activeViewObj.name} (copy)` : "");
+    if (!name || !name.trim()) return;
+    viewAction(async () => {
+      const id = crypto.randomUUID();
+      await savePersonal([...personalViews, { id, name: name.trim().slice(0, 60), config: currentConfig }]);
+      setActiveView(`p:${id}`);
+      rememberActive(`p:${id}`);
+      setNotice(`Saved “${name.trim()}” to your views.`);
+    });
+  }
+  function shareAsNew() {
+    const name = window.prompt("Name this standard view (everyone will see it):", "");
+    if (!name || !name.trim()) return;
+    viewAction(async () => {
+      const res = await api.saveSharedView({ name: name.trim(), config: currentConfig });
+      setSharedViews((prev) => [...prev, { id: res.id, name: res.name, config: currentConfig, updated_by: user?.username }]
+        .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())));
+      setActiveView(`s:${res.id}`);
+      rememberActive(`s:${res.id}`);
+      setNotice(`Published “${res.name}” as a standard view for everyone.`);
+    });
+  }
+  function deleteView() {
+    const v = activeViewObj;
+    if (!v) return;
+    const shared = activeView.startsWith("s:");
+    if (!window.confirm(shared ? `Delete the standard view “${v.name}” for everyone?` : `Delete your view “${v.name}”?`)) return;
+    viewAction(async () => {
+      if (shared) {
+        await api.deleteSharedView(v.id);
+        setSharedViews((prev) => prev.filter((x) => x.id !== v.id));
+      } else {
+        await savePersonal(personalViews.filter((x) => x.id !== v.id));
+      }
+      selectView("");
+    });
   }
 
   function toggleSelected(id) {
@@ -589,6 +746,19 @@ export default function App() {
           <div className="stat"><span className="stat-label">Commitments left to pay</span><span className="stat-value">{money(totals.commitmentsLeft)}</span></div>
         </div>
 
+        <ViewBar
+          personalViews={personalViews}
+          sharedViews={sharedViews}
+          value={activeView}
+          onSelect={selectView}
+          dirty={viewDirty}
+          isAdmin={isAdmin}
+          busy={viewBusy}
+          onSave={saveView}
+          onSaveAsNew={saveAsNew}
+          onShareAsNew={shareAsNew}
+          onDelete={deleteView}
+        />
         <div className="filters">
           <input className="filter-search" placeholder="Search project name or number" value={search} onChange={(e) => setSearch(e.target.value)} />
           <MultiSelect label="Stage" allLabel="All stages" options={stages} selected={stageFilter} onChange={setStageFilter} />

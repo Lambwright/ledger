@@ -31,4 +31,7 @@ export const api = {
   reopenProject: (projectId) => call("reopen_project", { project_id: projectId }),
   // This person's own dashboard preferences (e.g. column setup), any level.
   savePrefs: (key, value) => call("save_prefs", { key, value }),
+  // Shared (standard) dashboard views — LEDGER admins only (checked by the worker).
+  saveSharedView: ({ id, name, config }) => call("save_shared_view", { id, name, config }),
+  deleteSharedView: (id) => call("delete_shared_view", { id }),
 };

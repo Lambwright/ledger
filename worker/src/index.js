@@ -38,6 +38,7 @@ import { queueBulkReconciliation, reopenProject, projectReconciliation } from '.
 import { can, READ_ACTIONS, UNDO_ACTIONS, NO_ACCESS_MESSAGE } from './roles.js';
 import { getPrefs, savePref } from './prefs.js';
 import { pushFinancialsToCrm, handleCrmRefresh } from './crm.js';
+import { listSharedViews, saveSharedView, deleteSharedView } from './views.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -733,6 +734,8 @@ async function handlePortfolio(request, env) {
       projects: await listPortfolio(env, tenantId),
       // This person's own view settings (column setup) — see prefs.js.
       prefs: await getPrefs(env, tenantId, user.username).catch(() => ({})),
+      // Views LEDGER admins have published for everyone — see views.js.
+      sharedViews: await listSharedViews(env, tenantId).catch(() => []),
       // For showing/hiding controls only — every action below re-checks.
       ledgerRole: level,
       isLedgerAdmin: can.bulkReconcile(level),
@@ -773,6 +776,15 @@ async function handlePortfolio(request, env) {
   }
   if (body.action === 'source_records') {
     await markUserActive(env).catch(() => {});
+  }
+  // Shared dashboard views: anyone can use them; only LEDGER admins publish.
+  if (body.action === 'save_shared_view' || body.action === 'delete_shared_view') {
+    if (!can.bulkReconcile(level)) return json({ error: 'Only LEDGER admins can change shared views.' }, 403);
+    if (body.action === 'delete_shared_view') {
+      if (!body.id) return json({ error: 'id is required' }, 400);
+      return json(await deleteSharedView(env, tenantId, body.id), 200);
+    }
+    return json(await saveSharedView(env, tenantId, { id: body.id, name: body.name, config: body.config }, user), 200);
   }
   // Saving your own view settings — every level (it only changes your own view).
   if (body.action === 'save_prefs') {
