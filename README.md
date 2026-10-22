@@ -25,12 +25,24 @@ billed, budgeted or written off so nothing is billed twice.
 
   | `appRoles.LEDGER` | What LEDGER does |
   |---|---|
-  | `admin` | Everything, plus: undo anyone's marks, dashboard source records, bulk reconcile / Reopen project |
+  | `admin` | Everything, plus: undo anyone's marks, bulk reconcile / Reopen project, publish shared dashboard views |
   | `pm` | Billing (invoice, push to CO, standalone), Already Billed / Budgeted / Write Off, undo **own** marks, Project Settings |
-  | `accounting` | Same as `pm` for now, kept as its own branch: it may get narrower, never broader. Accounting people who need more are given admin |
-  | `viewer` | Dashboard and Review Project, read-only: no billing, dispositions, undo or settings, and the controls are hidden |
-  | `access` | LEDGER's "Live" switch in HELM is still off: behaves as LEDGER did before roles (everything except bulk reconcile) |
-  | `no_access`, missing, anything else | No access: "You don't have access to LEDGER — ask Ben to grant it in HELM." |
+  | `accounting` | Same as `pm` for now, kept as its own branch: it may get narrower, never broader. Accounting people who need more are given admin or a tool permission |
+  | `viewer` | Dashboard (including source records) and Review Project, read-only: no billing, dispositions, undo or settings, and the controls are hidden |
+  | `no_access`, missing, anything else | No access: "You don't have access to LEDGER — ask a HELM admin to grant it." |
+
+  The pre-Live `access` level was removed on 2026-10-21 (every app has been
+  Live since 2026-10-06). **No people are named in LEDGER's code or config.**
+  Who has which level, and who has which tool permission, is managed only in
+  HELM.
+
+- **HELM tool permissions** (`user.appExtras.LEDGER`, granted per person in
+  HELM → Role Matrix → Tool permissions; admins always have them):
+
+  | id | Label | Gives |
+  |---|---|---|
+  | `bulk_reconcile` | Bulk reconcile projects | Dashboard bulk reconcile and Reopen project |
+  | `publish_views` | Publish standard dashboard views | Create, edit and delete the shared views everyone sees |
 
 - **Worker enforcement** (`worker/src/index.js`, the sidebar session branch):
   - Actions in `READ_ACTIONS` (lists, details, previews, settings read,
@@ -42,11 +54,13 @@ billed, budgeted or written off so nothing is billed twice.
     yourself".
   - Each record in the sidebar lists carries `myMarks` (which kinds of mark the
     signed-in user made, bulk excluded), so pm and accounting only see the Undo
-    links they can use. Admin and `access` see all of them. The worker check
-    above stays the real gate.
-- **Dashboard** (`/portfolio`): `list` and `refresh_project` are open to
-  every level. `source_records` is admin only. `bulk_reconcile` and
-  `reopen_project` are admin only.
+    links they can use. Admin sees all of them. The worker check above stays
+    the real gate.
+- **Dashboard** (`/portfolio`): `list`, `refresh_project`, `refresh_counts`,
+  `source_records` and saving your own views (`save_prefs`) are open to every
+  level. `bulk_reconcile` and `reopen_project` need admin or the
+  `bulk_reconcile` tool. `save_shared_view` and `delete_shared_view` need
+  admin or the `publish_views` tool.
 - **Departments** (Einbau ID `user.fields.department`, set in HELM): the
   dashboard opens filtered to the signed-in person's department. This is a
   default, not a restriction, and is cleared at sign-out. Department options

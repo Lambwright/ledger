@@ -281,7 +281,8 @@ export default function App() {
 
   // Bulk reconciliation (LEDGER admins only — the worker checks it too).
   const [isAdmin, setIsAdmin] = useState(false);
-  const [canSourceRecords, setCanSourceRecords] = useState(false); // admin-only drill-down
+  const [canSourceRecords, setCanSourceRecords] = useState(false); // every LEDGER level (read-only)
+  const [canPublishViews, setCanPublishViews] = useState(false); // admin or the publish_views tool
   // This person's column setup ({order, hidden}); null = the default.
   const [columnSetup, setColumnSetup] = useState(null);
   // Saved views (ViewBar). "My default" keeps the auto-saved column setup and
@@ -333,7 +334,9 @@ export default function App() {
       .list()
       .then((data) => {
         setProjects(data.projects || []);
-        setIsAdmin(data.isLedgerAdmin === true);
+        // Bulk reconcile is a HELM tool permission (admins always have it).
+        setIsAdmin(data.canBulkReconcile === true || (data.canBulkReconcile === undefined && data.isLedgerAdmin === true));
+        setCanPublishViews(data.canPublishViews === true || (data.canPublishViews === undefined && data.isLedgerAdmin === true));
         setCanSourceRecords(data.canSourceRecords === true);
         defaultColumns.current = data.prefs?.portfolio_columns || null;
         setPersonalViews(Array.isArray(data.prefs?.portfolio_views) ? data.prefs.portfolio_views : []);
@@ -745,7 +748,7 @@ export default function App() {
           value={activeView}
           onSelect={selectView}
           dirty={viewDirty}
-          isAdmin={isAdmin}
+          isAdmin={canPublishViews}
           busy={viewBusy}
           onSave={saveView}
           onSaveAsNew={saveAsNew}

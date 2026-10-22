@@ -738,14 +738,16 @@ async function handlePortfolio(request, env) {
       sharedViews: await listSharedViews(env, tenantId).catch(() => []),
       // For showing/hiding controls only — every action below re-checks.
       ledgerRole: level,
-      isLedgerAdmin: can.bulkReconcile(level),
+      isLedgerAdmin: level === 'admin',
+      canBulkReconcile: can.bulkReconcile(level, user),
+      canPublishViews: can.publishViews(level, user),
       canSourceRecords: can.sourceRecords(level)
     }, 200);
   }
   // Bulk reconciliation (bulk.js) — LEDGER admins only, checked here on every
   // call from LEDGER's own /auth/verify result, never from the page.
   if (body.action === 'bulk_reconcile' || body.action === 'reopen_project') {
-    if (!can.bulkReconcile(level)) {
+    if (!can.bulkReconcile(level, user)) {
       return json({ error: 'Only LEDGER admins can do this.' }, 403);
     }
     await markUserActive(env).catch(() => {});
@@ -777,9 +779,10 @@ async function handlePortfolio(request, env) {
   if (body.action === 'source_records') {
     await markUserActive(env).catch(() => {});
   }
-  // Shared dashboard views: anyone can use them; only LEDGER admins publish.
+  // Shared dashboard views: anyone can use them; admins and people with the
+  // publish_views tool permission publish.
   if (body.action === 'save_shared_view' || body.action === 'delete_shared_view') {
-    if (!can.bulkReconcile(level)) return json({ error: 'Only LEDGER admins can change shared views.' }, 403);
+    if (!can.publishViews(level, user)) return json({ error: "You don't have permission to change shared views." }, 403);
     if (body.action === 'delete_shared_view') {
       if (!body.id) return json({ error: 'id is required' }, 400);
       return json(await deleteSharedView(env, tenantId, body.id), 200);
@@ -791,7 +794,7 @@ async function handlePortfolio(request, env) {
     return json(await savePref(env, tenantId, user.username, body.key, body.value), 200);
   }
   if (body.action === 'source_records') {
-    if (!can.sourceRecords(level)) return json({ error: 'Source records are for LEDGER admins.' }, 403);
+    if (!can.sourceRecords(level)) return json({ error: "You don't have access to LEDGER." }, 403);
     if (!body.project_id) return json({ error: 'project_id is required' }, 400);
     return json(await projectSourceRecords(env, tenantId, body.project_id), 200);
   }

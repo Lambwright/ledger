@@ -16,9 +16,10 @@
 //   accounting  identical to pm FOR NOW — kept as its own branch on purpose:
 //                 it may later become narrower than pm, never broader. People in
 //                 accounting who need more are made admin, per person.
-//   admin       + undo ANYONE's marks, dashboard source-record drill-down,
-//                 bulk reconcile / Reopen project (and company defaults, if
-//                 that screen is ever built)
+//   admin       + undo ANYONE's marks, bulk reconcile / Reopen project,
+//                 publishing shared dashboard views (and company defaults, if
+//                 that screen is ever built). The dashboard's source-record
+//                 drill-down is open to every level.
 
 export const NO_ACCESS_MESSAGE = "You don't have access to LEDGER — ask a HELM admin to grant it.";
 
@@ -30,17 +31,34 @@ export function ledgerLevel(user) {
   return KNOWN.has(value) ? value : null;
 }
 
+// HELM tool permissions (Ben, 2026-10-21): give one feature to specific people
+// without making them LEDGER admin. Ben grants them in HELM → Role Matrix →
+// Tool permissions; they arrive as user.appExtras.LEDGER (a list of ids, or
+// an {id: true} map — both accepted). Admins always have them.
+//   bulk_reconcile — Bulk reconcile projects (and Reopen)
+//   publish_views  — Publish standard dashboard views
+function hasTool(user, id) {
+  const extras = user?.appExtras?.LEDGER;
+  if (Array.isArray(extras)) return extras.map((x) => String(x).toLowerCase()).includes(id);
+  if (extras && typeof extras === 'object') return extras[id] === true;
+  return false;
+}
+
 // One function per capability, each listing its levels explicitly — so
 // narrowing accounting later is a one-line change in the right place.
+// The tool-permission ones take the user too.
 export const can = {
   // Billing, dispositions, Project Settings — anything that writes.
   write: (level) => level === 'admin' || level === 'pm' || level === 'accounting',
   // Undo someone else's mark. pm/accounting can only undo their own.
   undoAnyone: (level) => level === 'admin',
-  // Dashboard source-record drill-down.
-  sourceRecords: (level) => level === 'admin',
-  // Bulk reconcile / Reopen project, and publishing shared dashboard views.
-  bulkReconcile: (level) => level === 'admin'
+  // Dashboard source-record drill-down: basic, read-only LEDGER functionality,
+  // open to every level (Ben, 2026-10-21).
+  sourceRecords: (level) => level != null,
+  // Bulk reconcile / Reopen project.
+  bulkReconcile: (level, user) => level === 'admin' || (level != null && hasTool(user, 'bulk_reconcile')),
+  // Create, edit and delete the shared (standard) dashboard views.
+  publishViews: (level, user) => level === 'admin' || (level != null && hasTool(user, 'publish_views'))
 };
 
 // Sidebar actions every level may call (they only read). Anything NOT listed
