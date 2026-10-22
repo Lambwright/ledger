@@ -80,7 +80,6 @@ const WRITE_OFF_REASON_OPTIONS = [
 
 const TENANT_ID = import.meta.env.VITE_TENANT_ID;
 const DEFAULT_PROJECT_ID = import.meta.env.VITE_DEFAULT_PROJECT_ID;
-const DEFAULT_USER_ID = import.meta.env.VITE_DEFAULT_USER_ID;
 const EMBEDDED = isEmbedded();
 const FALLBACK_PROCORE_ORIGIN = 'https://us02.procore.com';
 
@@ -166,12 +165,6 @@ function resolveContractId(params) {
   return params.get('contract_id') || params.get('prime_contract_id') || null;
 }
 
-// Real Procore user who opened the panel, for the billing_records audit trail
-// ("who billed this"). Not in the side-panel handshake context — only available
-// via URL param today; falls back to the .env default otherwise.
-function resolveUserId(params) {
-  return params.get('user_id') || DEFAULT_USER_ID;
-}
 
 export default function App({ user, onSignOut }) {
   const params = new URLSearchParams(window.location.search);
@@ -191,7 +184,9 @@ export default function App({ user, onSignOut }) {
   const [contracts, setContracts] = useState([]);
   const [procoreView, setProcoreView] = useState(null);
   const [procoreOrigin, setProcoreOrigin] = useState(FALLBACK_PROCORE_ORIGIN);
-  const userId = resolveUserId(params);
+  // Who is acting = the signed-in Einbau ID (the worker records this itself;
+  // no person ids live in LEDGER's code or config — Ben, 2026-10-22).
+  const userId = user?.username || null;
 
   // Action-first flow (Ben's ask 2026-09-16, replacing the old per-source-tab
   // flow): pick what you're doing BEFORE picking any items. `view` toggles
@@ -540,7 +535,6 @@ export default function App({ user, onSignOut }) {
     const url = new URL(window.location.origin + window.location.pathname);
     if (projectId) url.searchParams.set('project_id', projectId);
     if (contractId) url.searchParams.set('contract_id', contractId);
-    if (userId) url.searchParams.set('user_id', userId);
     window.open(withTokenHash(url).toString(), '_blank', 'noopener,noreferrer,width=1100,height=850');
   }
 
