@@ -70,8 +70,8 @@ export async function verify(token) {
 }
 
 // Access = a LEDGER level in user.appRoles (Einbau ID role matrix, 2026-09-30);
-// 'access' means LEDGER's Live switch in HELM is still off. Mirrors worker/src/roles.js.
-const LEDGER_LEVELS = ["admin", "accounting", "pm", "viewer", "access"];
+// Mirrors worker/src/roles.js (levels are managed only in HELM).
+const LEDGER_LEVELS = ["admin", "accounting", "pm", "viewer"];
 export function hasLedgerAccess(user) {
   return LEDGER_LEVELS.includes(String(user?.appRoles?.LEDGER ?? "").toLowerCase());
 }

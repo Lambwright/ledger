@@ -2,7 +2,7 @@
 // Bulk project reconciliation (Ben's ask 2026-09-30).
 //
 // LEDGER counted ~5,000 unbilled records company-wide, most of them on old
-// jobs nobody will review line by line. A LEDGER admin (Ben, Leela) can pick
+// jobs nobody will review line by line. A LEDGER admin (set in HELM) can pick
 // projects on the company dashboard and mark everything still unbilled on
 // them as Already Billed, Budgeted or Written Off ("Bulk reconciliation"
 // reason) in one go.

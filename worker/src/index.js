@@ -888,7 +888,7 @@ export default {
         if (!READ_ACTIONS.has(body.action) && !can.write(session.level)) {
           return json({ error: 'You have view-only access to LEDGER.', code: 'view_only' }, 403);
         }
-        // pm/accounting may only undo their own marks; admin (and pre-switch 'access') anyone's.
+        // pm/accounting may only undo their own marks; admin anyone's.
         body.only_reconciled_by = UNDO_ACTIONS.has(body.action) && !can.undoAnyone(session.level)
           ? session.user.username
           : null;

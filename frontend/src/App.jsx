@@ -179,10 +179,10 @@ export default function App({ user, onSignOut }) {
   // refuses their writes, and these controls are hidden so they never hit one.
   const ledgerLevel = String(user?.appRoles?.LEDGER ?? '').toLowerCase();
   const viewOnly = ledgerLevel === 'viewer';
-  // Undo: admin (and 'access', before the Live switch) can undo anyone's
+  // Undo: admin can undo anyone's
   // marks; pm/accounting only their own — each record's myMarks (worker)
   // says which kinds the signed-in user made. The worker re-checks on undo.
-  const canUndoAnyone = ledgerLevel === 'admin' || ledgerLevel === 'access';
+  const canUndoAnyone = ledgerLevel === 'admin';
   const canUndo = (rec, kind) => !viewOnly && (canUndoAnyone || rec?.myMarks?.[kind] === true);
 
   const [projectId, setProjectId] = useState(resolveProjectId(params));
