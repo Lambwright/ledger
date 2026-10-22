@@ -57,7 +57,10 @@ const BILLING_STALENESS_FIELD = 'custom_field_562949954055994';
 // S (Commitment) or L (Labour) — that drops subcontracted labour but keeps
 // materials bought on contract. Each commitment is checked once and remembered.
 const LABOUR_COST_TYPES = ['S', 'L'];
-const COST_TYPE_CHECKS_PER_REFRESH = 20; // bounds the extra calls on big projects
+// Bounds the extra calls on big projects. Daytime refreshes do only a few —
+// the rest is night work (2026-10-22: a busy morning ran LEDGER out of
+// Procore's 600/hour and blocked Ben's invoice).
+const costTypeChecksPerRefresh = () => (isQuietHours() ? 20 : 3);
 
 // Einbau's convention for a Prime Contract that bills costs straight through
 // (LEDGER's standalone invoices use it too). Their revenue isn't part of the
@@ -126,7 +129,12 @@ const QUIET_TZ = 'America/Toronto';
 // stops after this many calls in any rolling 60 minutes, which keeps it under
 // that share of whichever hour Procore is counting and leaves the rest for
 // people. ~7 calls per refresh, so about 50 refreshes an hour.
+// Daytime gets far less (2026-10-22): webhooks flag many changed projects on a
+// busy morning, and 360/hour of background left too little of the 600 for
+// people — Ben's invoice was refused at 10:40.
 const BACKGROUND_CALLS_PER_HOUR = 360;
+const BACKGROUND_CALLS_PER_HOUR_DAYTIME = 150;
+const backgroundBudget = () => (isQuietHours() ? BACKGROUND_CALLS_PER_HOUR : BACKGROUND_CALLS_PER_HOUR_DAYTIME);
 const RECENT_CHANGE_HOURS = 2; // daytime: only changes newer than this
 
 export function isQuietHours(date = new Date()) {
@@ -233,7 +241,7 @@ async function fetchProjectActuals(env, projectId) {
 // what it added that period (cumulative to date minus the previous invoice on
 // the same commitment). null = not known yet: the list failed, or some
 // commitments still need their cost types checked (at most
-// COST_TYPE_CHECKS_PER_REFRESH per refresh, so a big project fills in over a
+// costTypeChecksPerRefresh() per refresh, so a big project fills in over a
 // few refreshes). A 429 throws, so nothing is written (see rateLimited).
 async function nonLabourSubInvoices(env, tenantId, projectId, requisitions) {
   if (!requisitions) return null;
@@ -259,7 +267,7 @@ async function nonLabourSubInvoices(env, tenantId, projectId, requisitions) {
   let checks = 0;
   for (const id of approvedIds) {
     if (typesById.has(id)) continue;
-    if (checks >= COST_TYPE_CHECKS_PER_REFRESH) { unknown = true; continue; }
+    if (checks >= costTypeChecksPerRefresh()) { unknown = true; continue; }
     checks++;
     const res = await commitmentCostTypes(env, projectId, id);
     if (res?.refused) throw rateLimited(res.refused);
@@ -364,6 +372,7 @@ export async function refreshProjectSnapshot(env, tenantId, projectId) {
   values.fiscal_year = p.custom_fields?.[FISCAL_YEAR_FIELD]?.value?.label ?? null;
 
   values.billing_staleness = num(p.custom_fields?.[BILLING_STALENESS_FIELD]?.value);
+  values.project_type = p.project_type?.name || null; // dashboard filter (Ben, 2026-10-22)
   values.est_dc = actuals.nonPayrollDirectCosts;
   values.est_sub = await nonLabourSubInvoices(env, tenantId, projectId, actuals.requisitions);
 
@@ -374,7 +383,7 @@ export async function refreshProjectSnapshot(env, tenantId, projectId) {
     ? round2(actuals.contracts.filter(c => ['Approved', 'Complete'].includes(c.status)).reduce((s, c) => s + (num(c.grand_total) || 0), 0))
     : null;
 
-  const cols = [...Object.keys(COLUMN_MAP), 'original_contract', 'budget_basis', 'budget_view_cost', 'budget_view_invoiced', 'fiscal_year', 'pc_original_all', 'billing_staleness', 'est_dc', 'est_sub', 'budget_view_contract'];
+  const cols = [...Object.keys(COLUMN_MAP), 'original_contract', 'budget_basis', 'budget_view_cost', 'budget_view_invoiced', 'fiscal_year', 'pc_original_all', 'billing_staleness', 'est_dc', 'est_sub', 'budget_view_contract', 'project_type'];
   const params = [
     tenantId, String(projectId),
     p.name || null, p.project_number || null, p.project_stage?.name || p.stage || null,
@@ -582,7 +591,7 @@ export async function syncProjectList(env, tenantId) {
     // One multi-row upsert per page — a query per project would blow through
     // Cloudflare's per-invocation subrequest cap on a 500+ project company.
     if (res.data.length > 0) {
-      const perRow = 10;
+      const perRow = 11;
       const values = [];
       const params = [];
       res.data.forEach((p, i) => {
@@ -591,18 +600,19 @@ export async function syncProjectList(env, tenantId) {
         params.push(
           tenantId, String(p.id), p.name || null, p.project_number || null, p.project_stage?.name || p.stage || null,
           regionName.get(String(p.project_region_id)) || null, p.city || null, p.state_code || null,
-          p.active !== false, p.created_at || null
+          p.active !== false, p.created_at || null, p.project_type?.name || null
         );
       });
       await dbQuery(
         env,
-        `insert into portfolio_projects (tenant_id, project_id, name, project_number, stage, region, city, state_code, active, procore_created_at, listed_at)
+        `insert into portfolio_projects (tenant_id, project_id, name, project_number, stage, region, city, state_code, active, procore_created_at, project_type, listed_at)
          values ${values.join(', ')}
          on conflict (tenant_id, project_id) do update set
            name = excluded.name, project_number = excluded.project_number, stage = excluded.stage,
            region = coalesce(excluded.region, portfolio_projects.region), city = excluded.city,
            state_code = excluded.state_code, active = excluded.active,
-           procore_created_at = excluded.procore_created_at, listed_at = now()`,
+           procore_created_at = excluded.procore_created_at,
+           project_type = coalesce(excluded.project_type, portfolio_projects.project_type), listed_at = now()`,
         params
       );
     }
@@ -719,7 +729,7 @@ export async function runScheduled(env) {
     [tenantId]
   );
   const used = budget[0]?.used ?? 0;
-  if (used >= BACKGROUND_CALLS_PER_HOUR) return [`hourly Procore budget used (${used} calls in the last 60 min) — waiting`];
+  if (used >= backgroundBudget()) return [`hourly Procore budget used (${used} of ${backgroundBudget()} calls in the last 60 min) — waiting`];
   const callsBefore = procoreCallCount();
   try {
     return await runScheduledPass(env, tenantId);

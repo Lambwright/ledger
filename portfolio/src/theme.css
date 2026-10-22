@@ -349,6 +349,7 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
   position: absolute; top: calc(100% + 4px); right: 0; z-index: 300; width: 290px; max-height: 70vh; overflow-y: auto;
   background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-sm); box-shadow: var(--shadow-md); padding: 6px 0;
 }
+.column-picker-menu.align-left { right: auto; left: 0; }
 .column-picker-row { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 13px; }
 .column-picker-row:hover { background: rgba(var(--accent-rgb), 0.06); }
 .column-picker-row input { padding: 0; accent-color: var(--accent); }

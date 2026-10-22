@@ -5,6 +5,14 @@ import { useEffect, useRef, useState } from "react";
 // worker (save_prefs), so it follows the person to any device.
 export default function ColumnPicker({ catalog, setup, onChange, onReset }) {
   const [open, setOpen] = useState(false);
+  // The menu hangs left from the button's right edge — unless that would run
+  // off the left of the window (the button can sit at the far left), then it
+  // hangs right from the button's left edge instead.
+  const [alignLeft, setAlignLeft] = useState(false);
+  useEffect(() => {
+    if (!open || !ref.current) return;
+    setAlignLeft(ref.current.getBoundingClientRect().right < 310);
+  }, [open]);
   const ref = useRef(null);
 
   useEffect(() => {
@@ -51,7 +59,7 @@ export default function ColumnPicker({ catalog, setup, onChange, onReset }) {
         Columns ({shownCount})
       </button>
       {open && (
-        <div className="column-picker-menu" role="group" aria-label="Table columns">
+        <div className={`column-picker-menu${alignLeft ? " align-left" : ""}`} role="group" aria-label="Table columns">
           <div className="column-picker-row is-locked">
             <input type="checkbox" checked disabled aria-label="Project (always shown)" />
             <span className="column-picker-label">Project</span>

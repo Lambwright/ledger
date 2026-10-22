@@ -106,6 +106,7 @@ const COLUMN_CATALOG = [
     cell: (p) => <td className={`num${stalenessClass(p)}`}>{n(p.billing_staleness) == null ? "—" : `${Math.round(n(p.billing_staleness))} d`}</td>,
   },
   { key: "stage", label: "Stage", sort: (p) => p.stage || "", cell: (p) => <td>{p.stage || "—"}</td> },
+  { key: "project_type", label: "Project type", hidden: true, sort: (p) => p.project_type || "", cell: (p) => <td>{p.project_type || "—"}</td> },
   { key: "fiscal_year", label: "Fiscal year", sort: (p) => p.fiscal_year || "", cell: (p) => <td>{p.fiscal_year || "—"}</td> },
   {
     key: "margin_to_date_pct", label: "Margin %", num: true,
@@ -174,6 +175,7 @@ const CATALOG_BY_KEY = new Map(COLUMN_CATALOG.map((c) => [c.key, c]));
 const COLUMN_TIPS = {
   billing_staleness: "Billing Staleness (Days), calculated in Procore by Power Automate. Only calculated for projects in active stages, and resets when there's invoicing activity. Amber over 10 days, red over 21",
   stage: "The project's stage in Procore",
+  project_type: "The project's type in Procore (e.g. Service Call, Time and Material)",
   fiscal_year: "The project's Fiscal Year field in Procore",
   margin_to_date_pct: "Margin to date: (invoiced − cost) ÷ invoiced. Red below zero, amber behind budgeted, green at or above it",
   margin_to_date: "Margin to date in dollars: invoiced − cost",
@@ -258,6 +260,7 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [stageFilter, setStageFilter] = useState(() => new Set()); // empty = all stages
   const [fiscalFilter, setFiscalFilter] = useState(() => new Set()); // empty = all fiscal years
+  const [typeFilter, setTypeFilter] = useState(() => new Set()); // empty = all project types
   const [region, setRegion] = useState("");
   const [dept, setDept] = useState("");
   const [showAll, setShowAll] = useState(false);
@@ -399,6 +402,11 @@ export default function App() {
   }
 
   const stages = useMemo(() => uniqueValues(projects, "stage"), [projects]);
+  const projectTypes = useMemo(() => {
+    const shown = projects.filter((p) => showAll || isReportable(p));
+    const values = uniqueValues(shown, "project_type");
+    return shown.some((p) => !p.project_type) ? [...values, "(none)"] : values;
+  }, [projects, showAll]);
   // Fiscal year options: the values on the projects shown, never a typed list.
   const fiscalYears = useMemo(() => {
     const shown = projects.filter((p) => showAll || isReportable(p));
@@ -440,6 +448,7 @@ export default function App() {
       })
       .filter((p) => stageFilter.size === 0 || stageFilter.has(p.stage))
       .filter((p) => fiscalFilter.size === 0 || fiscalFilter.has(p.fiscal_year || "(none)"))
+      .filter((p) => typeFilter.size === 0 || typeFilter.has(p.project_type || "(none)"))
       .filter((p) => !region || p.region === region)
       .filter((p) => !dept || String(p.departments || "").split(", ").includes(dept))
       .filter((p) => !q || `${p.name} ${p.project_number || ""}`.toLowerCase().includes(q))
@@ -452,7 +461,7 @@ export default function App() {
         const cmp = va < vb ? -1 : va > vb ? 1 : 0;
         return sort.dir === "asc" ? cmp : -cmp;
       });
-  }, [projects, search, stageFilter, fiscalFilter, region, dept, showAll, invoiceFilter, sort]);
+  }, [projects, search, stageFilter, fiscalFilter, typeFilter, region, dept, showAll, invoiceFilter, sort]);
 
   // Headline figures always match the projects currently shown (Ben, 2026-09-29).
   const totals = useMemo(() => {
@@ -519,7 +528,7 @@ export default function App() {
   const currentConfig = {
     columns: columnSetup || defaultColumnSetup(),
     filters: {
-      stages: [...stageFilter].sort(), fiscal: [...fiscalFilter].sort(),
+      stages: [...stageFilter].sort(), fiscal: [...fiscalFilter].sort(), types: [...typeFilter].sort(),
       region, dept, invoice: invoiceFilter, showAll,
     },
     sort,
@@ -529,7 +538,7 @@ export default function App() {
     return JSON.stringify({
       columns: cfg?.columns || defaultColumnSetup(),
       filters: {
-        stages: [...(f.stages || [])].sort(), fiscal: [...(f.fiscal || [])].sort(),
+        stages: [...(f.stages || [])].sort(), fiscal: [...(f.fiscal || [])].sort(), types: [...(f.types || [])].sort(),
         region: f.region || "", dept: f.dept || "", invoice: f.invoice || "", showAll: !!f.showAll,
       },
       sort: cfg?.sort || DEFAULT_SORT,
@@ -540,6 +549,7 @@ export default function App() {
     setColumnSetup(cfg?.columns || null);
     setStageFilter(new Set(f.stages || []));
     setFiscalFilter(new Set(f.fiscal || []));
+    setTypeFilter(new Set(f.types || []));
     setRegion(f.region || "");
     setDept(f.dept || "");
     setInvoiceFilter(f.invoice || "");
@@ -759,6 +769,7 @@ export default function App() {
           <input className="filter-search" placeholder="Search project name or number" value={search} onChange={(e) => setSearch(e.target.value)} />
           <MultiSelect label="Stage" allLabel="All stages" options={stages} selected={stageFilter} onChange={setStageFilter} />
           <MultiSelect label="Fiscal year" allLabel="All fiscal years" options={fiscalYears} selected={fiscalFilter} onChange={setFiscalFilter} />
+          <MultiSelect label="Project type" allLabel="All project types" options={projectTypes} selected={typeFilter} onChange={setTypeFilter} />
           <select value={region} onChange={(e) => setRegion(e.target.value)} aria-label="Region">
             <option value="">All regions</option>
             {regions.map((s) => <option key={s}>{s}</option>)}
