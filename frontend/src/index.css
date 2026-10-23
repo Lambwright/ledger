@@ -1427,17 +1427,75 @@ body {
 /* Undo links a level can't use (someone else's mark, for pm/accounting). */
 .undo-link[hidden] { display: none !important; }
 
-/* T&M materials (2026-10-23) */
-.materials { margin-top: 8px; padding: 8px 10px; border: 1px dashed var(--border, rgba(255,255,255,0.15)); border-radius: 6px; cursor: default; }
-.materials-head { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.7; margin-bottom: 4px; }
-.materials-warning { font-size: 12px; line-height: 1.4; color: #e8b84a; margin: 4px 0 6px; }
-.material-row { padding: 4px 0; }
-.material-row + .material-row { border-top: 1px solid rgba(255,255,255,0.06); }
-.material-main { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+/* T&M materials (2026-10-23) — same tokens as the line items, rate-override
+   fields and unlinked-timecard warning, so they read as part of the ticket. */
+.materials {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  cursor: default;
+}
+.materials-head {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+.materials-warning {
+  color: #e8a08a;
+  font-weight: 600;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.material-row { display: flex; flex-direction: column; gap: 6px; }
+.material-main {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ink);
+}
+.material-main input[type="checkbox"] { accent-color: var(--accent); align-self: center; }
 .material-label { flex: 1; }
-.material-status { font-size: 12px; opacity: 0.75; }
-.material-inputs { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 2px 24px; }
-.material-inputs label { display: flex; flex-direction: column; gap: 2px; font-size: 11px; opacity: 0.9; }
-.material-inputs input { width: 120px; }
-.material-inputs select { max-width: 260px; }
+.material-status {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-muted);
+}
+.material-inputs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-left: 22px;
+}
+.material-inputs label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+.material-inputs input,
+.material-inputs select {
+  background: var(--bg);
+  color: var(--ink-dim);
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  padding: 5px 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.material-inputs input { width: 96px; }
+.material-inputs select { max-width: 240px; }
+.material-inputs input:focus,
+.material-inputs select:focus { outline: none; border-color: var(--accent); }
 .preview-line-static { padding: 4px 0; }
