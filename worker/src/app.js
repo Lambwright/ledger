@@ -4,7 +4,7 @@
 
 import { procoreRequest } from './procore.js';
 import { dbQuery } from './db.js';
-import { ensureBulkSchema } from './schema.js';
+import { ensureBulkSchema, ensureMaterialSchema } from './schema.js';
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -837,13 +837,35 @@ export async function listPendingTickets(env, { tenantId, projectId, selfHeal = 
   // read, and deleting billing records stays tied to a PM opening the sidebar.
   if (selfHeal) await reconcileStaleDraftCOs(env, tenantId, projectId);
 
-  const [entriesRes, timecardsRes, billedMap, rates, billingMode] = await Promise.all([
+  const [entriesRes, timecardsRes, billedMap, rates, billingMode, materials, materialMap] = await Promise.all([
     requestWithRetry(env, 'GET', `/rest/v1.0/projects/${projectId}/time_and_material_entries`, null),
     requestWithRetry(env, 'GET', `/rest/v1.0/projects/${projectId}/time_and_material_timecards`, null),
     getBilledTimecardMap(env, tenantId, projectId),
     getRateLookup(env, tenantId, projectId),
-    resolveBillingMode(env, { tenantId, projectId })
+    resolveBillingMode(env, { tenantId, projectId }),
+    // T&M materials (2026-10-23) — a failure here shouldn't hide the hours.
+    fetchProjectMaterials(env, projectId).catch(() => null),
+    getBilledMaterialMap(env, tenantId, projectId)
   ]);
+  const materialsByEntry = new Map();
+  for (const m of materials || []) {
+    const key = String(m.time_and_material_entry_id);
+    if (!materialsByEntry.has(key)) materialsByEntry.set(key, []);
+    materialsByEntry.get(key).push(m);
+  }
+  const materialOf = (m) => {
+    const b = materialMap.get(String(m.id));
+    const status = !b ? 'unbilled'
+      : b.status === 'written_off' ? 'written_off'
+      : b.status === 'reconciled_to_period' ? 'budgeted'
+      : b.status === 'draft_co' ? 'draft_co' : 'billed';
+    return {
+      id: String(m.id), name: m.name || '', description: m.description || '', quantity: m.quantity ?? null, uom: m.uom || '',
+      label: materialLabel(m), status, amount: b?.amount ?? null, invoiceNumber: b?.invoiceNumber || null,
+      billedOutsideLedger: b?.billedOutsideLedger === true, reasonCategory: b?.reasonCategory || null, reasonNotes: b?.reasonNotes || null,
+      myMarks: marksOf([b], me)
+    };
+  };
 
   if (entriesRes.status !== 200) {
     throw new Error(`Failed to list T&M entries: ${entriesRes.status} ${JSON.stringify(entriesRes.data)}`);
@@ -949,6 +971,8 @@ export async function listPendingTickets(env, { tenantId, projectId, selfHeal = 
       budgetedCount: budgetedLines.length,
       budgetedLines,
       budgetedAmount,
+      materials: (materialsByEntry.get(String(entry.id)) || []).map(materialOf),
+      unbilledMaterialCount: (materialsByEntry.get(String(entry.id)) || []).filter(m => !materialMap.has(String(m.id))).length,
       myMarks: marksOf(allTimecards.map(tc => billedMap.get(reconciliationKey(tc))), me)
     };
   });
@@ -957,6 +981,7 @@ export async function listPendingTickets(env, { tenantId, projectId, selfHeal = 
     billingMode: billingMode.mode,
     billingModeSource: billingMode.source,   // 'override' | 'project_type' | 'default'
     projectTypeName: billingMode.projectTypeName,
+    materialsUnavailable: materials == null,
     tickets
   };
 }
@@ -2949,6 +2974,181 @@ function commitmentBillingRows(lineItems) {
   );
 }
 
+// ============================================================
+// T&M ticket materials (Ben's ask 2026-10-23). A T&M ticket can list material
+// lines ("Sanding pads, 6 ea") — Procore keeps them at /projects/{id}/materials,
+// each with time_and_material_entry_id but NO cost and NO cost code. The PM
+// enters a lump sum and picks one of the project's budgeted codes at billing
+// time; it bills exactly that amount (no markup — there's no cost to mark up).
+// Tracked as billing_records record_type 'tm_material' (procore_record_id =
+// the material id), with the same dispositions and undo as everything else.
+// LEDGER can't see whether the same material is also on a direct cost or a sub
+// invoice — the sidebar warns the PM to check.
+// ============================================================
+
+export async function fetchProjectMaterials(env, projectId) {
+  const all = [];
+  for (let page = 1; page <= 20; page++) {
+    const res = await requestWithRetry(env, 'GET', `/rest/v1.0/projects/${projectId}/materials?page=${page}&per_page=100`, null);
+    if (res.status !== 200 || !Array.isArray(res.data)) {
+      throw new Error(`Failed to list T&M materials: ${res.status} ${JSON.stringify(res.data)}`);
+    }
+    all.push(...res.data.filter(m => !m.deleted_at));
+    if (res.data.length < 100) break;
+  }
+  return all;
+}
+
+async function getBilledMaterialMap(env, tenantId, projectId) {
+  await ensureMaterialSchema(env);
+  return getBilledRecordMap(env, tenantId, projectId, 'tm_material');
+}
+
+export function materialLabel(m) {
+  const name = String(m.name || 'Material').trim();
+  const desc = String(m.description || '').trim();
+  const qty = m.quantity != null ? ` (${Number(m.quantity)}${m.uom ? ` ${String(m.uom).trim()}` : ''})` : '';
+  return `${name}${desc ? ` — ${desc}` : ''}${qty}`;
+}
+
+// The project's budgeted budget codes, for the material code dropdown: every
+// wbs code whose cost code + cost type is an actual budget line (a code that
+// isn't on the budget can't take an invoice line — see the WBS-vs-Budget note).
+export async function listBudgetCodes(env, { projectId }) {
+  const [wbsRes, budgetLines] = await Promise.all([
+    requestWithRetry(env, 'GET', `/rest/v1.0/projects/${projectId}/work_breakdown_structure/wbs_codes?per_page=300`, null),
+    (async () => {
+      const all = [];
+      for (let page = 1; page <= 10; page++) {
+        const r = await requestWithRetry(env, 'GET', `/rest/v1.0/budget_line_items?project_id=${projectId}&page=${page}&per_page=300`, null);
+        if (r.status !== 200 || !Array.isArray(r.data)) throw new Error(`Failed to read the project's budget: ${r.status} ${JSON.stringify(r.data)}`);
+        all.push(...r.data);
+        if (r.data.length < 300) break;
+      }
+      return all;
+    })()
+  ]);
+  if (wbsRes.status !== 200) throw new Error(`Failed to list budget codes: ${wbsRes.status} ${JSON.stringify(wbsRes.data)}`);
+  const wbs = Array.isArray(wbsRes.data) ? wbsRes.data : (wbsRes.data?.data || []);
+  const budgeted = new Set(budgetLines.map(l => `${l.cost_code?.id}:${l.line_item_type?.id}`));
+  return wbs
+    .filter(w => w.flat_code && (w.status || 'active') === 'active')
+    .filter(w => {
+      const cc = w.segment_items?.find(s => s.segment?.type === 'cost_code');
+      const lt = w.segment_items?.find(s => s.segment?.type === 'line_item_type');
+      return cc && lt && budgeted.has(`${cc.id}:${lt.id}`);
+    })
+    .map(w => ({ id: String(w.id), code: w.flat_code, name: w.description || w.flat_name || '' }))
+    .sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }));
+}
+
+// materialLines: [{ id, amount, wbsCodeId, description? }] from the sidebar.
+// Validates everything before anything touches Procore.
+async function computeMaterialLines(env, { tenantId, projectId, materialLines = [] }) {
+  if (materialLines.length === 0) return null;
+  const { mode, projectTypeName } = await resolveBillingMode(env, { tenantId, projectId });
+  if (mode === 'non_billable') {
+    const err = new Error(
+      `This project is type "${projectTypeName || 'unknown'}" — not client-billable. ` +
+      `Override the billing mode for this project in LEDGER if that's wrong.`
+    );
+    err.code = 'NON_BILLABLE_PROJECT';
+    throw err;
+  }
+  const [materials, billed, codes, entriesRes] = await Promise.all([
+    fetchProjectMaterials(env, projectId),
+    getBilledMaterialMap(env, tenantId, projectId),
+    listBudgetCodes(env, { projectId }),
+    requestWithRetry(env, 'GET', `/rest/v1.0/projects/${projectId}/time_and_material_entries`, null)
+  ]);
+  const byId = new Map(materials.map(m => [String(m.id), m]));
+  const codeById = new Map(codes.map(c => [c.id, c]));
+  const ticketNumber = new Map((Array.isArray(entriesRes.data) ? entriesRes.data : []).map(e => [String(e.id), e.number]));
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const lines = materialLines.map(sel => {
+    const m = byId.get(String(sel.id));
+    if (!m) throw new Error(`T&M material ${sel.id} isn't on this project any more — it may have been deleted in Procore.`);
+    const label = materialLabel(m);
+    if (billed.has(String(m.id))) throw new Error(`"${label}" is already billed, written off, budgeted or on a draft Change Order.`);
+    const amount = round2(Number(sel.amount));
+    if (!(amount > 0)) throw new Error(`Enter an amount for "${label}".`);
+    const code = codeById.get(String(sel.wbsCodeId));
+    if (!code) throw new Error(`Pick a budget code for "${label}" — it has to be one on this project's budget.`);
+    const ticket = ticketNumber.get(String(m.time_and_material_entry_id));
+    const description = String(sel.description || '').trim() || `${label}${ticket != null ? ` — T&M #${ticket}` : ''}`;
+    return {
+      materialId: String(m.id), entryId: m.time_and_material_entry_id, description, amount,
+      quantity: 1, unitCost: amount, uom: 'LS', wbsCodeId: code.id, budgetCode: code.code
+    };
+  });
+  const totalAmount = round2(lines.reduce((s, l) => s + l.amount, 0));
+  return {
+    lineItems: lines, coLines: lines, totalAmount,
+    entryIds: [...new Set(lines.map(l => l.entryId).filter(Boolean))],
+    label: lines.length === 1 ? 'T&M material' : `${lines.length} T&M materials`
+  };
+}
+
+function materialBillingRows(lineItems) {
+  return lineItems.map(l => ({ recordType: 'tm_material', procoreRecordId: l.materialId, amount: l.amount }));
+}
+
+// Dispositions (write off / budgeted / already billed): no Procore writes, no
+// code needed; the amount is whatever the PM typed (0 when blank — materials
+// have no cost of their own).
+async function materialDispositionRows(env, { tenantId, projectId, materialIds = [], materialAmounts = {}, verb }) {
+  if (materialIds.length === 0) return { rows: [], labels: [] };
+  const [materials, billed] = await Promise.all([
+    fetchProjectMaterials(env, projectId),
+    getBilledMaterialMap(env, tenantId, projectId)
+  ]);
+  const byId = new Map(materials.map(m => [String(m.id), m]));
+  const rows = [];
+  const labels = [];
+  for (const id of materialIds.map(String)) {
+    const m = byId.get(id);
+    if (!m) throw new Error(`T&M material ${id} isn't on this project any more — it may have been deleted in Procore.`);
+    if (billed.has(id)) throw new Error(`Nothing to ${verb} for "${materialLabel(m)}" — it's already billed, written off, budgeted or on a draft Change Order.`);
+    const amount = Math.round((Number(materialAmounts[id]) || 0) * 100) / 100;
+    rows.push({ recordType: 'tm_material', procoreRecordId: id, amount });
+    labels.push(materialLabel(m));
+  }
+  return { rows, labels };
+}
+
+// Undo for one material — same status flags and own-marks rule as the others.
+export async function revertMaterial(env, { tenantId, projectId, materialId, includeBilled = false, includeWrittenOff = false, includeBudgeted = false, includeBilledOutside = false, onlyReconciledBy = null }) {
+  await ensureBulkSchema(env);
+  const statuses = [
+    'draft_co',
+    ...(includeBilled ? ['billed'] : []),
+    ...(includeWrittenOff ? ['written_off'] : []),
+    ...(includeBudgeted ? ['reconciled_to_period'] : [])
+  ];
+  const matchRows = (bulk, owner = onlyReconciledBy) => dbQuery(
+    env,
+    `select id from billing_records
+     where tenant_id = $1 and project_id = $2
+       and (status = any($4::text[]) or ($5 and status = 'billed' and billed_outside_ledger))
+       and record_type = 'tm_material' and procore_record_id = $3
+       and bulk_reconciliation_id is ${bulk ? 'not null' : 'null'}
+       and ($6::text is null or reconciled_by = $6)`,
+    [tenantId, projectId, String(materialId), statuses, includeBilledOutside, owner]
+  );
+  const matches = await matchRows(false);
+  if (matches.length === 0) {
+    if (onlyReconciledBy != null && (await matchRows(false, null)).length > 0) {
+      throw new Error('You can only undo items you marked yourself. Ask a LEDGER admin to undo this one.');
+    }
+    if ((await matchRows(true, null)).length > 0) throw new Error('These records were reconciled in bulk by a LEDGER admin. They can only be reopened together, from the company dashboard.');
+    return { reverted: 0 };
+  }
+  const ids = matches.map(m => m.id);
+  await deleteLinkedWriteOffs(env, ids);
+  await dbQuery(env, `delete from billing_records where id = any($1::uuid[])`, [ids]);
+  return { reverted: ids.length };
+}
+
 function normalizeCommitmentIds(commitmentId, commitmentIds) {
   const raw = (Array.isArray(commitmentIds) && commitmentIds.length)
     ? commitmentIds
@@ -3694,13 +3894,14 @@ function normalizeDcLine(line) {
 // Commitments header comment) — both in ONE submission would bill it twice,
 // and the already-billed checks can't catch that since neither is billed yet.
 async function computeCombinedSources(env, {
-  tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [],
+  tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [], materialLines = [],
   groupBy, rateOverrides, editedTmLines, confirmUnlinked, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, onProgress = () => {}
 }) {
   if (entryIds.length === 0 && directCostIds.length === 0 && directCostLineIds.length === 0 &&
-      commitmentIds.length === 0 && commitmentLineIds.length === 0) {
-    throw new Error('Nothing selected — pick at least one T&M ticket, direct cost, or commitment to bill.');
+      commitmentIds.length === 0 && commitmentLineIds.length === 0 && materialLines.length === 0) {
+    throw new Error('Nothing selected — pick at least one T&M ticket, material, direct cost, or commitment to bill.');
   }
+  const mt = await computeMaterialLines(env, { tenantId, projectId, materialLines });
   const tm = entryIds.length > 0
     ? await computeCOLines(env, { tenantId, projectId, entryIds, groupBy, rateOverrides, editedLines: editedTmLines, confirmUnlinked, onProgress })
     : null;
@@ -3727,21 +3928,22 @@ async function computeCombinedSources(env, {
       throw err;
     }
   }
-  return { tm, dc, cm };
+  return { tm, dc, cm, mt };
 }
 
 async function buildCombinedChangeEventAndOrder(env, {
-  tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [],
+  tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [], materialLines = [],
   primeContractId, confirmUnlinked, groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines,
   cmGroupBy, editedCmLines, title, onProgress = () => {}
 }) {
-  const { tm, dc, cm } = await computeCombinedSources(env, {
-    tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds,
+  const { tm, dc, cm, mt } = await computeCombinedSources(env, {
+    tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, materialLines,
     groupBy, rateOverrides, editedTmLines, confirmUnlinked, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, onProgress
   });
 
   const normalizedLines = [
     ...(tm ? tm.coLines.map(l => normalizeTmLine(l, tm.wbsCodeIds)) : []),
+    ...(mt ? mt.coLines : []), // already {quantity 1, unitCost, uom LS, wbsCodeId}
     ...(dc ? dc.coLines.map(normalizeDcLine) : []),
     ...(cm ? cm.coLines.map(normalizeDcLine) : [])
   ];
@@ -3761,8 +3963,8 @@ async function buildCombinedChangeEventAndOrder(env, {
   // Ben's ask 2026-09-22: override the auto-generated CO/CE name with a real
   // custom one — becomes the actual title on both records (and what LEDGER
   // itself shows back), not just cosmetic on one side.
-  const label = title?.trim() ? title.trim() : [tm?.label, dc?.label, cm?.label].filter(Boolean).join(' + ');
-  const reason = [tm && 'T&M', dc && 'Direct Cost', cm && 'Commitment'].filter(Boolean).join(' + ') + ' billing';
+  const label = title?.trim() ? title.trim() : [tm?.label, mt?.label, dc?.label, cm?.label].filter(Boolean).join(' + ');
+  const reason = [tm && 'T&M', mt && 'T&M materials', dc && 'Direct Cost', cm && 'Commitment'].filter(Boolean).join(' + ') + ' billing';
 
   // 1. Build the Change Event — same shape as buildChangeEventAndOrder/
   // buildDirectCostChangeEventAndOrder above, just fed from the combined line
@@ -3800,10 +4002,12 @@ async function buildCombinedChangeEventAndOrder(env, {
   // direct costs have no equivalent), then build the Prime Change Order.
   let contractId, changeOrderId;
   try {
-    if (tm) {
+    // Tickets whose hours OR materials are on this CE get linked back to it.
+    const linkIds = [...new Set([...(tm ? tm.entries.map(e => e.id) : []), ...(mt ? mt.entryIds : [])].map(Number))];
+    if (linkIds.length > 0) {
       const linkRes = await requestWithRetry(env, 'PATCH', `/rest/v1.0/projects/${projectId}/time_and_material_entries/bulk_update`, {
         time_and_material_entry: {
-          time_and_material_entry_ids: tm.entries.map(e => e.id),
+          time_and_material_entry_ids: linkIds,
           change_event_id: changeEventId,
           update_change_event_attachment: true
         }
@@ -3811,7 +4015,7 @@ async function buildCombinedChangeEventAndOrder(env, {
       if (linkRes.status !== 200) {
         throw new Error(`Failed to link Change Event back to ticket(s): ${linkRes.status} ${JSON.stringify(linkRes.data)}`);
       }
-      onProgress({ message: `Linked ${tm.entries.length} ticket(s) to the Change Event` });
+      onProgress({ message: `Linked ${linkIds.length} ticket(s) to the Change Event` });
     }
 
     contractId = primeContractId || await findBillableContract(env, projectId);
@@ -3874,6 +4078,7 @@ async function buildCombinedChangeEventAndOrder(env, {
     tmEntries: tm?.entries || [], tmLineItems: tm?.lineItems || [], tmCoLines: tm?.coLines || [], unlinkedCount: tm?.unlinkedCount || 0,
     dcRecords: dc?.directCosts || [], dcLineItems: dc?.lineItems || [], dcCoLines: dc?.coLines || [],
     cmLineItems: cm?.lineItems || [], cmCoLines: cm?.coLines || [],
+    mtLineItems: mt?.lineItems || [], mtCoLines: mt?.coLines || [],
     contractId, changeEventId, changeOrderId, totalAmount, label
   };
 }
@@ -3884,19 +4089,20 @@ async function buildCombinedChangeEventAndOrder(env, {
 // commit anything, so the unlinked-timecard gate belongs at the real confirm
 // step.
 export async function previewCombinedBilling(env, {
-  tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [],
+  tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [], materialLines = [],
   groupBy, rateOverrides, markupPercent, cmMarkupPercent, dcGroupBy, cmGroupBy, title
 }) {
-  const { tm, dc, cm } = await computeCombinedSources(env, {
-    tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds,
+  const { tm, dc, cm, mt } = await computeCombinedSources(env, {
+    tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, materialLines,
     groupBy, rateOverrides, confirmUnlinked: true, markupPercent, cmMarkupPercent, dcGroupBy, cmGroupBy
   });
 
   return {
     // Ben's ask 2026-09-22: preview shows the real CO/CE name it'll get,
     // including a PM-typed override — display-only here, no Procore writes.
-    label: title?.trim() ? title.trim() : [tm?.label, dc?.label, cm?.label].filter(Boolean).join(' + '),
-    totalAmount: Math.round(((tm?.totalAmount || 0) + (dc?.totalAmount || 0) + (cm?.totalAmount || 0)) * 100) / 100,
+    label: title?.trim() ? title.trim() : [tm?.label, mt?.label, dc?.label, cm?.label].filter(Boolean).join(' + '),
+    totalAmount: Math.round(((tm?.totalAmount || 0) + (mt?.totalAmount || 0) + (dc?.totalAmount || 0) + (cm?.totalAmount || 0)) * 100) / 100,
+    mtLines: (mt?.coLines || []).map(l => ({ materialId: l.materialId, description: l.description, amount: l.amount, budgetCode: l.budgetCode })),
     unlinkedCount: tm?.unlinkedCount || 0,
     tmLines: (tm?.coLines || []).map(l => ({ description: l.description, hours: l.hours, rate: l.rate, amount: l.amount, timeType: l.timeType })),
     dcLines: (dc?.coLines || []).map(l => ({ description: l.description, cost: l.cost, markupPercent: l.markupPercent, amount: l.amount })),
@@ -3907,17 +4113,17 @@ export async function previewCombinedBilling(env, {
 // "Push to CO" for a combined selection — stops at a draft Change Order for
 // manual review, same as the two single-source versions.
 export async function pushCombinedToDraftCO(env, {
-  tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [],
+  tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [], materialLines = [],
   userId, primeContractId, confirmUnlinked, groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines,
   cmGroupBy, editedCmLines, title, onProgress = () => {}
 }) {
-  const { tmLineItems, dcLineItems, cmLineItems, contractId, changeEventId, changeOrderId, totalAmount, label } =
+  const { tmLineItems, dcLineItems, cmLineItems, mtLineItems, contractId, changeEventId, changeOrderId, totalAmount, label } =
     await buildCombinedChangeEventAndOrder(env, {
-      tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, primeContractId, confirmUnlinked,
+      tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, materialLines, primeContractId, confirmUnlinked,
       groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, title, onProgress
     });
 
-  const dcRows = [...dcBillingRows(dcLineItems), ...commitmentBillingRows(cmLineItems)];
+  const dcRows = [...dcBillingRows(dcLineItems), ...commitmentBillingRows(cmLineItems), ...materialBillingRows(mtLineItems)];
   await insertBillingRecordsBatch(env, [
     ...tmLineItems.map(line => ({
       tenantId, projectId, procoreRecordId: line.timecardEntryId,
@@ -3940,7 +4146,7 @@ export async function pushCombinedToDraftCO(env, {
 // reads description/amount/hours per line, so a mixed T&M + direct-cost line
 // list needs no special handling there.
 export async function generateCombinedInvoice(env, {
-  tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [],
+  tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [], materialLines = [],
   userId, primeContractId, confirmUnlinked, groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines,
   cmGroupBy, editedCmLines, title, billingPeriodId, newBillingPeriod, invoiceNumber, billingDate, onProgress = () => {}
 }) {
@@ -3950,17 +4156,17 @@ export async function generateCombinedInvoice(env, {
   const billingPeriod = await findOrCreateBillingPeriod(env, projectId, billingPeriodId, newBillingPeriod);
   onProgress({ message: `Billing period ready — id ${billingPeriod.id}` });
 
-  const { tmEntries, tmLineItems, tmCoLines, dcLineItems, dcCoLines, cmLineItems, cmCoLines, contractId, changeEventId, changeOrderId, totalAmount, label } =
+  const { tmEntries, tmLineItems, tmCoLines, dcLineItems, dcCoLines, cmLineItems, cmCoLines, mtLineItems, mtCoLines, contractId, changeEventId, changeOrderId, totalAmount, label } =
     await buildCombinedChangeEventAndOrder(env, {
-      tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, primeContractId, confirmUnlinked,
+      tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, materialLines, primeContractId, confirmUnlinked,
       groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, title, onProgress
     });
 
   const { invoice, claimedCount, failedLines } = await approveAndInvoiceChangeOrder(env, {
-    projectId, contractId, changeOrderId, coLines: [...tmCoLines, ...dcCoLines, ...cmCoLines], billingPeriod, invoiceNumber, billingDate, onProgress
+    projectId, contractId, changeOrderId, coLines: [...tmCoLines, ...mtCoLines, ...dcCoLines, ...cmCoLines], billingPeriod, invoiceNumber, billingDate, onProgress
   });
 
-  const dcRows = [...dcBillingRows(dcLineItems), ...commitmentBillingRows(cmLineItems)];
+  const dcRows = [...dcBillingRows(dcLineItems), ...commitmentBillingRows(cmLineItems), ...materialBillingRows(mtLineItems)];
   await insertBillingRecordsBatch(env, [
     ...tmLineItems.map(line => ({
       tenantId, projectId, procoreRecordId: line.timecardEntryId,
@@ -3987,7 +4193,7 @@ export async function generateCombinedInvoice(env, {
     ticketNumbers: tmEntries.map(e => e.number),
     label,
     claimedCount,
-    totalCoLines: tmCoLines.length + dcCoLines.length + cmCoLines.length,
+    totalCoLines: tmCoLines.length + mtCoLines.length + dcCoLines.length + cmCoLines.length,
     unclaimedLines: failedLines
   };
 }
@@ -4030,19 +4236,20 @@ function defaultStandaloneTitle(label, billingDate) {
 }
 
 export async function generateStandaloneInvoice(env, {
-  tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [],
+  tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [], materialLines = [],
   userId, primeContractId, confirmUnlinked, groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines,
   cmGroupBy, editedCmLines, title, billingPeriodId, newBillingPeriod, invoiceNumber, billingDate, onProgress = () => {}
 }) {
   if (!billingDate) {
     throw new Error('billingDate is required');
   }
-  const { tm, dc, cm } = await computeCombinedSources(env, {
-    tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds,
+  const { tm, dc, cm, mt } = await computeCombinedSources(env, {
+    tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, materialLines,
     groupBy, rateOverrides, editedTmLines, confirmUnlinked, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, onProgress
   });
   const lines = [
     ...(tm ? tm.coLines.map(l => ({ ...l, wbsCodeId: tm.wbsCodeIds[l.timeType] })) : []),
+    ...(mt ? mt.coLines : []),
     ...(dc ? dc.coLines : []),
     ...(cm ? cm.coLines : [])
   ];
@@ -4053,7 +4260,7 @@ export async function generateStandaloneInvoice(env, {
   const missingCode = lines.find(l => !l.wbsCodeId);
   if (missingCode) throw new Error(`"${missingCode.description}" has no budget code, so it can't go on a contract. Fix it in Procore first.`);
   const totalAmount = Math.round(lines.reduce((s, l) => s + l.amount, 0) * 100) / 100;
-  const label = [tm?.label, dc?.label, cm?.label].filter(Boolean).join(' + ');
+  const label = [tm?.label, mt?.label, dc?.label, cm?.label].filter(Boolean).join(' + ');
   const contractTitle = title?.trim() ? title.trim() : defaultStandaloneTitle(label, billingDate);
 
   const billingPeriod = await findOrCreateBillingPeriod(env, projectId, billingPeriodId, newBillingPeriod);
@@ -4159,7 +4366,7 @@ export async function generateStandaloneInvoice(env, {
       : `Claimed all ${claimedCount} invoice line(s) at 100%`
   });
 
-  const dcRows = [...dcBillingRows(dc?.lineItems || []), ...commitmentBillingRows(cm?.lineItems || [])];
+  const dcRows = [...dcBillingRows(dc?.lineItems || []), ...commitmentBillingRows(cm?.lineItems || []), ...materialBillingRows(mt?.lineItems || [])];
   const tmLineItems = tm?.lineItems || [];
   await insertBillingRecordsBatch(env, [
     ...tmLineItems.map(line => ({
@@ -4209,10 +4416,11 @@ const WRITE_OFF_REASONS = ['warranty', 'service_call', 'goodwill', 'pm_decision'
 
 export async function writeOffRecords(env, {
   tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [],
+  materialIds = [], materialAmounts = {},
   userId, reasonCategory, reasonNotes, invoiceNumber, bulkReconciliationId = null
 }) {
-  if (entryIds.length === 0 && directCostIds.length === 0 && directCostLineIds.length === 0 && commitmentIds.length === 0 && commitmentLineIds.length === 0) {
-    throw new Error('Nothing selected — pick at least one T&M ticket, direct cost, or commitment to write off.');
+  if (entryIds.length === 0 && directCostIds.length === 0 && directCostLineIds.length === 0 && commitmentIds.length === 0 && commitmentLineIds.length === 0 && materialIds.length === 0) {
+    throw new Error('Nothing selected — pick at least one T&M ticket, material, direct cost, or commitment to write off.');
   }
   if (!WRITE_OFF_REASONS.includes(reasonCategory)) {
     throw new Error(`Invalid write-off reason: ${reasonCategory} (must be one of ${WRITE_OFF_REASONS.join(', ')})`);
@@ -4316,7 +4524,13 @@ export async function writeOffRecords(env, {
     }
   }
 
-  const allRows = [...tmRows, ...dcRows, ...commitmentRows];
+  const mat = await materialDispositionRows(env, { tenantId, projectId, materialIds, materialAmounts, verb: 'write off' });
+  const materialRows = mat.rows.map(row => ({
+    ...row, tenantId, projectId, status: 'written_off',
+    writeOffReason: reasonNotes, reconciledBy: userId || 'ledger-system', invoiceNumber: trimmedInvoiceNumber, bulkReconciliationId
+  }));
+
+  const allRows = [...tmRows, ...dcRows, ...commitmentRows, ...materialRows];
   const ids = await insertBillingRecordsBatch(env, allRows);
   await insertWriteOffsBatch(env, allRows.map((row, i) => ({
     billingRecordId: ids[i], tenantId, projectId, reasonCategory, reasonNotes,
@@ -4327,7 +4541,8 @@ export async function writeOffRecords(env, {
   const label = [
     tmEntries.length > 0 ? ticketLabel(tmEntries.map(e => e.number)) : null,
     directCosts.length > 0 ? (directCosts.length > 1 ? `${directCosts.length} Direct Costs` : (directCosts[0].description || 'Direct Cost')) : null,
-    commitments.length > 0 ? (commitments.length > 1 ? `${commitments.length} Commitments` : commitmentLabel(commitments[0])) : null
+    commitments.length > 0 ? (commitments.length > 1 ? `${commitments.length} Commitments` : commitmentLabel(commitments[0])) : null,
+    mat.labels.length > 0 ? (mat.labels.length > 1 ? `${mat.labels.length} T&M materials` : mat.labels[0]) : null
   ].filter(Boolean).join(' + ');
 
   return { count: allRows.length, totalAmount, label };
@@ -4364,11 +4579,12 @@ export async function markAsAlreadyBilled(env, args) {
 // Shared by Mark as Budgeted and Already Billed: pure LEDGER bookkeeping, no
 // Procore writes.
 async function recordDisposition(env, {
-  tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [], userId, notes,
+  tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [],
+  materialIds = [], materialAmounts = {}, userId, notes,
   invoiceNumber, status, verb, billedOutsideLedger = false, bulkReconciliationId = null
 }) {
-  if (entryIds.length === 0 && directCostIds.length === 0 && directCostLineIds.length === 0 && commitmentIds.length === 0 && commitmentLineIds.length === 0) {
-    throw new Error(`Nothing selected — pick at least one T&M ticket, direct cost, or commitment to ${verb}.`);
+  if (entryIds.length === 0 && directCostIds.length === 0 && directCostLineIds.length === 0 && commitmentIds.length === 0 && commitmentLineIds.length === 0 && materialIds.length === 0) {
+    throw new Error(`Nothing selected — pick at least one T&M ticket, material, direct cost, or commitment to ${verb}.`);
   }
   const extra = { invoiceNumber: invoiceNumber?.trim() || null, billedOutsideLedger, bulkReconciliationId };
 
@@ -4441,14 +4657,20 @@ async function recordDisposition(env, {
     }
   }
 
-  const allRows = [...tmRows, ...dcRows, ...commitmentRows];
+  const mat = await materialDispositionRows(env, { tenantId, projectId, materialIds, materialAmounts, verb });
+  const materialRows = mat.rows.map(row => ({
+    ...row, tenantId, projectId, status, writeOffReason: notes, reconciledBy: userId || 'ledger-system', ...extra
+  }));
+
+  const allRows = [...tmRows, ...dcRows, ...commitmentRows, ...materialRows];
   await insertBillingRecordsBatch(env, allRows);
 
   const totalAmount = Math.round(allRows.reduce((s, r) => s + r.amount, 0) * 100) / 100;
   const label = [
     tmEntries.length > 0 ? ticketLabel(tmEntries.map(e => e.number)) : null,
     directCosts.length > 0 ? (directCosts.length > 1 ? `${directCosts.length} Direct Costs` : (directCosts[0].description || 'Direct Cost')) : null,
-    commitments.length > 0 ? (commitments.length > 1 ? `${commitments.length} Commitments` : commitmentLabel(commitments[0])) : null
+    commitments.length > 0 ? (commitments.length > 1 ? `${commitments.length} Commitments` : commitmentLabel(commitments[0])) : null,
+    mat.labels.length > 0 ? (mat.labels.length > 1 ? `${mat.labels.length} T&M materials` : mat.labels[0]) : null
   ].filter(Boolean).join(' + ');
 
   return { count: allRows.length, totalAmount, label };

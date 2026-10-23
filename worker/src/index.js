@@ -28,7 +28,8 @@ import {
   previewCombinedBilling, generateCombinedInvoice, generateStandaloneInvoice, pushCombinedToDraftCO, writeOffRecords, markAsBudgeted, markAsAlreadyBilled,
   invoiceExistingChangeOrder,
   listCommitments, commitmentLineDetail, previewCommitmentBilling, generateCommitmentInvoice, pushCommitmentToDraftCO,
-  revertCommitment
+  revertCommitment,
+  revertMaterial, listBudgetCodes
 } from './app.js';
 import {
   handleProcoreWebhook, refreshIfStale, refreshProjectSnapshot, refreshProjectCounts, saveProjectCounts, projectSourceRecords,
@@ -283,9 +284,9 @@ async function handleStreamingCombinedAction(env, body) {
     action, tenant_id, project_id, entry_ids, direct_cost_ids, direct_cost_line_ids, commitment_ids, commitment_line_ids, user_id,
     prime_contract_id, confirm_unlinked, group_by, rate_overrides, edited_tm_lines,
     markup_percent, cm_markup_percent, dc_group_by, edited_dc_lines, cm_group_by, edited_cm_lines,
-    title, billing_period_id, new_billing_period, invoice_number, billing_date, standalone
+    title, billing_period_id, new_billing_period, invoice_number, billing_date, standalone, material_lines
   } = body;
-  const haveEntries = [entry_ids, direct_cost_ids, direct_cost_line_ids, commitment_ids, commitment_line_ids]
+  const haveEntries = [entry_ids, direct_cost_ids, direct_cost_line_ids, commitment_ids, commitment_line_ids, material_lines]
     .some(a => Array.isArray(a) && a.length > 0);
   const { response, send, close } = ndjsonResponse();
 
@@ -300,6 +301,7 @@ async function handleStreamingCombinedAction(env, body) {
         tenantId: tenant_id, projectId: project_id,
         entryIds: entry_ids || [], directCostIds: direct_cost_ids || [], directCostLineIds: direct_cost_line_ids || [],
         commitmentIds: commitment_ids || [], commitmentLineIds: commitment_line_ids || [],
+        materialLines: materialLinesFrom(material_lines),
         cmGroupBy: cm_group_by, editedCmLines: edited_cm_lines, cmMarkupPercent: cm_markup_percent,
         userId: user_id, primeContractId: prime_contract_id, confirmUnlinked: !!confirm_unlinked,
         groupBy: group_by, rateOverrides: rate_overrides, editedTmLines: edited_tm_lines,
@@ -324,6 +326,19 @@ async function handleStreamingCombinedAction(env, body) {
 
   return response;
 }
+
+// T&M materials from the sidebar: [{id, amount, wbs_code_id, description?}].
+function materialLinesFrom(list) {
+  return (Array.isArray(list) ? list : []).map(m => ({
+    id: m?.id, amount: m?.amount, wbsCodeId: m?.wbs_code_id, description: m?.description
+  }));
+}
+function materialAmountsFrom(list) {
+  const out = {};
+  for (const m of Array.isArray(list) ? list : []) if (m?.id != null) out[String(m.id)] = m.amount;
+  return out;
+}
+const materialIdsFrom = (list) => (Array.isArray(list) ? list : []).map(m => m?.id).filter(id => id != null);
 
 async function handleGenericProcore(env, body) {
   const { status, data } = await procoreRequest(env, body.method, body.path, body.data);
@@ -382,6 +397,27 @@ async function handleAction(env, body, ctx) {
     return json(result, 200);
   }
 
+  if (action === 'revert_material') {
+    const { tenant_id, project_id, material_id, include_billed, include_written_off, include_budgeted, include_billed_outside } = body;
+    if (!tenant_id || !project_id || !material_id) {
+      return json({ error: 'tenant_id, project_id, and material_id are required' }, 400);
+    }
+    const result = await revertMaterial(env, {
+      tenantId: tenant_id, projectId: project_id, materialId: material_id,
+      includeBilled: !!include_billed, includeWrittenOff: !!include_written_off, includeBudgeted: !!include_budgeted,
+      includeBilledOutside: !!include_billed_outside,
+      onlyReconciledBy: body.only_reconciled_by ?? null
+    });
+    return json(result, 200);
+  }
+
+  // The project's budgeted budget codes — the T&M material code dropdown.
+  if (action === 'list_budget_codes') {
+    const { project_id } = body;
+    if (!project_id) return json({ error: 'project_id is required' }, 400);
+    return json({ codes: await listBudgetCodes(env, { projectId: project_id }) }, 200);
+  }
+
   if (action === 'revert_commitment') {
     const { tenant_id, project_id, commitment_id, include_billed, include_written_off, include_budgeted, include_billed_outside } = body;
     if (!tenant_id || !project_id || !commitment_id) {
@@ -402,9 +438,9 @@ async function handleAction(env, body, ctx) {
   if (action === 'write_off_records') {
     const {
       tenant_id, project_id, entry_ids, direct_cost_ids, direct_cost_line_ids, commitment_ids, commitment_line_ids,
-      user_id, reason_category, reason_notes, invoice_number
+      user_id, reason_category, reason_notes, invoice_number, materials
     } = body;
-    const haveEntries = (Array.isArray(entry_ids) && entry_ids.length > 0) ||
+    const haveEntries = (Array.isArray(materials) && materials.length > 0) || (Array.isArray(entry_ids) && entry_ids.length > 0) ||
       (Array.isArray(direct_cost_ids) && direct_cost_ids.length > 0) ||
       (Array.isArray(direct_cost_line_ids) && direct_cost_line_ids.length > 0) ||
       (Array.isArray(commitment_ids) && commitment_ids.length > 0) ||
@@ -416,6 +452,7 @@ async function handleAction(env, body, ctx) {
       const result = await writeOffRecords(env, {
         tenantId: tenant_id, projectId: project_id, entryIds: entry_ids || [], directCostIds: direct_cost_ids || [],
         directCostLineIds: direct_cost_line_ids || [], commitmentIds: commitment_ids || [], commitmentLineIds: commitment_line_ids || [],
+        materialIds: materialIdsFrom(materials), materialAmounts: materialAmountsFrom(materials),
         userId: user_id, reasonCategory: reason_category, reasonNotes: reason_notes, invoiceNumber: invoice_number
       });
       return json(result, 200);
@@ -429,9 +466,9 @@ async function handleAction(env, body, ctx) {
   if (action === 'mark_already_billed') {
     const {
       tenant_id, project_id, entry_ids, direct_cost_ids, direct_cost_line_ids, commitment_ids, commitment_line_ids,
-      user_id, notes, invoice_number
+      user_id, notes, invoice_number, materials
     } = body;
-    const haveEntries = [entry_ids, direct_cost_ids, direct_cost_line_ids, commitment_ids, commitment_line_ids]
+    const haveEntries = [entry_ids, direct_cost_ids, direct_cost_line_ids, commitment_ids, commitment_line_ids, materials]
       .some(a => Array.isArray(a) && a.length > 0);
     if (!tenant_id || !project_id || !haveEntries) {
       return json({ error: 'tenant_id, project_id, and at least one item are required' }, 400);
@@ -440,6 +477,7 @@ async function handleAction(env, body, ctx) {
       const result = await markAsAlreadyBilled(env, {
         tenantId: tenant_id, projectId: project_id, entryIds: entry_ids || [], directCostIds: direct_cost_ids || [],
         directCostLineIds: direct_cost_line_ids || [], commitmentIds: commitment_ids || [], commitmentLineIds: commitment_line_ids || [],
+        materialIds: materialIdsFrom(materials), materialAmounts: materialAmountsFrom(materials),
         userId: user_id, notes, invoiceNumber: invoice_number
       });
       return json(result, 200);
@@ -453,9 +491,9 @@ async function handleAction(env, body, ctx) {
   if (action === 'mark_as_budgeted') {
     const {
       tenant_id, project_id, entry_ids, direct_cost_ids, direct_cost_line_ids, commitment_ids, commitment_line_ids,
-      user_id, notes
+      user_id, notes, materials
     } = body;
-    const haveEntries = (Array.isArray(entry_ids) && entry_ids.length > 0) ||
+    const haveEntries = (Array.isArray(materials) && materials.length > 0) || (Array.isArray(entry_ids) && entry_ids.length > 0) ||
       (Array.isArray(direct_cost_ids) && direct_cost_ids.length > 0) ||
       (Array.isArray(direct_cost_line_ids) && direct_cost_line_ids.length > 0) ||
       (Array.isArray(commitment_ids) && commitment_ids.length > 0) ||
@@ -467,6 +505,7 @@ async function handleAction(env, body, ctx) {
       const result = await markAsBudgeted(env, {
         tenantId: tenant_id, projectId: project_id, entryIds: entry_ids || [], directCostIds: direct_cost_ids || [],
         directCostLineIds: direct_cost_line_ids || [], commitmentIds: commitment_ids || [], commitmentLineIds: commitment_line_ids || [],
+        materialIds: materialIdsFrom(materials), materialAmounts: materialAmountsFrom(materials),
         userId: user_id, notes
       });
       return json(result, 200);
@@ -687,9 +726,9 @@ async function handleAction(env, body, ctx) {
   if (action === 'preview_combined_billing') {
     const {
       tenant_id, project_id, entry_ids, direct_cost_ids, direct_cost_line_ids, commitment_ids, commitment_line_ids,
-      group_by, rate_overrides, markup_percent, cm_markup_percent, dc_group_by, cm_group_by, title
+      group_by, rate_overrides, markup_percent, cm_markup_percent, dc_group_by, cm_group_by, title, material_lines
     } = body;
-    const haveEntries = [entry_ids, direct_cost_ids, direct_cost_line_ids, commitment_ids, commitment_line_ids]
+    const haveEntries = [entry_ids, direct_cost_ids, direct_cost_line_ids, commitment_ids, commitment_line_ids, material_lines]
       .some(a => Array.isArray(a) && a.length > 0);
     if (!tenant_id || !project_id || !haveEntries) {
       return json({ error: 'tenant_id, project_id, and at least one T&M ticket, direct cost, or commitment are required' }, 400);
@@ -698,6 +737,7 @@ async function handleAction(env, body, ctx) {
       const preview = await previewCombinedBilling(env, {
         tenantId: tenant_id, projectId: project_id, entryIds: entry_ids || [], directCostIds: direct_cost_ids || [],
         directCostLineIds: direct_cost_line_ids || [], commitmentIds: commitment_ids || [], commitmentLineIds: commitment_line_ids || [],
+        materialLines: materialLinesFrom(material_lines),
         groupBy: group_by, rateOverrides: rate_overrides, markupPercent: markup_percent, cmMarkupPercent: cm_markup_percent,
         dcGroupBy: dc_group_by, cmGroupBy: cm_group_by, title
       });

@@ -417,7 +417,7 @@ function countRecords(tickets, directCosts, commitments) {
     (data?.[full] || []).length + (data?.unbilled || []).filter(x => x.partialBilled && x[countKey] > 0).length;
   const t = tickets || [];
   return {
-    unbilled: t.filter(x => x.unbilledCount > 0).length + (directCosts?.unbilled || []).length + (commitments?.unbilled || []).length,
+    unbilled: t.filter(x => x.unbilledCount > 0 || x.unbilledMaterialCount > 0).length + (directCosts?.unbilled || []).length + (commitments?.unbilled || []).length,
     billed: t.filter(x => x.billedCount > 0).length + bucket(directCosts, 'billedLineCount', 'billed') + bucket(commitments, 'billedLineCount', 'billed'),
     budgeted: t.filter(x => x.budgetedCount > 0).length + bucket(directCosts, 'budgetedLineCount', 'budgeted') + bucket(commitments, 'budgetedLineCount', 'budgeted'),
     writtenOff: t.filter(x => x.writtenOffCount > 0).length + bucket(directCosts, 'writtenOffLineCount', 'writtenOff') + bucket(commitments, 'writtenOffLineCount', 'writtenOff')

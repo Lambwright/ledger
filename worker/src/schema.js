@@ -97,3 +97,20 @@ export async function ensurePortfolioActualsColumns(env) {
   )`, []);
   portfolioActualsReady = true;
 }
+
+let materialSchemaReady = false;
+
+// T&M ticket materials (2026-10-23) bill as billing_records.record_type
+// 'tm_material' (procore_record_id = the Procore material id). The table's
+// record_type check constraint predates them, so widen it once.
+export async function ensureMaterialSchema(env) {
+  if (materialSchemaReady) return;
+  const rows = await dbQuery(env, `select pg_get_constraintdef(oid) as def from pg_constraint
+    where conrelid = 'billing_records'::regclass and contype = 'c' and conname = 'billing_records_record_type_check'`, []);
+  if (!rows[0] || !rows[0].def.includes('tm_material')) {
+    await dbQuery(env, `alter table billing_records drop constraint if exists billing_records_record_type_check`, []);
+    await dbQuery(env, `alter table billing_records add constraint billing_records_record_type_check check (record_type in
+      ('tm_ticket', 'direct_cost', 'sub_invoice', 'timecard', 'billing_period', 'direct_cost_line', 'commitment_line', 'tm_material'))`, []);
+  }
+  materialSchemaReady = true;
+}

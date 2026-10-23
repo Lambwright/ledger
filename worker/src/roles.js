@@ -68,10 +68,10 @@ export const READ_ACTIONS = new Set([
   'ticket_detail', 'direct_cost_line_detail', 'commitment_line_detail',
   'preview_billing', 'preview_combined_billing', 'preview_commitment_billing', 'preview_direct_cost_billing',
   'list_prime_contracts', 'list_billing_periods', 'next_invoice_number',
-  'get_project_settings', 'search_projects', 'project_reconciliation',
+  'get_project_settings', 'search_projects', 'project_reconciliation', 'list_budget_codes',
   // Record-count upkeep for the dashboard (the sidebar posts counts it already
   // has) — no billing data changes.
   'save_portfolio_counts'
 ]);
 
-export const UNDO_ACTIONS = new Set(['revert_to_unbilled', 'revert_direct_cost', 'revert_commitment']);
+export const UNDO_ACTIONS = new Set(['revert_to_unbilled', 'revert_direct_cost', 'revert_commitment', 'revert_material']);

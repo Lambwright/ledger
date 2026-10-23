@@ -363,8 +363,28 @@ export function pushCommitmentToDraftCO({ tenantId, projectId, commitmentIds, co
 // Worker's combined functions handle all three the same way.
 // ============================================================
 
-export function previewCombinedBilling({ tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, groupBy, rateOverrides, markupPercent, cmMarkupPercent, dcGroupBy, cmGroupBy, title }) {
+// T&M materials (2026-10-23): [{id, amount, wbsCodeId}] — lump sum + a budgeted code each.
+const materialLines = (materials) => (materials?.length
+  ? { material_lines: materials.map(m => ({ id: m.id, amount: m.amount, wbs_code_id: m.wbsCodeId })) }
+  : {});
+// Dispositions: [{id, amount}] — amount optional (0 when blank).
+const materialMarks = (materials) => (materials?.length ? { materials: materials.map(m => ({ id: m.id, amount: m.amount || 0 })) } : {});
+
+export function listBudgetCodes({ projectId }) {
+  return callAction('list_budget_codes', { project_id: projectId });
+}
+
+export function revertMaterial({ tenantId, projectId, materialId, includeBilled, includeWrittenOff, includeBudgeted, includeBilledOutside }) {
+  return callAction('revert_material', {
+    tenant_id: tenantId, project_id: projectId, material_id: materialId,
+    include_billed: !!includeBilled, include_written_off: !!includeWrittenOff, include_budgeted: !!includeBudgeted,
+    include_billed_outside: !!includeBilledOutside
+  });
+}
+
+export function previewCombinedBilling({ tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, materials, groupBy, rateOverrides, markupPercent, cmMarkupPercent, dcGroupBy, cmGroupBy, title }) {
   return callAction('preview_combined_billing', {
+    ...materialLines(materials),
     tenant_id: tenantId, project_id: projectId, entry_ids: entryIds, direct_cost_ids: directCostIds,
     ...(directCostLineIds?.length ? { direct_cost_line_ids: directCostLineIds } : {}),
     ...(commitmentIds?.length ? { commitment_ids: commitmentIds } : {}),
@@ -381,9 +401,10 @@ export function previewCombinedBilling({ tenantId, projectId, entryIds, directCo
 export function generateCombinedInvoice({
   tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, userId, confirmUnlinked, primeContractId, groupBy, rateOverrides,
   editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, title, billingPeriodId, newBillingPeriod, invoiceNumber, billingDate,
-  standalone, onProgress
+  standalone, materials, onProgress
 }) {
   return streamAction('generate_combined_invoice', {
+    ...materialLines(materials),
     // standalone (2026-09-26): invoice on a brand-new Prime Contract instead of a CO.
     ...(standalone ? { standalone: true } : {}),
     tenant_id: tenantId, project_id: projectId, entry_ids: entryIds, direct_cost_ids: directCostIds, user_id: userId,
@@ -414,9 +435,10 @@ export function generateCombinedInvoice({
 
 export function pushCombinedToDraftCO({
   tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, userId, confirmUnlinked, primeContractId, groupBy, rateOverrides,
-  editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, title, onProgress
+  editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, title, materials, onProgress
 }) {
   return streamAction('push_combined_to_draft_co', {
+    ...materialLines(materials),
     tenant_id: tenantId, project_id: projectId, entry_ids: entryIds, direct_cost_ids: directCostIds, user_id: userId,
     ...(directCostLineIds?.length ? { direct_cost_line_ids: directCostLineIds } : {}),
     ...(commitmentIds?.length ? { commitment_ids: commitmentIds } : {}),
@@ -440,8 +462,9 @@ export function pushCombinedToDraftCO({
 // writes, so this is a plain action (like revert_to_unbilled), not streamed.
 // ============================================================
 
-export function writeOffRecords({ tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, userId, reasonCategory, reasonNotes, invoiceNumber }) {
+export function writeOffRecords({ tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, materials, userId, reasonCategory, reasonNotes, invoiceNumber }) {
   return callAction('write_off_records', {
+    ...materialMarks(materials),
     tenant_id: tenantId, project_id: projectId, entry_ids: entryIds, direct_cost_ids: directCostIds,
     ...(directCostLineIds?.length ? { direct_cost_line_ids: directCostLineIds } : {}),
     ...(commitmentIds?.length ? { commitment_ids: commitmentIds } : {}),
@@ -460,8 +483,9 @@ export function writeOffRecords({ tenantId, projectId, entryIds, directCostIds, 
 
 // "Already Billed" (Ben's ask 2026-09-25) — billed on an invoice LEDGER didn't
 // create; recorded as billed (lands in Billed), with its own simple undo.
-export function markAlreadyBilled({ tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, userId, invoiceNumber, notes }) {
+export function markAlreadyBilled({ tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, materials, userId, invoiceNumber, notes }) {
   return callAction('mark_already_billed', {
+    ...materialMarks(materials),
     tenant_id: tenantId, project_id: projectId, entry_ids: entryIds, direct_cost_ids: directCostIds,
     ...(directCostLineIds?.length ? { direct_cost_line_ids: directCostLineIds } : {}),
     ...(commitmentIds?.length ? { commitment_ids: commitmentIds } : {}),
@@ -471,8 +495,9 @@ export function markAlreadyBilled({ tenantId, projectId, entryIds, directCostIds
   });
 }
 
-export function markAsBudgeted({ tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, userId, notes }) {
+export function markAsBudgeted({ tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, materials, userId, notes }) {
   return callAction('mark_as_budgeted', {
+    ...materialMarks(materials),
     tenant_id: tenantId, project_id: projectId, entry_ids: entryIds, direct_cost_ids: directCostIds,
     ...(directCostLineIds?.length ? { direct_cost_line_ids: directCostLineIds } : {}),
     ...(commitmentIds?.length ? { commitment_ids: commitmentIds } : {}),

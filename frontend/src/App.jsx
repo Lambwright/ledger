@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   listPendingTickets, listPendingDirectCosts, listPrimeContracts, listBillingPeriods, nextInvoiceNumber,
   previewCombinedBilling, generateCombinedInvoice, pushCombinedToDraftCO, getProjectSettings, saveProjectSettings, revertToUnbilled,
+  revertMaterial, listBudgetCodes,
   revertDirectCost, writeOffRecords, markAsBudgeted, markAlreadyBilled, directCostLineDetail, listCommitments, commitmentLineDetail, revertCommitment, saveProjectCounts,
   getProjectReconciliation
 } from './api';
@@ -224,6 +225,12 @@ export default function App({ user, onSignOut }) {
   const [commitments, setCommitments] = useState(null);
   const [expandedCmId, setExpandedCmId] = useState(null);
   const [checkedCmLineIds, setCheckedCmLineIds] = useState(() => new Set()); // "cmId:lineId"
+  // T&M materials (2026-10-23): picked material ids, each one's lump sum and
+  // budget code, and the project's budgeted codes (loaded on first pick).
+  const [checkedMaterialIds, setCheckedMaterialIds] = useState(() => new Set());
+  const [materialInputs, setMaterialInputs] = useState({});
+  const [budgetCodes, setBudgetCodes] = useState(null);
+  const [budgetCodesLoading, setBudgetCodesLoading] = useState(false);
   const [cmLineDetailCache, setCmLineDetailCache] = useState(() => new Map()); // cmId -> detail (with .lines)
   const [cmLineDetailLoading, setCmLineDetailLoading] = useState(null);
   // Labour-from-a-subcontract warning pop-up: { lines, onProceed } while open.
@@ -314,6 +321,7 @@ export default function App({ user, onSignOut }) {
   const [previewTmLines, setPreviewTmLines] = useState(null);
   const [previewDcLines, setPreviewDcLines] = useState(null);
   const [previewCmLines, setPreviewCmLines] = useState(null);
+  const [previewMtLines, setPreviewMtLines] = useState(null);
   const [previewMeta, setPreviewMeta] = useState(null); // { totalAmount, unlinkedCount, label }
   const [previewLoading, setPreviewLoading] = useState(false);
   const previewPopupRef = useRef(null); // the pop-out preview/edit window, if one's open
@@ -365,6 +373,8 @@ export default function App({ user, onSignOut }) {
     setDcLineDetailCache(new Map());
     setExpandedCmId(null);
     setCheckedCmLineIds(new Set());
+    setCheckedMaterialIds(new Set());
+    setMaterialInputs({});
     setCmLineDetailCache(new Map());
     try {
       const [data, dcData, cmData, contractList, periodList, settings] = await Promise.all([
@@ -593,10 +603,11 @@ export default function App({ user, onSignOut }) {
     previewPopupRef.current = window.open(url.toString(), 'ledger_preview_edit', 'width=1000,height=800');
   }
 
-  const unbilledTickets = tickets?.filter(t => t.unbilledCount > 0) || [];
-  const billedTickets = tickets?.filter(t => t.billedCount > 0) || [];
-  const writtenOffTickets = tickets?.filter(t => t.writtenOffCount > 0) || [];
-  const budgetedTickets = tickets?.filter(t => t.budgetedCount > 0) || [];
+  const hasMaterial = (t, statuses) => (t.materials || []).some(m => statuses.includes(m.status));
+  const unbilledTickets = tickets?.filter(t => t.unbilledCount > 0 || t.unbilledMaterialCount > 0) || [];
+  const billedTickets = tickets?.filter(t => t.billedCount > 0 || hasMaterial(t, ['billed', 'draft_co'])) || [];
+  const writtenOffTickets = tickets?.filter(t => t.writtenOffCount > 0 || hasMaterial(t, ['written_off'])) || [];
+  const budgetedTickets = tickets?.filter(t => t.budgetedCount > 0 || hasMaterial(t, ['budgeted'])) || [];
   const unbilledDc = directCosts?.unbilled || [];
   const billedDc = withPartials(directCosts?.billed, unbilledDc, 'billedLineCount', d => ({ ...d, billedAmount: d.billedLineAmount }));
   const writtenOffDc = withPartials(directCosts?.writtenOff, unbilledDc, 'writtenOffLineCount', d => ({ ...d, writtenOffAmount: d.writtenOffLineAmount, reasonNotes: d.writeOffNotes }));
@@ -608,6 +619,9 @@ export default function App({ user, onSignOut }) {
   const totalDcCount = unbilledDc.length + billedDc.length + writtenOffDc.length + budgetedDc.length;
 
   const checkedTickets = unbilledTickets.filter(t => checkedIds.has(t.id));
+  const allMaterials = (tickets || []).flatMap(t => (t.materials || []).map(m => ({ ...m, ticketNumber: t.number })));
+  const checkedMaterials = allMaterials.filter(m => m.status === 'unbilled' && checkedMaterialIds.has(m.id));
+  const checkedMaterialAmount = checkedMaterials.reduce((s, m) => s + (Number(materialInputs[m.id]?.amount) || 0), 0);
   const checkedDcItems = unbilledDc.filter(d => checkedDcIds.has(d.id));
   // A partially-billed DC's own `amount` is its WHOLE header total (including
   // lines already billed elsewhere) — checking its top-level box means "bill
@@ -632,8 +646,8 @@ export default function App({ user, onSignOut }) {
   const checkedCmTouchedCount = new Set([...checkedCmLineIds].map(k => k.slice(0, k.indexOf(':')))).size;
   const checkedTotal = checkedTickets.reduce((s, t) => s + t.estimatedTotal, 0) +
     checkedDcItems.reduce((s, d) => s + (d.partialBilled ? d.remainingAmount : d.amount), 0) +
-    checkedDcLineAmount + checkedCmAmount;
-  const checkedCount = checkedIds.size + checkedDcIds.size + checkedDcLineIds.size + checkedCmLineIds.size;
+    checkedDcLineAmount + checkedCmAmount + checkedMaterialAmount;
+  const checkedCount = checkedIds.size + checkedDcIds.size + checkedDcLineIds.size + checkedCmLineIds.size + checkedMaterials.length;
   // Lines already billed through T&M (or with no budget code) can't be put on
   // an invoice/CO — the backend refuses them — but can still be budgeted or
   // written off.
@@ -661,6 +675,142 @@ export default function App({ user, onSignOut }) {
     }
   }
 
+  // ---- T&M materials (Ben, 2026-10-23) ----
+  // A material has no cost of its own in Procore: billing takes a lump sum and
+  // one of the project's budgeted codes; write off / budgeted / already billed
+  // take an optional value. LEDGER can't see whether the same material is on a
+  // direct cost or sub invoice, so the list carries a warning.
+  const MATERIAL_STATUS_LABEL = { billed: 'Billed', draft_co: 'In draft CO', written_off: 'Written off', budgeted: 'Budgeted' };
+  async function loadBudgetCodes() {
+    if (!projectId) return;
+    setBudgetCodesLoading(true);
+    try {
+      const res = await listBudgetCodes({ projectId });
+      setBudgetCodes(res.codes || []);
+    } catch (e) {
+      setError(`Couldn't load the project's budget codes: ${e.message}`);
+      setBudgetCodes([]);
+    } finally {
+      setBudgetCodesLoading(false);
+    }
+  }
+  function toggleMaterial(m) {
+    setCheckedMaterialIds(prev => {
+      const next = new Set(prev);
+      if (next.has(m.id)) next.delete(m.id); else next.add(m.id);
+      return next;
+    });
+    if (budgetCodes == null && !budgetCodesLoading) loadBudgetCodes();
+  }
+  function setMaterialInput(id, field, value) {
+    setMaterialInputs(prev => ({ ...prev, [id]: { ...prev[id], [field]: value } }));
+  }
+  function materialProblem() {
+    for (const m of checkedMaterials) {
+      const inp = materialInputs[m.id] || {};
+      if (!(Number(inp.amount) > 0)) return `Enter an amount for the material "${m.label}" (T&M #${m.ticketNumber}).`;
+      if (!inp.wbsCodeId) return `Pick a budget code for the material "${m.label}" (T&M #${m.ticketNumber}).`;
+    }
+    return null;
+  }
+  const materialBillingPayload = () => checkedMaterials.map(m => ({
+    id: m.id, amount: Number(materialInputs[m.id]?.amount), wbsCodeId: materialInputs[m.id]?.wbsCodeId
+  }));
+  const materialDispositionPayload = () => checkedMaterials.map(m => ({ id: m.id, amount: Number(materialInputs[m.id]?.amount) || 0 }));
+  const materialUndoKind = (m) => m.status === 'draft_co' ? 'draft'
+    : m.status === 'billed' ? (m.billedOutsideLedger ? 'outside' : 'invoice')
+    : m.status === 'written_off' ? 'writtenOff' : 'budgeted';
+  async function handleUndoMaterial(m) {
+    const kind = materialUndoKind(m);
+    const msg = kind === 'invoice'
+      ? `Undo the invoice for "${m.label}"?\n\nOnly do this if you've ALREADY deleted the invoice in Procore. This only clears LEDGER's record that it was billed.`
+      : kind === 'draft'
+      ? `Undo the draft push for "${m.label}"? If the Change Order still exists in Procore, delete it there too.`
+      : `Undo for "${m.label}"? It goes back to Unbilled. Nothing in Procore changes.`;
+    if (!window.confirm(msg)) return;
+    setRevertingId(m.id);
+    setError(null);
+    try {
+      await revertMaterial({
+        tenantId: TENANT_ID, projectId, materialId: m.id,
+        includeBilled: kind === 'invoice', includeBilledOutside: kind === 'outside',
+        includeWrittenOff: kind === 'writtenOff', includeBudgeted: kind === 'budgeted'
+      });
+      await load(projectId, { preserveResult: true });
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setRevertingId(null);
+    }
+  }
+  // One ticket's materials. Picker: the unbilled ones, to tick (amount + code
+  // when billing). Review tabs: theirs, with status and Undo.
+  function renderMaterials(t, statuses, pickable) {
+    const list = (t.materials || []).filter(m => statuses.includes(m.status));
+    if (list.length === 0) return null;
+    return (
+      <div className="materials" onClick={e => e.stopPropagation()}>
+        <div className="materials-head">Materials</div>
+        {pickable && (
+          <div className="materials-warning">
+            ⚠ LEDGER can't tell whether these are also on a direct cost or a subcontractor invoice — check before
+            billing so they aren't billed twice.
+          </div>
+        )}
+        {list.map(m => {
+          const checked = checkedMaterialIds.has(m.id);
+          const inp = materialInputs[m.id] || {};
+          return (
+            <div className={`material-row${checked ? ' checked' : ''}`} key={m.id}>
+              <div className="material-main">
+                {pickable && !viewOnly && (
+                  <input type="checkbox" checked={checked} onChange={() => toggleMaterial(m)} aria-label={`Select ${m.label}`} />
+                )}
+                <span className="material-label">{m.label}</span>
+                {!pickable && (
+                  <span className="material-status">
+                    {MATERIAL_STATUS_LABEL[m.status]}
+                    {m.invoiceNumber ? ` · ${m.invoiceNumber}` : ''}
+                    {m.billedOutsideLedger ? ' · outside LEDGER' : ''}
+                    {m.amount ? ` · ${money(m.amount)}` : ''}
+                  </span>
+                )}
+                {!pickable && (
+                  <button
+                    className="undo-link" disabled={revertingId === m.id}
+                    hidden={!canUndo(m, materialUndoKind(m))} onClick={() => handleUndoMaterial(m)}
+                  >
+                    {revertingId === m.id ? 'Undoing…' : 'Undo'}
+                  </button>
+                )}
+              </div>
+              {pickable && checked && (
+                <div className="material-inputs">
+                  <label>
+                    <span>{isBillingAction ? 'Bill' : 'Value (optional)'}</span>
+                    <input
+                      type="number" min="0" step="0.01" placeholder="$ lump sum"
+                      value={inp.amount ?? ''} onChange={e => setMaterialInput(m.id, 'amount', e.target.value)}
+                    />
+                  </label>
+                  {isBillingAction && (
+                    <label>
+                      <span>Budget code</span>
+                      <select value={inp.wbsCodeId ?? ''} onChange={e => setMaterialInput(m.id, 'wbsCodeId', e.target.value)}>
+                        <option value="" disabled>{budgetCodes == null ? 'Loading codes…' : 'Choose a budgeted code…'}</option>
+                        {(budgetCodes || []).map(c => <option key={c.id} value={c.id}>{c.code} — {c.name}</option>)}
+                      </select>
+                    </label>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
   // Closes the settings/preview overlay entirely — always clears the preview
   // too, since it's only ever valid for the exact selection/settings it was
   // computed from.
@@ -669,6 +819,7 @@ export default function App({ user, onSignOut }) {
     setPreviewTmLines(null);
     setPreviewDcLines(null);
     setPreviewCmLines(null);
+    setPreviewMtLines(null);
     setPreviewMeta(null);
   }
 
@@ -686,6 +837,8 @@ export default function App({ user, onSignOut }) {
     setCheckedDcIds(new Set());
     setCheckedDcLineIds(new Set());
     setCheckedCmLineIds(new Set());
+    setCheckedMaterialIds(new Set());
+    setMaterialInputs({});
     setDispositionReturn(null);
     setDispositionScope(null);
   }
@@ -952,7 +1105,9 @@ export default function App({ user, onSignOut }) {
     const directCostIds = [...checkedDcIds];
     const directCostLineIds = [...checkedDcLineIds];
     const commitmentLineIds = [...checkedCmLineIds];
-    if (entryIds.length === 0 && directCostIds.length === 0 && directCostLineIds.length === 0 && commitmentLineIds.length === 0) return;
+    if (entryIds.length === 0 && directCostIds.length === 0 && directCostLineIds.length === 0 && commitmentLineIds.length === 0 && checkedMaterials.length === 0) return;
+    const matProblem = materialProblem();
+    if (matProblem) { setError(matProblem); return; }
     // Only generateCombinedInvoice ever touches a billing period. Require an
     // actual choice when creating a new one — a project with no billing
     // periods used to fail silently AFTER a real Change Order was already
@@ -977,6 +1132,7 @@ export default function App({ user, onSignOut }) {
       const res = await submitWithUnlinkedConfirm(confirmUnlinked =>
         fn({
           tenantId: TENANT_ID, projectId, entryIds, directCostIds, directCostLineIds, commitmentLineIds, userId, confirmUnlinked,
+          materials: materialBillingPayload(),
           primeContractId: contractId, groupBy, rateOverrides, markupPercent, cmMarkupPercent, dcGroupBy, cmGroupBy, title: coTitle, onProgress,
           standalone: kind === 'invoice' && standalone,
           // Preview is mandatory (the settings screen's button only ever
@@ -1015,18 +1171,22 @@ export default function App({ user, onSignOut }) {
     const directCostIds = [...checkedDcIds];
     const directCostLineIds = [...checkedDcLineIds];
     const commitmentLineIds = [...checkedCmLineIds];
-    if (entryIds.length === 0 && directCostIds.length === 0 && directCostLineIds.length === 0 && commitmentLineIds.length === 0) return;
+    if (entryIds.length === 0 && directCostIds.length === 0 && directCostLineIds.length === 0 && commitmentLineIds.length === 0 && checkedMaterials.length === 0) return;
+    const matProblem = materialProblem();
+    if (matProblem) { setError(matProblem); return; }
     setPreviewLoading(true);
     setError(null);
     try {
       const res = await previewCombinedBilling({
         tenantId: TENANT_ID, projectId, entryIds, directCostIds, directCostLineIds, commitmentLineIds,
+        materials: materialBillingPayload(),
         groupBy, rateOverrides, markupPercent, cmMarkupPercent, dcGroupBy, cmGroupBy, title: coTitle
       });
       setPreviewMeta({ totalAmount: res.totalAmount, unlinkedCount: res.unlinkedCount, label: res.label });
       setPreviewTmLines(res.tmLines.map(l => ({ ...l })));
       setPreviewDcLines(res.dcLines.map(l => ({ ...l })));
       setPreviewCmLines((res.cmLines || []).map(l => ({ ...l })));
+      setPreviewMtLines((res.mtLines || []).map(l => ({ ...l })));
     } catch (e) {
       setError(e.message);
     } finally {
@@ -1146,7 +1306,8 @@ export default function App({ user, onSignOut }) {
     const directCostIds = scoped ? [] : [...checkedDcIds];
     const directCostLineIds = scoped ? [] : [...checkedDcLineIds];
     const commitmentLineIds = scoped ? scoped.commitmentLineIds : [...checkedCmLineIds];
-    if (entryIds.length === 0 && directCostIds.length === 0 && directCostLineIds.length === 0 && commitmentLineIds.length === 0) return;
+    const materials = scoped ? [] : materialDispositionPayload();
+    if (entryIds.length === 0 && directCostIds.length === 0 && directCostLineIds.length === 0 && commitmentLineIds.length === 0 && materials.length === 0) return;
     if (!writeOffReason) {
       setError('Choose a reason before writing off.');
       return;
@@ -1156,7 +1317,7 @@ export default function App({ user, onSignOut }) {
     setError(null);
     try {
       const res = await writeOffRecords({
-        tenantId: TENANT_ID, projectId, entryIds, directCostIds, directCostLineIds, commitmentLineIds, userId,
+        tenantId: TENANT_ID, projectId, entryIds, directCostIds, directCostLineIds, commitmentLineIds, materials, userId,
         reasonCategory: writeOffReason, reasonNotes: writeOffNotes,
       });
       setResult({ kind: 'writeoff', ...res });
@@ -1252,12 +1413,13 @@ export default function App({ user, onSignOut }) {
     const directCostIds = scoped ? [] : [...checkedDcIds];
     const directCostLineIds = scoped ? [] : [...checkedDcLineIds];
     const commitmentLineIds = scoped ? scoped.commitmentLineIds : [...checkedCmLineIds];
-    if (entryIds.length === 0 && directCostIds.length === 0 && directCostLineIds.length === 0 && commitmentLineIds.length === 0) return;
+    const materials = scoped ? [] : materialDispositionPayload();
+    if (entryIds.length === 0 && directCostIds.length === 0 && directCostLineIds.length === 0 && commitmentLineIds.length === 0 && materials.length === 0) return;
     if (!confirmPartialDcDisposition('marked as budgeted')) return;
     setGenerating(true);
     setError(null);
     try {
-      const res = await markAsBudgeted({ tenantId: TENANT_ID, projectId, entryIds, directCostIds, directCostLineIds, commitmentLineIds, userId, notes: budgetedNotes });
+      const res = await markAsBudgeted({ tenantId: TENANT_ID, projectId, entryIds, directCostIds, directCostLineIds, commitmentLineIds, materials, userId, notes: budgetedNotes });
       setResult({ kind: 'budgeted', ...res });
       finishDisposition();
       setBudgetedNotes('');
@@ -1275,13 +1437,14 @@ export default function App({ user, onSignOut }) {
     const directCostIds = scoped ? [] : [...checkedDcIds];
     const directCostLineIds = scoped ? [] : [...checkedDcLineIds];
     const commitmentLineIds = scoped ? scoped.commitmentLineIds : [...checkedCmLineIds];
-    if (entryIds.length === 0 && directCostIds.length === 0 && directCostLineIds.length === 0 && commitmentLineIds.length === 0) return;
+    const materials = scoped ? [] : materialDispositionPayload();
+    if (entryIds.length === 0 && directCostIds.length === 0 && directCostLineIds.length === 0 && commitmentLineIds.length === 0 && materials.length === 0) return;
     if (!confirmPartialDcDisposition('marked as already billed')) return;
     setGenerating(true);
     setError(null);
     try {
       const res = await markAlreadyBilled({
-        tenantId: TENANT_ID, projectId, entryIds, directCostIds, directCostLineIds, commitmentLineIds, userId,
+        tenantId: TENANT_ID, projectId, entryIds, directCostIds, directCostLineIds, commitmentLineIds, materials, userId,
         invoiceNumber: alreadyBilledInvoice, notes: alreadyBilledNotes
       });
       setResult({ kind: 'already_billed', ...res });
@@ -1659,6 +1822,7 @@ export default function App({ user, onSignOut }) {
                       {t.billedOutsideLedgerCount > 0 && <span className="tag tag-outside">Billed outside LEDGER</span>}
                       {t.unbilledCount > 0 && ` · ${t.unbilledCount} still unbilled`}
                     </div>
+                    {renderMaterials(t, ['billed', 'draft_co'], false)}
 
                     {expandedTmId === t.id && (
                       <div className="line-items">
@@ -1812,11 +1976,12 @@ export default function App({ user, onSignOut }) {
                       {[...new Set(t.writtenOffLines.map(l => WRITE_OFF_REASON_OPTIONS.find(o => o.value === l.reasonCategory)?.label || l.reasonCategory))].join(', ')}
                       {[...new Set(t.writtenOffLines.map(l => l.invoiceNumber).filter(Boolean))].map(n => ` · Invoiced on #${n}`).join('')}
                     </div>
+                    {renderMaterials(t, ['written_off'], false)}
                     <div className="ticket-links">
                       <button
                         className="undo-link"
                         disabled={revertingId === t.id}
-                        hidden={!canUndo(t, 'writtenOff')} onClick={e => { e.stopPropagation(); handleUndoWriteOff(t); }}
+                        hidden={!canUndo(t, 'writtenOff') || !t.writtenOffCount} onClick={e => { e.stopPropagation(); handleUndoWriteOff(t); }}
                       >
                         {revertingId === t.id ? 'Undoing…' : 'Undo write-off'}
                       </button>
@@ -1882,11 +2047,12 @@ export default function App({ user, onSignOut }) {
                         {[...new Set(t.budgetedLines.map(l => l.reasonNotes).filter(Boolean))].join(', ')}
                       </div>
                     )}
+                    {renderMaterials(t, ['budgeted'], false)}
                     <div className="ticket-links">
                       <button
                         className="undo-link"
                         disabled={revertingId === t.id}
-                        hidden={!canUndo(t, 'budgeted')} onClick={e => { e.stopPropagation(); handleUndoBudgeted(t); }}
+                        hidden={!canUndo(t, 'budgeted') || !t.budgetedCount} onClick={e => { e.stopPropagation(); handleUndoBudgeted(t); }}
                       >
                         {revertingId === t.id ? 'Undoing…' : 'Undo'}
                       </button>
@@ -2227,8 +2393,8 @@ export default function App({ user, onSignOut }) {
                     <label className="select-all-label">
                       <input
                         type="checkbox"
-                        checked={unbilledTickets.every(t => checkedIds.has(t.id))}
-                        onChange={() => toggleSelectAll(unbilledTickets.map(t => t.id))}
+                        checked={unbilledTickets.filter(t => t.unbilledCount > 0).every(t => checkedIds.has(t.id))}
+                        onChange={() => toggleSelectAll(unbilledTickets.filter(t => t.unbilledCount > 0).map(t => t.id))}
                       />
                       Select all T&amp;M tickets
                     </label>
@@ -2242,20 +2408,25 @@ export default function App({ user, onSignOut }) {
                       >
                         <div className="ticket-card-header">
                           <label className="ticket-check" onClick={e => e.stopPropagation()}>
-                            <input
-                              type="checkbox"
-                              checked={checkedIds.has(t.id)}
-                              onChange={() => toggleChecked(t.id)}
-                            />
+                            {t.unbilledCount > 0 && (
+                              <input
+                                type="checkbox"
+                                checked={checkedIds.has(t.id)}
+                                onChange={() => toggleChecked(t.id)}
+                                aria-label={`Select T&M #${t.number} hours`}
+                              />
+                            )}
                           </label>
                           <span className="ticket-number">T&amp;M #{t.number}</span>
                           <span className="ticket-amount">{money(t.estimatedTotal)}</span>
                         </div>
                         <div className="ticket-description">{t.description || '(no description)'}</div>
                         <div className="ticket-meta">
-                          {t.unbilledCount} unbilled line{t.unbilledCount === 1 ? '' : 's'}
+                          {t.unbilledCount} unbilled hour line{t.unbilledCount === 1 ? '' : 's'}
                           {t.billedCount > 0 && ` (${t.billedCount} already billed)`}
+                          {t.unbilledMaterialCount > 0 && ` · ${t.unbilledMaterialCount} unbilled material${t.unbilledMaterialCount === 1 ? '' : 's'}`}
                         </div>
+                        {renderMaterials(t, ['unbilled'], true)}
 
                         {t.unlinkedCount > 0 && billingMode !== 'fixed_price' && (
                           <div className="unlinked-warning">
@@ -2928,6 +3099,26 @@ export default function App({ user, onSignOut }) {
                       </>
                     )}
 
+                    {previewMtLines?.length > 0 && (
+                      <>
+                        <div className="rate-overrides-label">T&amp;M materials (lump sum, no markup)</div>
+                        <div className="preview-lines">
+                          {previewMtLines.map((line, i) => (
+                            <div className="preview-line" key={i}>
+                              <div className="preview-line-desc preview-line-static">{line.description}</div>
+                              <div className="preview-line-nums">
+                                <span>{line.budgetCode}</span>
+                                <span className="preview-line-amount">{money(line.amount)}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="materials-warning">
+                          ⚠ Check these materials aren't also on a direct cost or subcontractor invoice — LEDGER can't detect that.
+                        </div>
+                      </>
+                    )}
+
                     <div className="preview-total">
                       <span>Total</span>
                       <strong>{money(previewMeta?.totalAmount ?? 0)}</strong>
@@ -2958,7 +3149,7 @@ export default function App({ user, onSignOut }) {
                     <button className="cancel-btn" onClick={popOutPreview} title="Open this preview in a full window to edit, then it saves back here">
                       ⧉ Pop out for review
                     </button>
-                    <button className="cancel-btn" onClick={() => { setPreviewTmLines(null); setPreviewDcLines(null); setPreviewCmLines(null); }}>← Back to settings</button>
+                    <button className="cancel-btn" onClick={() => { setPreviewTmLines(null); setPreviewDcLines(null); setPreviewCmLines(null); setPreviewMtLines(null); }}>← Back to settings</button>
                   </div>
                 ) : (
                   <div className="action-bar-buttons">

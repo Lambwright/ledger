@@ -169,6 +169,7 @@ export async function processNextBulkReconciliation(env, tenantId) {
     const cm = await listCommitments(env, { tenantId, projectId });
     const sources = [
       ['T&M', { entryIds: (tm.tickets || []).filter(t => t.unbilledCount > 0).map(t => t.id) }],
+      ['T&M materials', { materialIds: (tm.tickets || []).flatMap(t => (t.materials || []).filter(m => m.status === 'unbilled').map(m => m.id)) }],
       ['direct costs', { directCostIds: (dc.unbilled || []).map(d => d.id) }],
       ['commitments', { commitmentIds: (cm.unbilled || []).map(c => c.id) }]
     ];
