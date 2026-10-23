@@ -161,6 +161,34 @@ each with CREATE/UPDATE/DELETE. To revive it, point the URL back to
 `https://qbo-dashboard.smoothlink.net/webhook/procore/` and get a fresh Authorization
 value from smoothlink. The original value was lost on 2026-10-07.
 
+## T&M ticket materials, and the project's budgeted codes (2026-10-23)
+
+**T&M material lines:** `GET /rest/v1.0/projects/{project_id}/materials` lists every
+material line on the project's T&M tickets. Verified on 2026_0290 Envie Little Italy,
+ticket #1:
+`{id, name ("Sanding pads"), description, quantity (6), uom ("ea"),
+time_and_material_entry_id, time_and_material_entry{id}, material_id (null), created_by,
+created_at, deleted_at, custom_fields}`. There's **no cost and no cost code**; LEDGER
+supplies both at billing time. Equipment is
+`GET /rest/v1.0/projects/{id}/time_and_material_equipment_logs` (empty there). These
+don't exist (404): `time_and_material_materials`, `time_and_material_material_logs`,
+`time_and_material_entries/{id}/time_and_material_materials`,
+`time_and_material_equipment`. The T&M entry show has no materials in it.
+
+**Budgeted codes for a dropdown:**
+- `GET /rest/v1.0/projects/{id}/work_breakdown_structure/wbs_codes?per_page=300` lists
+  every budget code: `{id, flat_code ("56.MH"), flat_name, description, status,
+  segment_items[{segment{type: cost_code | line_item_type}, id, code, name}]}`. The `id`
+  is what invoice and CO lines take as `wbs_code_id`. It can include codes that are
+  **not** on the budget (e.g. 49-01-05-05.L).
+- `GET /rest/v1.0/budget_line_items?project_id=` gives the budget's lines:
+  `{cost_code{id, full_code, name}, line_item_type{id, name}, original_budget_amount,
+  revised_budget, …}`.
+- **Budgeted codes** = wbs codes whose cost_code segment `id` equals a budget line's
+  `cost_code.id` AND whose line_item_type segment `id` equals that line's
+  `line_item_type.id`. Verified: 56.MH ↔ cost code 562950485783504 + type
+  562949953995145.
+
 ## Estimating: the public API works for LEDGER's app (2026-10-21)
 
 Procore replied to Ben on 2026-10-07 (forwarded to HANDOFF) with a beta for estimate
