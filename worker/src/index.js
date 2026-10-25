@@ -40,6 +40,7 @@ import { can, READ_ACTIONS, UNDO_ACTIONS, NO_ACCESS_MESSAGE } from './roles.js';
 import { getPrefs, savePref } from './prefs.js';
 import { pushFinancialsToCrm, handleCrmRefresh } from './crm.js';
 import { listSharedViews, saveSharedView, deleteSharedView } from './views.js';
+import { watchRefusals, einbauAppHeader } from './security.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -54,7 +55,7 @@ const CORS_HEADERS = {
 // auth-worker's per-IP login rate limit still sees the real caller.
 async function proxyAuth(request, env, path) {
   const body = await request.text();
-  const headers = { 'Content-Type': 'application/json' };
+  const headers = { 'Content-Type': 'application/json', ...einbauAppHeader };
   const auth = request.headers.get('Authorization');
   if (auth) headers.Authorization = auth;
   const ip = request.headers.get('CF-Connecting-IP');
@@ -853,7 +854,7 @@ function whenBodyDone(res, done) {
   return new Response(res.body.pipeThrough(new TransformStream({ flush() { done(); } })), res);
 }
 
-export default {
+const worker = {
   async scheduled(event, env, ctx) {
     ctx.waitUntil(runScheduled(env).then(log => console.log('[scheduled]', log.join('; ') || 'nothing due')));
     // Project money to CRM every 15 minutes — no Procore calls (crm.js).
@@ -864,7 +865,13 @@ export default {
     }
   },
 
+  // Every response passes through watchRefusals, which reports the refused
+  // ones to HELM's Security tab (security.js).
   async fetch(request, env, ctx) {
+    return watchRefusals(request, env, ctx, () => worker.route(request, env, ctx));
+  },
+
+  async route(request, env, ctx) {
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: CORS_HEADERS });
     }
@@ -973,3 +980,5 @@ export default {
     }
   }
 };
+
+export default worker;
