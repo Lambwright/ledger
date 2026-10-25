@@ -12,7 +12,7 @@
 import { procoreRequest, procoreCallCount } from './procore.js';
 import { dbQuery } from './db.js';
 import { ledgerLevel } from './roles.js';
-import { refusalUser, einbauAppHeader } from './security.js';
+import { refusalUser, einbauAppHeader, clientHeaders } from './security.js';
 import { ensureBulkSchema, ensurePortfolioActualsColumns } from './schema.js';
 import { hasQueuedBulkReconciliation, processNextBulkReconciliation } from './bulk.js';
 import { listPendingTickets, listPendingDirectCosts, listCommitments, tmValueAtRates, commitmentCostTypes } from './app.js';
@@ -877,7 +877,7 @@ export async function verifyEinbauSession(request, env) {
     // Service binding, not fetch(): worker → *.workers.dev is blocked (error 1042).
     const res = await env.AUTH_WORKER.fetch('https://auth.ben-a90.workers.dev/auth/verify', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: auth, ...einbauAppHeader },
+      headers: { 'Content-Type': 'application/json', Authorization: auth, ...einbauAppHeader, ...clientHeaders(request) },
       body: '{}'
     });
     const data = await res.json().catch(() => ({}));

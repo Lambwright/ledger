@@ -40,7 +40,7 @@ import { can, READ_ACTIONS, UNDO_ACTIONS, NO_ACCESS_MESSAGE } from './roles.js';
 import { getPrefs, savePref } from './prefs.js';
 import { pushFinancialsToCrm, handleCrmRefresh } from './crm.js';
 import { listSharedViews, saveSharedView, deleteSharedView } from './views.js';
-import { watchRefusals, einbauAppHeader } from './security.js';
+import { watchRefusals, einbauAppHeader, clientHeaders } from './security.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -55,11 +55,9 @@ const CORS_HEADERS = {
 // auth-worker's per-IP login rate limit still sees the real caller.
 async function proxyAuth(request, env, path) {
   const body = await request.text();
-  const headers = { 'Content-Type': 'application/json', ...einbauAppHeader };
+  const headers = { 'Content-Type': 'application/json', ...einbauAppHeader, ...clientHeaders(request) };
   const auth = request.headers.get('Authorization');
   if (auth) headers.Authorization = auth;
-  const ip = request.headers.get('CF-Connecting-IP');
-  if (ip) headers['CF-Connecting-IP'] = ip;
   const res = await env.AUTH_WORKER.fetch(`https://auth.ben-a90.workers.dev${path}`, { method: 'POST', headers, body });
   const data = await res.json().catch(() => ({}));
   // A correct Einbau ID without LEDGER ticked in HELM doesn't get a session here.

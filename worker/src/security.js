@@ -22,6 +22,23 @@ const recent = new Map(); // key -> { sentAt, pending }
 
 export const einbauAppHeader = { 'X-Einbau-App': APP };
 
+// The browser visitor's details for auth-worker's /auth/login and /auth/verify
+// (README "Forwarding the visitor's details", 2026-10-25). A service-binding
+// call has no CF-Connecting-IP of its own, so without these every sidebar
+// sign-in looked like one visitor — one shared lockout bucket. auth-worker
+// only trusts them on service-binding calls. Empty ones are left out.
+export function clientHeaders(request) {
+  const cf = request.cf || {};
+  const pairs = [
+    ['X-Einbau-Client-IP', request.headers.get('CF-Connecting-IP')],
+    ['X-Einbau-Client-Country', cf.country],
+    ['X-Einbau-Client-City', cf.city],
+    ['X-Einbau-Client-Org', cf.asOrganization],
+    ['X-Einbau-Client-UA', (request.headers.get('User-Agent') || '').slice(0, 300)]
+  ];
+  return Object.fromEntries(pairs.filter(([, v]) => v != null && String(v).trim() !== '').map(([k, v]) => [k, String(v)]));
+}
+
 function send(ctx, env, events) {
   if (!env.AUTH_SERVICE_KEY || !env.AUTH_WORKER || !ctx || events.length === 0) return;
   ctx.waitUntil(
