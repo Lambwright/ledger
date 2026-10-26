@@ -274,6 +274,9 @@ export default function App({ user, onSignOut }) {
   const [billingCtx, setBillingCtx] = useState(null);
   const [ownerVendorId, setOwnerVendorId] = useState('');
   const [noPcConfirmed, setNoPcConfirmed] = useState(false);
+  // Asked once per project, when Configure is first clicked (Ben, 2026-10-26:
+  // the red banner read like an error and scared a PM off).
+  const [noPcPrompt, setNoPcPrompt] = useState(false);
 
   // Write-off settings (Ben's ask 2026-09-17) — no preview step, this is all
   // it needs before Confirm.
@@ -854,7 +857,6 @@ export default function App({ user, onSignOut }) {
     setAction(null);
     clearConfiguring();
     setStandalone(false);
-    setNoPcConfirmed(false);
     // Found 2026-09-23 while wiring per-line write-off/budgeted: this used to
     // leave checkedIds/checkedDcIds/checkedDcLineIds untouched, silently
     // harmless only because write-off/budgeted never read checkedDcLineIds
@@ -2770,7 +2772,10 @@ export default function App({ user, onSignOut }) {
                     secondary there. Review Project has no billing, so
                     Already Billed leads (green) instead — Ben, 2026-09-25. */}
                 {action !== 'review' && (
-                  <button className={action === 'invoice' ? 'generate-btn' : 'draft-btn'} onClick={() => setConfiguring(true)}>
+                  <button
+                    className={action === 'invoice' ? 'generate-btn' : 'draft-btn'}
+                    onClick={() => { if (noPcInvoice && !noPcConfirmed) { setNoPcPrompt(true); return; } setConfiguring(true); }}
+                  >
                     Configure →
                   </button>
                 )}
@@ -2827,12 +2832,6 @@ export default function App({ user, onSignOut }) {
 
                     {noPcInvoice && (
                       <>
-                        <div className="unlinked-warning">
-                          ⚠ This project has no approved Prime Contract yet, so there's nothing to add a Change Order to.
-                          LEDGER can create a standalone invoice instead: its own new Prime Contract with these items,
-                          billed to the customer below. If there's a PO or estimate that should become this project's
-                          Prime Contract, set that up in Procore first and come back.
-                        </div>
                         <label className="action-bar-field">
                           <span>Bill to</span>
                           <select value={ownerVendorId} onChange={e => setOwnerVendorId(e.target.value)}>
@@ -2844,20 +2843,11 @@ export default function App({ user, onSignOut }) {
                             ))}
                           </select>
                         </label>
-                        {billingCtx && !billingCtx.customer && (
-                          <div className="context-note">
-                            The project's Customer field (Project Admin → Additional Information) is empty — pick who to bill.
-                          </div>
-                        )}
-                        <label className="action-bar-field no-pc-confirm">
-                          <span>Create a standalone invoice</span>
-                          <input type="checkbox" checked={noPcConfirmed} onChange={e => setNoPcConfirmed(e.target.checked)} />
-                        </label>
                       </>
                     )}
                     {noPcDraft && (
-                      <div className="unlinked-warning">
-                        ⚠ This project has no approved Prime Contract yet, so a Change Order has nothing to go on. Use
+                      <div className="context-note">
+                        This project has no approved Prime Contract yet, so a Change Order has nothing to go on. Use
                         Create Invoice instead (LEDGER can make a standalone invoice), or set up the Prime Contract in
                         Procore first.
                       </div>
@@ -2871,7 +2861,7 @@ export default function App({ user, onSignOut }) {
                         </select>
                       </label>
                     )}
-                    {action === 'invoice' && standalone && (
+                    {action === 'invoice' && standalone && !noPcInvoice && (
                       <div className="context-note">
                         LEDGER creates a new Prime Contract for the same client with these items as its lines, approves it,
                         and invoices it at 100%. Use it for costs that shouldn't sit on the main contract, like pass-through materials.
@@ -3221,8 +3211,8 @@ export default function App({ user, onSignOut }) {
                   <div className="action-bar-buttons">
                     <button
                       className="generate-btn" onClick={loadPreview}
-                      disabled={previewLoading || noPcDraft || (noPcInvoice && (!noPcConfirmed || !ownerVendorId))}
-                      title={noPcDraft ? 'No approved Prime Contract — use Create Invoice' : noPcInvoice && !noPcConfirmed ? 'Confirm the standalone invoice first' : undefined}
+                      disabled={previewLoading || noPcDraft || (noPcInvoice && !ownerVendorId)}
+                      title={noPcDraft ? 'No approved Prime Contract — use Create Invoice' : noPcInvoice && !ownerVendorId ? 'Choose who to bill' : undefined}
                     >
                       {previewLoading ? 'Loading preview…' : 'Preview →'}
                     </button>
@@ -3407,6 +3397,28 @@ export default function App({ user, onSignOut }) {
             </div>
           )}
         </>
+      )}
+
+      {noPcPrompt && (
+        <div className="warn-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="no-pc-title">
+          <div className="warn-modal info-modal">
+            <div className="warn-modal-title" id="no-pc-title">No Prime Contract yet</div>
+            <p className="warn-modal-text">
+              This project has no approved Prime Contract yet. LEDGER can create a standalone invoice instead: its own
+              new Prime Contract with these items, billed to the customer you pick on the next screen. If there's a PO or
+              estimate that should become this project's Prime Contract, set that up in Procore first and come back.
+            </p>
+            <div className="warn-modal-buttons">
+              <button className="cancel-btn" onClick={() => setNoPcPrompt(false)}>Cancel</button>
+              <button
+                className="generate-btn" autoFocus
+                onClick={() => { setNoPcPrompt(false); setNoPcConfirmed(true); setConfiguring(true); }}
+              >
+                Proceed anyway
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {labourWarning && (
