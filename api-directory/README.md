@@ -235,7 +235,8 @@ project show call (`GET /projects/{id}?company_id=`) returns every custom field 
 | 562949953931741 | HST # (read-only, default text) | rich_text |
 | 562949954006022 | Last Follow up Date (Bid Board Only) | datetime |
 | 562949954014570 | Date Submitted (Bid Board Only) | datetime |
-| 73165 / 104287 | a vendor field / a sector-style dropdown (labels not looked up) | |
+| 73165 | **Customer** (Project Admin → Additional Information; e.g. "Louis Vuitton Canada Inc."). LEDGER bills it on a standalone invoice when a project has no approved Prime Contract (2026-10-26) | vendor ({id, label}) |
+| 104287 | a sector-style dropdown (label not looked up) | lov_entry |
 
 **Payroll direct costs (TALLY, verified on Forte 2026_0183):**
 - The rule: `direct_cost_type == "payroll"` on the DC header. TALLY's expense postings are
