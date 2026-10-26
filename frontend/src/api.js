@@ -370,6 +370,12 @@ const materialLines = (materials) => (materials?.length
 // Dispositions: [{id, amount}] — amount optional (0 when blank).
 const materialMarks = (materials) => (materials?.length ? { materials: materials.map(m => ({ id: m.id, amount: m.amount || 0 })) } : {});
 
+// Who a standalone invoice bills on a project with no approved Prime Contract:
+// { customer: {id, name} | null, vendors: [{id, name}] }.
+export function getBillingContext({ projectId }) {
+  return callAction('billing_context', { project_id: projectId });
+}
+
 export function listBudgetCodes({ projectId }) {
   return callAction('list_budget_codes', { project_id: projectId });
 }
@@ -401,9 +407,11 @@ export function previewCombinedBilling({ tenantId, projectId, entryIds, directCo
 export function generateCombinedInvoice({
   tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, userId, confirmUnlinked, primeContractId, groupBy, rateOverrides,
   editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, title, billingPeriodId, newBillingPeriod, invoiceNumber, billingDate,
-  standalone, materials, onProgress
+  standalone, materials, ownerVendorId, onProgress
 }) {
   return streamAction('generate_combined_invoice', {
+    // No approved Prime Contract (2026-10-26): who the standalone invoice bills.
+    ...(ownerVendorId ? { owner_vendor_id: ownerVendorId } : {}),
     ...materialLines(materials),
     // standalone (2026-09-26): invoice on a brand-new Prime Contract instead of a CO.
     ...(standalone ? { standalone: true } : {}),

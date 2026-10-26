@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   listPendingTickets, listPendingDirectCosts, listPrimeContracts, listBillingPeriods, nextInvoiceNumber,
   previewCombinedBilling, generateCombinedInvoice, pushCombinedToDraftCO, getProjectSettings, saveProjectSettings, revertToUnbilled,
-  revertMaterial, listBudgetCodes,
+  revertMaterial, listBudgetCodes, getBillingContext,
   revertDirectCost, writeOffRecords, markAsBudgeted, markAlreadyBilled, directCostLineDetail, listCommitments, commitmentLineDetail, revertCommitment, saveProjectCounts,
   getProjectReconciliation
 } from './api';
@@ -268,6 +268,12 @@ export default function App({ user, onSignOut }) {
   // Standalone invoice (Ben's ask 2026-09-26): bill on a brand-new Prime
   // Contract (e.g. pass-through materials) instead of a CO on the main one.
   const [standalone, setStandalone] = useState(false);
+  // No approved Prime Contract yet (Ben, 2026-10-26): invoicing becomes a
+  // standalone invoice to a customer the PM confirms (default: the project's
+  // Customer field); Push to CO is blocked.
+  const [billingCtx, setBillingCtx] = useState(null);
+  const [ownerVendorId, setOwnerVendorId] = useState('');
+  const [noPcConfirmed, setNoPcConfirmed] = useState(false);
 
   // Write-off settings (Ben's ask 2026-09-17) — no preview step, this is all
   // it needs before Confirm.
@@ -410,6 +416,27 @@ export default function App({ user, onSignOut }) {
       setLoading(false);
     }
   }, []);
+
+  const hasApprovedPc = contracts.some(c => c.status === 'Approved');
+  const noPcInvoice = action === 'invoice' && !hasApprovedPc;
+  const noPcDraft = action === 'draft' && !hasApprovedPc;
+  // A fresh project starts with no customer context.
+  useEffect(() => { setBillingCtx(null); setOwnerVendorId(''); setNoPcConfirmed(false); }, [projectId]);
+  // Invoicing with no approved Prime Contract: standalone, and load who to bill.
+  useEffect(() => {
+    if (!noPcInvoice || loading) return;
+    setStandalone(true);
+    if (billingCtx || !projectId) return;
+    getBillingContext({ projectId })
+      .then((ctx) => {
+        setBillingCtx(ctx);
+        setOwnerVendorId((prev) => prev || ctx.customer?.id || '');
+      })
+      .catch((e) => {
+        setBillingCtx({ customer: null, vendors: [] });
+        setError(`Couldn't load the project's customer: ${e.message}`);
+      });
+  }, [noPcInvoice, loading, billingCtx, projectId]);
 
   // Once the contract list is in, default the picker: whatever Procore's
   // side-panel context gave us, else the single contract if there's only one,
@@ -827,6 +854,7 @@ export default function App({ user, onSignOut }) {
     setAction(null);
     clearConfiguring();
     setStandalone(false);
+    setNoPcConfirmed(false);
     // Found 2026-09-23 while wiring per-line write-off/budgeted: this used to
     // leave checkedIds/checkedDcIds/checkedDcLineIds untouched, silently
     // harmless only because write-off/budgeted never read checkedDcLineIds
@@ -1135,6 +1163,7 @@ export default function App({ user, onSignOut }) {
           materials: materialBillingPayload(),
           primeContractId: contractId, groupBy, rateOverrides, markupPercent, cmMarkupPercent, dcGroupBy, cmGroupBy, title: coTitle, onProgress,
           standalone: kind === 'invoice' && standalone,
+          ...(kind === 'invoice' && !hasApprovedPc ? { ownerVendorId, primeContractId: null } : {}),
           // Preview is mandatory (the settings screen's button only ever
           // leads to preview, never straight to this) — editedLines is
           // always the real, possibly-PM-edited lines by the time this runs.
@@ -2796,7 +2825,44 @@ export default function App({ user, onSignOut }) {
                   <>
                     <div className="settings-section-header">General</div>
 
-                    {action === 'invoice' && (
+                    {noPcInvoice && (
+                      <>
+                        <div className="unlinked-warning">
+                          ⚠ This project has no approved Prime Contract yet, so there's nothing to add a Change Order to.
+                          LEDGER can create a standalone invoice instead: its own new Prime Contract with these items,
+                          billed to the customer below. If there's a PO or estimate that should become this project's
+                          Prime Contract, set that up in Procore first and come back.
+                        </div>
+                        <label className="action-bar-field">
+                          <span>Bill to</span>
+                          <select value={ownerVendorId} onChange={e => setOwnerVendorId(e.target.value)}>
+                            <option value="" disabled>{billingCtx ? 'Choose the customer…' : 'Loading…'}</option>
+                            {(billingCtx?.vendors || []).map(v => (
+                              <option key={v.id} value={v.id}>
+                                {v.name}{billingCtx?.customer?.id === v.id ? ' (project Customer)' : ''}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        {billingCtx && !billingCtx.customer && (
+                          <div className="context-note">
+                            The project's Customer field (Project Admin → Additional Information) is empty — pick who to bill.
+                          </div>
+                        )}
+                        <label className="action-bar-field no-pc-confirm">
+                          <span>Create a standalone invoice</span>
+                          <input type="checkbox" checked={noPcConfirmed} onChange={e => setNoPcConfirmed(e.target.checked)} />
+                        </label>
+                      </>
+                    )}
+                    {noPcDraft && (
+                      <div className="unlinked-warning">
+                        ⚠ This project has no approved Prime Contract yet, so a Change Order has nothing to go on. Use
+                        Create Invoice instead (LEDGER can make a standalone invoice), or set up the Prime Contract in
+                        Procore first.
+                      </div>
+                    )}
+                    {action === 'invoice' && hasApprovedPc && (
                       <label className="action-bar-field">
                         <span>Invoice as</span>
                         <select value={standalone ? 'standalone' : 'co'} onChange={e => setStandalone(e.target.value === 'standalone')}>
@@ -2812,7 +2878,7 @@ export default function App({ user, onSignOut }) {
                       </div>
                     )}
 
-                    {contracts.length > 1 && contractFromProcore ? (
+                    {!hasApprovedPc ? null : contracts.length > 1 && contractFromProcore ? (
                       <div className="action-bar-field">
                         <span>Prime Contract</span>
                         <div className="locked-contract">
@@ -3153,7 +3219,11 @@ export default function App({ user, onSignOut }) {
                   </div>
                 ) : (
                   <div className="action-bar-buttons">
-                    <button className="generate-btn" onClick={loadPreview} disabled={previewLoading}>
+                    <button
+                      className="generate-btn" onClick={loadPreview}
+                      disabled={previewLoading || noPcDraft || (noPcInvoice && (!noPcConfirmed || !ownerVendorId))}
+                      title={noPcDraft ? 'No approved Prime Contract — use Create Invoice' : noPcInvoice && !noPcConfirmed ? 'Confirm the standalone invoice first' : undefined}
+                    >
                       {previewLoading ? 'Loading preview…' : 'Preview →'}
                     </button>
                     <button className="cancel-btn" onClick={clearConfiguring}>Cancel</button>

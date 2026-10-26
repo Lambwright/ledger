@@ -29,7 +29,7 @@ import {
   invoiceExistingChangeOrder,
   listCommitments, commitmentLineDetail, previewCommitmentBilling, generateCommitmentInvoice, pushCommitmentToDraftCO,
   revertCommitment,
-  revertMaterial, listBudgetCodes
+  revertMaterial, listBudgetCodes, billingContext
 } from './app.js';
 import {
   handleProcoreWebhook, refreshIfStale, refreshProjectSnapshot, refreshProjectCounts, saveProjectCounts, projectSourceRecords,
@@ -283,7 +283,7 @@ async function handleStreamingCombinedAction(env, body) {
     action, tenant_id, project_id, entry_ids, direct_cost_ids, direct_cost_line_ids, commitment_ids, commitment_line_ids, user_id,
     prime_contract_id, confirm_unlinked, group_by, rate_overrides, edited_tm_lines,
     markup_percent, cm_markup_percent, dc_group_by, edited_dc_lines, cm_group_by, edited_cm_lines,
-    title, billing_period_id, new_billing_period, invoice_number, billing_date, standalone, material_lines
+    title, billing_period_id, new_billing_period, invoice_number, billing_date, standalone, material_lines, owner_vendor_id
   } = body;
   const haveEntries = [entry_ids, direct_cost_ids, direct_cost_line_ids, commitment_ids, commitment_line_ids, material_lines]
     .some(a => Array.isArray(a) && a.length > 0);
@@ -301,6 +301,7 @@ async function handleStreamingCombinedAction(env, body) {
         entryIds: entry_ids || [], directCostIds: direct_cost_ids || [], directCostLineIds: direct_cost_line_ids || [],
         commitmentIds: commitment_ids || [], commitmentLineIds: commitment_line_ids || [],
         materialLines: materialLinesFrom(material_lines),
+        ownerVendorId: owner_vendor_id || null,
         cmGroupBy: cm_group_by, editedCmLines: edited_cm_lines, cmMarkupPercent: cm_markup_percent,
         userId: user_id, primeContractId: prime_contract_id, confirmUnlinked: !!confirm_unlinked,
         groupBy: group_by, rateOverrides: rate_overrides, editedTmLines: edited_tm_lines,
@@ -408,6 +409,13 @@ async function handleAction(env, body, ctx) {
       onlyReconciledBy: body.only_reconciled_by ?? null
     });
     return json(result, 200);
+  }
+
+  // Who a standalone invoice bills on a project with no approved Prime Contract.
+  if (action === 'billing_context') {
+    const { project_id } = body;
+    if (!project_id) return json({ error: 'project_id is required' }, 400);
+    return json(await billingContext(env, { projectId: project_id }), 200);
   }
 
   // The project's budgeted budget codes — the T&M material code dropdown.

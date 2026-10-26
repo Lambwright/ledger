@@ -1137,6 +1137,31 @@ export async function listPrimeContracts(env, { projectId }) {
   return await findPrimeContracts(env, projectId);
 }
 
+// For a project with no approved Prime Contract yet (Ben, 2026-10-26): who a
+// standalone invoice should bill. Default = the project's "Customer" field
+// (Project Admin → Additional Information; custom_field_73165, a vendor). The
+// PM can pick anyone else from the project's vendors.
+const CUSTOMER_FIELD = 'custom_field_73165';
+
+export async function billingContext(env, { projectId }) {
+  const show = await procoreRequest(env, 'GET', `/rest/v1.0/projects/${projectId}?company_id=${env.PROCORE_COMPANY_ID}`);
+  const value = show.status === 200 ? show.data?.custom_fields?.[CUSTOMER_FIELD]?.value : null;
+  const customer = value?.id ? { id: String(value.id), name: value.label || '' } : null;
+  const vendors = [];
+  for (let page = 1; page <= 5; page++) {
+    const res = await procoreRequest(env, 'GET', `/rest/v1.0/projects/${projectId}/vendors?page=${page}&per_page=300`);
+    if (res.status !== 200 || !Array.isArray(res.data)) break;
+    for (const v of res.data) {
+      const name = v.name || v.company || '';
+      if (name) vendors.push({ id: String(v.id), name });
+    }
+    if (res.data.length < 300) break;
+  }
+  if (customer && !vendors.some(v => v.id === customer.id)) vendors.push(customer);
+  vendors.sort((a, b) => a.name.localeCompare(b.name));
+  return { customer, vendors };
+}
+
 async function findBillableContract(env, projectId) {
   const contracts = await findPrimeContracts(env, projectId);
   // First executed, approved contract that allows payment applications. Good enough
@@ -4238,7 +4263,7 @@ function defaultStandaloneTitle(label, billingDate) {
 export async function generateStandaloneInvoice(env, {
   tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [], materialLines = [],
   userId, primeContractId, confirmUnlinked, groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines,
-  cmGroupBy, editedCmLines, title, billingPeriodId, newBillingPeriod, invoiceNumber, billingDate, onProgress = () => {}
+  cmGroupBy, editedCmLines, title, billingPeriodId, newBillingPeriod, invoiceNumber, billingDate, ownerVendorId = null, onProgress = () => {}
 }) {
   if (!billingDate) {
     throw new Error('billingDate is required');
@@ -4266,20 +4291,30 @@ export async function generateStandaloneInvoice(env, {
   const billingPeriod = await findOrCreateBillingPeriod(env, projectId, billingPeriodId, newBillingPeriod);
   onProgress({ message: `Billing period ready — id ${billingPeriod.id}` });
 
-  // The owner and contractor come from the project's main contract.
+  // The client: the customer the PM picked (always, on a project with no
+  // approved Prime Contract yet — Ben, 2026-10-26), else the main contract's
+  // owner. The contractor is copied from the main contract when there is one.
   const v2 = `/rest/v2.0/companies/${env.PROCORE_COMPANY_ID}/projects/${projectId}/prime_contracts`;
-  const sourceId = primeContractId || await findBillableContract(env, projectId);
-  const sourceRes = await requestWithRetry(env, 'GET', `${v2}/${sourceId}`, null, onProgress);
-  if (sourceRes.status !== 200) throw new Error(`Couldn't read the main Prime Contract to copy its owner: ${sourceRes.status}`);
-  const source = sourceRes.data?.data || {};
-  if (!source.vendor?.id) throw new Error(`Prime Contract "${source.title || sourceId}" has no owner set, so there's no client to invoice.`);
+  const sourceId = primeContractId || (await findPrimeContracts(env, projectId)).find(c => c.status === 'Approved')?.id || null;
+  let source = {};
+  if (sourceId) {
+    const sourceRes = await requestWithRetry(env, 'GET', `${v2}/${sourceId}`, null, onProgress);
+    if (sourceRes.status !== 200) throw new Error(`Couldn't read the main Prime Contract to copy its owner: ${sourceRes.status}`);
+    source = sourceRes.data?.data || {};
+  }
+  const vendorId = ownerVendorId || source.vendor?.id;
+  if (!vendorId) {
+    throw new Error(sourceId
+      ? `Prime Contract "${source.title || sourceId}" has no owner set, so there's no client to invoice.`
+      : "This project has no approved Prime Contract and no customer was picked — choose who to invoice.");
+  }
 
   const createRes = await requestWithRetry(env, 'POST', v2, {
     title: contractTitle,
     description: `LEDGER-generated standalone invoice: ${label}`,
     status: 'Draft',
     accounting_method: 'amount',
-    vendor_id: Number(source.vendor.id),
+    vendor_id: Number(vendorId),
     ...(source.contractor?.id ? { contractor_id: Number(source.contractor.id) } : {}),
     private: source.private !== false
   }, onProgress);

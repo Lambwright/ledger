@@ -1499,3 +1499,6 @@ body {
 .material-inputs input:focus,
 .material-inputs select:focus { outline: none; border-color: var(--accent); }
 .preview-line-static { padding: 4px 0; }
+
+/* No approved Prime Contract (2026-10-26): the confirm row reads like the other fields. */
+.no-pc-confirm input[type="checkbox"] { accent-color: var(--accent); }
