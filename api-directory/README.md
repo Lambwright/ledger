@@ -161,6 +161,16 @@ each with CREATE/UPDATE/DELETE. To revive it, point the URL back to
 `https://qbo-dashboard.smoothlink.net/webhook/procore/` and get a fresh Authorization
 value from smoothlink. The original value was lost on 2026-10-07.
 
+## Crew timesheet hours (2026-10-27)
+
+**`GET /rest/v1.0/companies/{company_id}/timecard_entries?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&page=&per_page=100`**
+lists every Procore Timesheets entry across all projects in the date range.
+- **Only `start_date`/`end_date` filter.** `filters[date]=a...b` is silently ignored (it returns entries from 2022).
+- Pages of 100 work. A month is about 1,000 entries; Sep 1 – Oct 27 2026 was 2,134.
+- Fields used: `id, date, hours, project_id, deleted_at, approval_status` (pending / reviewed / completed / approved), `timecard_time_type`, `party`, `cost_code`, `billable`.
+- The project-scoped `/projects/{id}/timecard_entries` and `/timecard_entries?project_id=` returned 0 on KPS. v1.1 404s.
+- LEDGER sums hours per project and month (worker/src/hours.js, table project_hours_monthly), counting every non-deleted entry whatever its approval status.
+
 ## T&M ticket materials, and the project's budgeted codes (2026-10-23)
 
 **T&M material lines:** `GET /rest/v1.0/projects/{project_id}/materials` lists every
