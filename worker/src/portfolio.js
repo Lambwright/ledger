@@ -13,6 +13,7 @@ import { procoreRequest, procoreCallCount } from './procore.js';
 import { dbQuery } from './db.js';
 import { ledgerLevel } from './roles.js';
 import { refusalUser, einbauAppHeader, clientHeaders } from './security.js';
+import { saveInvoicedByMonth, runHoursSync } from './hours.js';
 import { ensureBulkSchema, ensurePortfolioActualsColumns } from './schema.js';
 import { hasQueuedBulkReconciliation, processNextBulkReconciliation } from './bulk.js';
 import { listPendingTickets, listPendingDirectCosts, listCommitments, tmValueAtRates, commitmentCostTypes } from './app.js';
@@ -234,6 +235,7 @@ async function fetchProjectActuals(env, projectId) {
   return {
     contracts, contractValue, invoiced, directCosts, subInvoices, nonPayrollDirectCosts,
     requisitions: reqs.ok ? reqs.items.filter(live) : null,
+    invoiceList: invoices.ok ? invoices.items : null,
     refused, remaining: remaining.length ? Math.min(...remaining) : null
   };
 }
@@ -406,6 +408,8 @@ export async function refreshProjectSnapshot(env, tenantId, projectId) {
        dirty_at = case when portfolio_projects.dirty_at <= $${allCols.length + 3}::timestamptz then null else portfolio_projects.dirty_at end`,
     params
   );
+  // Invoicing by billing month, for the dashboard's month view (hours.js).
+  await saveInvoicedByMonth(env, tenantId, projectId, actuals.invoiceList).catch(() => {});
   return Math.min(...[show.remaining, summary.remaining, actuals.remaining].filter(r => r != null), 999);
 }
 
@@ -780,6 +784,17 @@ async function runScheduledPass(env, tenantId) {
       const remaining = await syncProjectList(env, tenantId);
       log.push('project list synced');
       if (remaining != null && remaining < RESERVED_REQUESTS) throw new RateBudgetExhausted();
+    }
+
+    // Crew timesheet hours by project and month (hours.js) — overnight only.
+    if (night) {
+      try {
+        const hoursLog = await runHoursSync(env, tenantId);
+        if (hoursLog) log.push(hoursLog);
+      } catch (e) {
+        if (e.status === 429) throw new RateBudgetExhausted('Procore rate limit reached during the timesheet sync');
+        log.push(`hours sync failed: ${e.message}`);
+      }
     }
 
     // 2. Bulk reconciliations an admin queued on the dashboard — one project

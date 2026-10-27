@@ -53,6 +53,31 @@ function outsideBudget(p) {
   const invoiced = (n(p.invoiced) || 0) - (n(p.budget_view_invoiced) || 0);
   return Math.abs(cost) >= 1 || Math.abs(invoiced) >= 1 ? { cost, invoiced } : null;
 }
+// Crew hours vs invoicing (Ben / Leela, 2026-10-27). With a month picked,
+// each row carries _period = { hours, invoiced } for that month and these
+// read it; otherwise they're to date.
+const periodInvoiced = (p) => (p._period ? (p._period.invoiced ?? 0) : n(p.invoiced));
+const projectHours = (p) => (p._period ? (p._period.hours ?? 0) : n(p.hours_to_date));
+const invoicedPerHour = (p) => {
+  const h = projectHours(p);
+  const i = periodInvoiced(p);
+  return h > 0 && i != null ? i / h : null;
+};
+const hoursText = (v) => (v == null ? "—" : Number(v).toLocaleString("en-CA", { maximumFractionDigits: 1 }));
+// The months the Period filter offers: this month back to January 2024.
+const PERIOD_MONTHS = (() => {
+  const out = [];
+  const d = new Date();
+  d.setDate(1);
+  for (;;) {
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    if (key < "2024-01") break;
+    out.push({ key, label: d.toLocaleDateString("en-CA", { month: "short", year: "numeric" }) });
+    d.setMonth(d.getMonth() - 1);
+  }
+  return out;
+})();
+
 const moneyCell = (key, extra = "") => (p) => (
   <td className={`num${extra}${n(p[key]) < 0 ? " neg" : ""}`}>{money(p[key])}</td>
 );
@@ -141,7 +166,9 @@ const COLUMN_CATALOG = [
   { key: "sub_invoices", label: "Sub invoices", num: true, hidden: true, cell: moneyCell("sub_invoices") },
   { key: "committed_costs", label: "Committed", num: true, hidden: true, cell: moneyCell("committed_costs") },
   { key: "revised_budget", label: "Revised budget", num: true, hidden: true, cell: moneyCell("revised_budget") },
-  { key: "invoiced", label: "Invoiced", num: true, cell: moneyCell("invoiced") },
+  { key: "invoiced", label: "Invoiced", num: true, sort: periodInvoiced, cell: (p) => <td className="num">{money(periodInvoiced(p))}</td> },
+  { key: "hours", label: "Hours", num: true, sort: projectHours, cell: (p) => <td className="num">{hoursText(projectHours(p))}</td> },
+  { key: "invoiced_per_hour", label: "Invoiced / hour", num: true, sort: invoicedPerHour, cell: (p) => <td className="num">{money(invoicedPerHour(p))}</td> },
   {
     key: "est_billing", label: "Est. billing value", num: true, sort: (p) => estimatedBilling(p) ?? -Infinity,
     cell: (p) => <td className="num">{money(estimatedBilling(p))}</td>,
@@ -190,7 +217,9 @@ const COLUMN_TIPS = {
   sub_invoices: "Each commitment's latest subcontractor invoice to date, drafts excluded",
   committed_costs: "Total value of commitments, from the project's budget",
   revised_budget: "The project's budget after approved budget changes",
-  invoiced: "Owner invoices to date, before retainage, drafts excluded",
+  invoiced: "Owner invoices to date, before retainage, drafts excluded. With a month picked: invoices billed (by billing date) in that month",
+  hours: "Crew hours from Procore Timesheets (Einbau's own people), to date — or in the picked month. Read overnight",
+  invoiced_per_hour: "Invoiced ÷ crew hours, to date or for the picked month",
   est_billing: "Estimated billing value to date: every T&M hour at the project's rates + 20% on non-payroll direct costs and on approved sub invoices without labour (no S or L cost-type lines). Blank until LEDGER has worked out all three parts",
   pct_invoiced: "Invoiced ÷ contract",
   revised_contract: "Approved prime contracts, including approved change orders",
@@ -266,6 +295,18 @@ export default function App() {
   const [showAll, setShowAll] = useState(false);
   const [invoiceFilter, setInvoiceFilter] = useState(""); // "" | "open" | "done"
   const [sort, setSort] = useState(DEFAULT_SORT);
+  // Period: "" = all time; "YYYY-MM" = that month's hours and invoicing.
+  const [period, setPeriod] = useState("");
+  const [periodFigures, setPeriodFigures] = useState(null);
+  useEffect(() => {
+    if (!period) { setPeriodFigures(null); return; }
+    let stale = false;
+    setPeriodFigures(null);
+    api.monthFigures(period)
+      .then((res) => { if (!stale) setPeriodFigures(res); })
+      .catch((e) => { if (!stale) setError(`Couldn't load ${period}: ${e.message}`); });
+    return () => { stale = true; };
+  }, [period]);
 
   // Keep --header-h = the sticky page header's height (see .portfolio-scroll).
   useEffect(() => {
@@ -439,7 +480,12 @@ export default function App() {
     const q = search.trim().toLowerCase();
     const col = CATALOG_BY_KEY.get(sort.key);
     const valueOf = col?.sort || ((p) => n(p[sort.key]));
-    return projects
+    const rows = period && periodFigures
+      ? projects.map((p) => ({ ...p, _period: periodFigures.projects[p.project_id] || {} }))
+      : projects;
+    return rows
+      // A picked month lists only projects with crew hours or invoicing in it.
+      .filter((p) => !p._period || (p._period.hours || 0) > 0 || (p._period.invoiced || 0) !== 0)
       .filter((p) => showAll || isReportable(p))
       .filter((p) => {
         if (!invoiceFilter) return true;
@@ -461,13 +507,14 @@ export default function App() {
         const cmp = va < vb ? -1 : va > vb ? 1 : 0;
         return sort.dir === "asc" ? cmp : -cmp;
       });
-  }, [projects, search, stageFilter, fiscalFilter, typeFilter, region, dept, showAll, invoiceFilter, sort]);
+  }, [projects, search, stageFilter, fiscalFilter, typeFilter, region, dept, showAll, invoiceFilter, sort, period, periodFigures]);
 
   // Headline figures always match the projects currently shown (Ben, 2026-09-29).
   const totals = useMemo(() => {
     const sumOf = (list, key) => list.reduce((s, p) => s + (n(typeof key === "function" ? key(p) : p[key]) || 0), 0);
     const contract = sumOf(visible, "revised_contract");
-    const invoiced = sumOf(visible, "invoiced");
+    const invoiced = sumOf(visible, periodInvoiced);
+    const hours = sumOf(visible, projectHours);
     const mtd = sumOf(visible, "margin_to_date");
     // Budgeted margin only from projects that actually have a budget — one
     // with no revised budget reports a meaningless 100%.
@@ -477,7 +524,7 @@ export default function App() {
     const budgetedContract = sumOf(budgetedProjects, basisContract);
     const counted = visible.filter((p) => p.counts_at);
     return {
-      contract, invoiced, mtd,
+      contract, invoiced, mtd, hours,
       mtdPct: invoiced ? (mtd / invoiced) * 100 : null,
       budgetedPct: budgetedContract ? (sumOf(budgetedProjects, "budgeted_margin") / budgetedContract) * 100 : null,
       remaining: sumOf(visible, "invoicing_remaining"),
@@ -746,7 +793,8 @@ export default function App() {
         </div>
         <div className="summary-row">
           <div className="stat"><span className="stat-label">Total costs</span><span className="stat-value">{money(totals.jtd)}</span></div>
-          <div className="stat"><span className="stat-label">Total invoiced</span><span className="stat-value">{money(totals.invoiced)}</span><span className="stat-sub">{pct(totals.pctInvoiced)} of contract</span></div>
+          <div className="stat"><span className="stat-label">{period ? "Invoiced in month" : "Total invoiced"}</span><span className="stat-value">{money(totals.invoiced)}</span>{!period && <span className="stat-sub">{pct(totals.pctInvoiced)} of contract</span>}</div>
+          <div className="stat"><span className="stat-label">{period ? "Crew hours in month" : "Crew hours"}</span><span className="stat-value">{hoursText(totals.hours)}</span>{totals.hours > 0 && <span className="stat-sub">{money(totals.invoiced / totals.hours)} invoiced / hour</span>}</div>
           <div className="stat"><span className="stat-label">Contract value</span><span className="stat-value">{money(totals.contract)}</span></div>
           <div className="stat"><span className="stat-label">Left to invoice</span><span className="stat-value">{money(totals.remaining)}</span></div>
           <div className="stat"><span className="stat-label">Commitments left to pay</span><span className="stat-value">{money(totals.commitmentsLeft)}</span></div>
@@ -767,6 +815,10 @@ export default function App() {
         />
         <div className="filters">
           <input className="filter-search" placeholder="Search project name or number" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <select value={period} onChange={(e) => setPeriod(e.target.value)} aria-label="Period" title="Show one month's crew hours and invoicing">
+            <option value="">All time</option>
+            {PERIOD_MONTHS.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}
+          </select>
           <MultiSelect label="Stage" allLabel="All stages" options={stages} selected={stageFilter} onChange={setStageFilter} />
           <MultiSelect label="Fiscal year" allLabel="All fiscal years" options={fiscalYears} selected={fiscalFilter} onChange={setFiscalFilter} />
           <MultiSelect label="Project type" allLabel="All project types" options={projectTypes} selected={typeFilter} onChange={setTypeFilter} />
@@ -801,6 +853,8 @@ export default function App() {
           "Updated" time; open a project for a live refresh. Hover a column heading for what it means.
           {notLoaded > 0 && ` ${notLoaded} project${notLoaded === 1 ? " hasn't" : "s haven't"} been loaded yet.`}
           {" "}Budgeted % is the budget's own Budgeted Margin.
+          {period && ` Showing ${PERIOD_MONTHS.find((m) => m.key === period)?.label}: Hours and Invoiced are that month only (invoices by billing date, crew timesheet hours); everything else is to date. Only projects with hours or invoicing that month are listed.`}
+          {period && !periodFigures && " Loading the month…"}
         </div>
 
         {error && <div className="banner-error">{error}</div>}

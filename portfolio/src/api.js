@@ -33,5 +33,7 @@ export const api = {
   savePrefs: (key, value) => call("save_prefs", { key, value }),
   // Shared (standard) dashboard views — LEDGER admins only (checked by the worker).
   saveSharedView: ({ id, name, config }) => call("save_shared_view", { id, name, config }),
+  // One month's crew hours and invoicing per project ("YYYY-MM").
+  monthFigures: (month) => call("month_figures", { month }),
   deleteSharedView: (id) => call("delete_shared_view", { id }),
 };

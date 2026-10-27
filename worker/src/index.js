@@ -41,6 +41,7 @@ import { getPrefs, savePref } from './prefs.js';
 import { pushFinancialsToCrm, handleCrmRefresh } from './crm.js';
 import { listSharedViews, saveSharedView, deleteSharedView } from './views.js';
 import { watchRefusals, einbauAppHeader, clientHeaders } from './security.js';
+import { monthFigures } from './hours.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -837,6 +838,10 @@ async function handlePortfolio(request, env) {
     return json(await saveSharedView(env, tenantId, { id: body.id, name: body.name, config: body.config }, user), 200);
   }
   // Saving your own view settings — every level (it only changes your own view).
+  // One month's crew hours and invoicing per project (hours.js) — every level.
+  if (body.action === 'month_figures') {
+    return json(await monthFigures(env, tenantId, body.month), 200);
+  }
   if (body.action === 'save_prefs') {
     return json(await savePref(env, tenantId, user.username, body.key, body.value), 200);
   }
