@@ -54,8 +54,8 @@ const LOGIN_ERROR_MESSAGES = {
   invalid_credentials: 'Incorrect username or password.',
   rate_limited: 'Too many attempts — try again in a few minutes.',
   invalid_request: 'Enter a username and password.',
-  no_app_access: "Your account doesn't have access to any apps yet. Ask an admin to grant you access in HELM.",
-  no_ledger_access: "You don't have access to LEDGER — ask a HELM admin to grant it.",
+  no_app_access: "Your account doesn't have access to any apps yet. Ask your admin to grant you access.",
+  no_ledger_access: "You don't have access to LEDGER — ask your admin to grant it.",
 };
 
 export function authErrorMessage(code) {

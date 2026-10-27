@@ -11,7 +11,9 @@ const APP_LINKS = [
   { name: "LEDGER", url: "https://lambwright.github.io/ledger/" },
   { name: "CRM", url: "https://lambwright.github.io/crm/" },
 ];
-const HELM_LINK = { name: "HELM", url: "https://lambwright.github.io/helm/" };
+// Its label comes from Einbau ID (user.helmName, 2026-10-27): "HELM" for admins
+// and anyone with a HELM tool permission, "Settings" for everyone else.
+const HELM_URL = "https://lambwright.github.io/helm/";
 
 // Only apps this user can open, then HELM always last (it's where settings
 // live). No apps granted = nothing but this app and HELM (access fails
@@ -19,7 +21,8 @@ const HELM_LINK = { name: "HELM", url: "https://lambwright.github.io/helm/" };
 function appLinks(user) {
   const apps = (Array.isArray(user?.apps) ? user.apps : []).map((a) => String(a).toUpperCase());
   const allowed = (name) => apps.includes(name);
-  return [...APP_LINKS.filter((a) => a.name === CURRENT_APP || allowed(a.name)), HELM_LINK].map((a) => ({
+  const helmLink = { name: user?.helmName || "Settings", url: HELM_URL };
+  return [...APP_LINKS.filter((a) => a.name === CURRENT_APP || allowed(a.name)), helmLink].map((a) => ({
     ...a,
     current: a.name === CURRENT_APP,
   }));

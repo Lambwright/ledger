@@ -21,7 +21,7 @@
 //                 that screen is ever built). The dashboard's source-record
 //                 drill-down is open to every level.
 
-export const NO_ACCESS_MESSAGE = "You don't have access to LEDGER — ask a HELM admin to grant it.";
+export const NO_ACCESS_MESSAGE = "You don't have access to LEDGER — ask your admin to grant it.";
 
 const KNOWN = new Set(['admin', 'accounting', 'pm', 'viewer']);
 

@@ -702,7 +702,7 @@ export default function App() {
         <Header user={user} onLogout={handleLogout} />
         <div className="container">
           <div className="card empty-state">
-            You don't have access to LEDGER — ask a HELM admin to grant it.
+            You don't have access to LEDGER — ask your admin to grant it.
           </div>
         </div>
       </>
