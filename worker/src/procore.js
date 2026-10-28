@@ -95,3 +95,21 @@ export async function procoreRequest(env, method, path, data) {
 
   return { status: pcResponse.status, data: responseData, headers };
 }
+
+// Multipart upload (2026-10-28) — attaching files, e.g. T&M ticket backup on
+// an invoice (ticketbackup.js). `form` is a FormData; fetch sets the
+// multipart boundary itself, so there's no Content-Type here.
+export async function procoreUpload(env, method, path, form) {
+  callCount++;
+  if (!path || !path.startsWith('/rest/')) throw new Error(`path must be a full Procore /rest/... path, got: ${path}`);
+  const token = await getAccessToken(env);
+  const res = await fetch(`https://api.procore.com${path}`, {
+    method,
+    headers: { Authorization: `Bearer ${token}`, 'Procore-Company-Id': env.PROCORE_COMPANY_ID },
+    body: form
+  });
+  const text = await res.text();
+  let data;
+  try { data = text ? JSON.parse(text) : null; } catch { data = { bodyPreview: text.slice(0, 300) }; }
+  return { status: res.status, data };
+}

@@ -5,6 +5,7 @@
 import { procoreRequest } from './procore.js';
 import { dbQuery } from './db.js';
 import { ensureBulkSchema, ensureMaterialSchema } from './schema.js';
+import { attachTicketBackup } from './ticketbackup.js';
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -4244,6 +4245,12 @@ export async function generateCombinedInvoice(env, {
     projectId, contractId, changeOrderId, coLines: [...tmCoLines, ...mtCoLines, ...dcCoLines, ...cmCoLines], billingPeriod, invoiceNumber, billingDate, onProgress
   });
 
+  // T&M ticket backup on the invoice: a PDF per ticket + its own files (ticketbackup.js).
+  await attachTicketBackup(env, {
+    projectId, contractId, invoiceId: invoice.id, onProgress,
+    entryIds: [...tmEntries.map(e => e.id), ...(mtLineItems || []).map(l => l.entryId)]
+  });
+
   const dcRows = [...dcBillingRows(dcLineItems), ...commitmentBillingRows(cmLineItems), ...materialBillingRows(mtLineItems)];
   await insertBillingRecordsBatch(env, [
     ...tmLineItems.map(line => ({
@@ -4421,6 +4428,12 @@ export async function generateStandaloneInvoice(env, {
     throw new Error(`${e.message} ${removed ? '(the new Prime Contract was removed — nothing left behind)' : '(COULD NOT remove the new Prime Contract — delete it in Procore)'}`);
   }
   onProgress({ message: `Invoice ${invoice.invoice_number} created`, invoiceId: invoice.id, invoiceNumber: invoice.invoice_number });
+
+  // T&M ticket backup on the invoice: a PDF per ticket + its own files (ticketbackup.js).
+  await attachTicketBackup(env, {
+    projectId, contractId, invoiceId: invoice.id, onProgress,
+    entryIds: [...(tm?.entries || []).map(e => e.id), ...(mt?.lineItems || []).map(l => l.entryId)]
+  });
 
   // Claim every line at 100%. The rows were there immediately in testing; a
   // couple of short retries cover a slow day.
