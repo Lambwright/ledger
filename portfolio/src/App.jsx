@@ -522,6 +522,10 @@ export default function App() {
     const invoiced = sumOf(visible, periodInvoiced);
     const hours = sumOf(visible, projectHours);
     const mtd = sumOf(visible, "margin_to_date");
+    // Margin is all-time on both sides: the Period filter has no monthly cost,
+    // so dividing all-time margin by one month's invoicing gave e.g. 609.8%.
+    // Only projects with a margin count, so a project missing its cost doesn't dilute it.
+    const invoicedToDate = sumOf(visible.filter((p) => p.margin_to_date != null), "invoiced");
     // Budgeted margin only from projects that actually have a budget — one
     // with no revised budget reports a meaningless 100%.
     const budgetedProjects = visible.filter((p) => p.budget_status === "ok");
@@ -531,7 +535,7 @@ export default function App() {
     const counted = visible.filter((p) => p.counts_at);
     return {
       contract, invoiced, mtd, hours,
-      mtdPct: invoiced ? (mtd / invoiced) * 100 : null,
+      mtdPct: invoicedToDate ? (mtd / invoicedToDate) * 100 : null,
       budgetedPct: budgetedContract ? (sumOf(budgetedProjects, "budgeted_margin") / budgetedContract) * 100 : null,
       remaining: sumOf(visible, "invoicing_remaining"),
       jtd: sumOf(visible, "jtd_cost"),
@@ -772,7 +776,7 @@ export default function App() {
             <div className="margin-compare">
               <div>
                 <span className={`stat-big${n(totals.mtdPct) < 0 ? " neg" : ""}`}>{pct(totals.mtdPct)}</span>
-                <span className="stat-caption">to date · {money(totals.mtd)}</span>
+                <span className="stat-caption">{period ? "all time, not just this month" : "to date"} · {money(totals.mtd)}</span>
               </div>
               <span className="margin-vs">vs</span>
               <div>
