@@ -1,3 +1,4 @@
+import Loading from './Loading.jsx';
 import { useState, useEffect } from 'react';
 import { ticketDetail } from './api';
 
@@ -50,7 +51,7 @@ export default function TicketDetailPopout() {
       ) : error ? (
         <div className="banner banner-error">{error}</div>
       ) : !detail ? (
-        <div className="loading">Loading ticket…</div>
+        <Loading />
       ) : (
         <div className="modal-body">
           <div className="modal-meta">

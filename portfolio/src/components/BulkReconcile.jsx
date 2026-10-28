@@ -1,3 +1,4 @@
+import { BusyLabel } from "./Loading.jsx";
 import { useState } from "react";
 
 // Bulk project reconciliation (Ben's ask 2026-09-30) — LEDGER admins mark
@@ -50,7 +51,7 @@ export function BulkDetail({ project: p, isAdmin, onReopen, busy }) {
       {p.bulk_status === "done" && p.bulk_error && <div className="cell-sub">Partly skipped: {p.bulk_error}</div>}
       {isAdmin && p.bulk_status !== "running" && (
         <button className="btn btn-ghost btn-sm" disabled={busy} onClick={(e) => { e.stopPropagation(); onReopen(p); }}>
-          {busy ? "Working…" : p.bulk_status === "queued" ? "Cancel" : "Reopen project"}
+          {busy ? <BusyLabel /> : p.bulk_status === "queued" ? "Cancel" : "Reopen project"}
         </button>
       )}
     </div>

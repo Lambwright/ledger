@@ -1,3 +1,4 @@
+import Loading from './Loading.jsx';
 import { useState, useEffect, useRef } from 'react';
 
 function money(n) {
@@ -83,7 +84,7 @@ export default function PreviewEditPopout() {
   if (!data) {
     return (
       <div className="ledger ledger-wide">
-        <div className="loading">Connecting to the LEDGER panel…</div>
+        <Loading />
       </div>
     );
   }

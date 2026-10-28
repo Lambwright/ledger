@@ -1,3 +1,4 @@
+import { BusyLabel } from "./Loading.jsx";
 import { useState } from "react";
 import { api } from "../api.js";
 
@@ -41,7 +42,7 @@ export default function SourceRecords({ projectId, onUnauthorized }) {
     return (
       <div className="detail-actions">
         <button className="btn btn-ghost btn-sm" disabled={loading} onClick={load}>
-          {loading ? "Loading source records…" : "Show source records"}
+          {loading ? <BusyLabel fallback="Loading source records…" /> : "Show source records"}
         </button>
         {error && <span className="detail-note detail-error">{error}</span>}
       </div>

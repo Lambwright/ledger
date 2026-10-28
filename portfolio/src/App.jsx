@@ -1,3 +1,4 @@
+import Loading, { BusyLabel } from "./components/Loading.jsx";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getStoredToken, verify, hasLedgerAccess, logout as doLogout } from "./auth.js";
 import { api } from "./api.js";
@@ -297,6 +298,11 @@ export default function App() {
   const [sort, setSort] = useState(DEFAULT_SORT);
   // Period: "" = all time; "YYYY-MM" = that month's hours and invoicing.
   const [period, setPeriod] = useState("");
+  // Seasonal decorations once the signed-in page (and its header) is up.
+  useEffect(() => {
+    if (authState !== "in") return;
+    try { window.EinbauFestive?.init?.({ app: "LEDGER" }); } catch { /* decorations are optional */ }
+  }, [authState]);
   const [periodFigures, setPeriodFigures] = useState(null);
   useEffect(() => {
     if (!period) { setPeriodFigures(null); return; }
@@ -740,7 +746,7 @@ export default function App() {
   }
 
   if (authState === "checking") {
-    return <div className="login-screen"><span className="spinner-inline">Checking session…</span></div>;
+    return <div className="login-screen"><Loading /></div>;
   }
   if (authState === "out") return <LoginScreen onLoggedIn={signIn} />;
   if (authState === "noaccess") {
@@ -844,7 +850,7 @@ export default function App() {
             onChange={changeColumns}
             onReset={() => changeColumns(defaultColumnSetup())}
           />
-          <button className="btn btn-ghost btn-sm" onClick={load} disabled={loading}>{loading ? "Loading…" : "Reload"}</button>
+          <button className="btn btn-ghost btn-sm" onClick={load} disabled={loading}>{loading ? <BusyLabel fallback="Loading…" /> : "Reload"}</button>
         </div>
 
         <div className="freshness">
@@ -954,7 +960,7 @@ export default function App() {
                               disabled={refreshingId === p.project_id || countingIds.has(p.project_id)}
                               onClick={(e) => { e.stopPropagation(); refreshProject(p.project_id); }}
                             >
-                              {refreshingId === p.project_id ? "Refreshing…" : "Refresh from Procore"}
+                              {refreshingId === p.project_id ? <BusyLabel fallback="Refreshing…" /> : "Refresh from Procore"}
                             </button>
                             <a className="btn btn-accent btn-sm" href={`${LEDGER_APP}/?project_id=${p.project_id}`} target="_blank" rel="noreferrer">
                               Open in LEDGER ↗
@@ -970,6 +976,7 @@ export default function App() {
                   ),
                 ];
               })}
+              {loading && projects.length === 0 && <Loading />}
               {!loading && visible.length === 0 && (
                 <tr><td colSpan={colCount} className="empty-state">No projects match these filters.</td></tr>
               )}

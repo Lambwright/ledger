@@ -1,3 +1,4 @@
+import Loading from './Loading.jsx';
 import { useState, useEffect } from 'react';
 import { directCostLineDetail } from './api';
 
@@ -39,7 +40,7 @@ export default function DirectCostDetailPopout() {
       ) : error ? (
         <div className="banner banner-error">{error}</div>
       ) : !detail ? (
-        <div className="loading">Loading direct cost…</div>
+        <Loading />
       ) : (
         <div className="modal-body">
           <div className="modal-meta">

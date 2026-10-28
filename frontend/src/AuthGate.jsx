@@ -1,3 +1,4 @@
+import Loading from './Loading.jsx';
 import { useCallback, useEffect, useState } from 'react';
 import { adoptTokenFromHash, authErrorMessage, clearToken, getToken, login, verify } from './auth';
 import { applyAccentPreset } from './accentPresets';
@@ -56,7 +57,7 @@ export default function AuthGate({ children }) {
   }, [signOut]);
 
   if (state === 'checking') {
-    return <div className="ledger"><div className="loading">Checking sign-in…</div></div>;
+    return <div className="ledger"><Loading /></div>;
   }
   if (state === 'out') return <SignIn notice={notice} onSignedIn={signIn} />;
   return children(user, () => signOut());

@@ -1,3 +1,4 @@
+import Loading, { BusyLabel } from './Loading.jsx';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   listPendingTickets, listPendingDirectCosts, listPrimeContracts, listBillingPeriods, nextInvoiceNumber,
@@ -180,6 +181,10 @@ export default function App({ user, onSignOut }) {
   const canUndo = (rec, kind) => !viewOnly && (canUndoAnyone || rec?.myMarks?.[kind] === true);
 
   const [projectId, setProjectId] = useState(resolveProjectId(params));
+  // Seasonal decorations (bats/cobwebs/snow by date) once the header is up.
+  useEffect(() => {
+    try { window.EinbauFestive?.init?.({ app: 'LEDGER' }); } catch { /* decorations are optional */ }
+  }, []);
   const [contractId, setContractId] = useState(resolveContractId(params));
   const [contractFromProcore, setContractFromProcore] = useState(resolveContractId(params) != null);
   const [contracts, setContracts] = useState([]);
@@ -1653,7 +1658,7 @@ export default function App({ user, onSignOut }) {
     // width, not LEDGER), but the same fixed 480px cap left a popped-out
     // window mostly empty margin either side (Ben's ask 2026-09-15).
     <div className={`ledger ${showPickerFooter ? 'has-actionbar' : ''} ${!EMBEDDED ? 'ledger-wide' : ''} ${viewOnly ? 'view-only' : ''}`}>
-      <header className="ledger-header">
+      <header className="ledger-header" data-einbau-header>
         <div className="ledger-logo">LEDGER</div>
         <div className="ledger-subtitle">Project Billing Reconciliation</div>
         {billingMode && (
@@ -1737,7 +1742,7 @@ export default function App({ user, onSignOut }) {
       )}
 
       {EMBEDDED && !projectId && !error && (
-        <div className="loading">Connecting to Procore…</div>
+        <Loading />
       )}
 
       {error && !overlayOpen && <div className="banner banner-error">{error}</div>}
@@ -1826,7 +1831,7 @@ export default function App({ user, onSignOut }) {
         <>
           {reviewHeader}
 
-          {loading && <div className="loading">Loading billing history…</div>}
+          {loading && <Loading />}
 
           {!loading && reviewTab === 'billed' && billedTickets.length === 0 && billedDc.length === 0 && billedCm.length === 0 && (
             <div className="empty">Nothing billed from this project yet.</div>
@@ -2253,7 +2258,7 @@ export default function App({ user, onSignOut }) {
             <span>Project Settings</span>
           </div>
           {error && <div className="banner banner-error">{error}</div>}
-          {(!settingsForm || loading) ? <div className="loading">Loading settings…</div> : (
+          {(!settingsForm || loading) ? <Loading /> : (
             <div className="settings-form">
               <div className="settings-hint">
                 Defaults for new invoices and Change Orders on this project — each one can still be changed per invoice.
@@ -2359,7 +2364,7 @@ export default function App({ user, onSignOut }) {
         </>
       ) : (
         <>
-          {loading && <div className="loading">Loading billing data…</div>}
+          {loading && <Loading />}
 
           {!loading && !overlayOpen && (
             <>
@@ -2547,7 +2552,7 @@ export default function App({ user, onSignOut }) {
 
                         {expandedDcId === d.id && (
                           <div className="line-items">
-                            {dcLineDetailLoading === d.id && <div className="loading">Loading line items…</div>}
+                            {dcLineDetailLoading === d.id && <Loading size={90} />}
                             {detail?.error && <div className="banner banner-error">{detail.error}</div>}
                             {detail?.lines?.map(l => (
                               <div className="line-item-check" key={l.id}>
@@ -2654,7 +2659,7 @@ export default function App({ user, onSignOut }) {
 
                         {expandedCmId === cmId && (
                           <div className="line-items">
-                            {cmLineDetailLoading === cmId && <div className="loading">Loading line items…</div>}
+                            {cmLineDetailLoading === cmId && <Loading size={90} />}
                             {detail?.error && <div className="banner banner-error">{detail.error}</div>}
 
                             {/* Budget / Write Off up front (Ben's ask 2026-09-24):
@@ -2799,7 +2804,7 @@ export default function App({ user, onSignOut }) {
               <div className="billing-overlay-header">
                 <span>
                   {generating
-                    ? 'Working…'
+                    ? <BusyLabel />
                     : (previewTmLines || previewDcLines || previewCmLines)
                     ? `Preview — ${ACTION_LABEL[action]}`
                     : ACTION_LABEL[action]}
@@ -3182,6 +3187,7 @@ export default function App({ user, onSignOut }) {
                   </>
                 )}
 
+                {generating && <Loading size={110} text={progressLog[progressLog.length - 1]} />}
                 {generating && progressLog.length > 0 && (
                   <div className="progress-log">
                     {progressLog.map((line, i) => <div key={i} className="progress-line">{line}</div>)}
@@ -3192,7 +3198,7 @@ export default function App({ user, onSignOut }) {
               <div className="billing-overlay-footer">
                 {generating ? (
                   <div className="action-bar-buttons">
-                    <button className="generate-btn" disabled>Working…</button>
+                    <button className="generate-btn" disabled><BusyLabel /></button>
                   </div>
                 ) : (previewTmLines || previewDcLines || previewCmLines) ? (
                   <div className="action-bar-buttons">
@@ -3214,7 +3220,7 @@ export default function App({ user, onSignOut }) {
                       disabled={previewLoading || noPcDraft || (noPcInvoice && !ownerVendorId)}
                       title={noPcDraft ? 'No approved Prime Contract — use Create Invoice' : noPcInvoice && !ownerVendorId ? 'Choose who to bill' : undefined}
                     >
-                      {previewLoading ? 'Loading preview…' : 'Preview →'}
+                      {previewLoading ? <BusyLabel fallback="Loading preview…" /> : 'Preview →'}
                     </button>
                     <button className="cancel-btn" onClick={clearConfiguring}>Cancel</button>
                   </div>
@@ -3229,7 +3235,7 @@ export default function App({ user, onSignOut }) {
           {overlayOpen && action === 'writeoff' && (
             <div className="billing-overlay">
               <div className="billing-overlay-header">
-                <span>{generating ? 'Working…' : 'Write Off'}</span>
+                <span>{generating ? <BusyLabel /> : 'Write Off'}</span>
                 {!generating && (
                   <button className="overlay-close" onClick={closeDispositionOverlay} aria-label="Cancel">✕</button>
                 )}
@@ -3270,7 +3276,7 @@ export default function App({ user, onSignOut }) {
               <div className="billing-overlay-footer">
                 {generating ? (
                   <div className="action-bar-buttons">
-                    <button className="draft-btn" disabled>Working…</button>
+                    <button className="draft-btn" disabled><BusyLabel /></button>
                   </div>
                 ) : (
                   <div className="action-bar-buttons">
@@ -3289,7 +3295,7 @@ export default function App({ user, onSignOut }) {
           {overlayOpen && action === 'already_billed' && (
             <div className="billing-overlay">
               <div className="billing-overlay-header">
-                <span>{generating ? 'Working…' : 'Already Billed'}</span>
+                <span>{generating ? <BusyLabel /> : 'Already Billed'}</span>
                 {!generating && (
                   <button className="overlay-close" onClick={closeDispositionOverlay} aria-label="Cancel">✕</button>
                 )}
@@ -3332,7 +3338,7 @@ export default function App({ user, onSignOut }) {
               <div className="billing-overlay-footer">
                 {generating ? (
                   <div className="action-bar-buttons">
-                    <button className="billed-btn" disabled>Working…</button>
+                    <button className="billed-btn" disabled><BusyLabel /></button>
                   </div>
                 ) : (
                   <div className="action-bar-buttons">
@@ -3351,7 +3357,7 @@ export default function App({ user, onSignOut }) {
           {overlayOpen && action === 'budgeted' && (
             <div className="billing-overlay">
               <div className="billing-overlay-header">
-                <span>{generating ? 'Working…' : 'Mark as Budgeted'}</span>
+                <span>{generating ? <BusyLabel /> : 'Mark as Budgeted'}</span>
                 {!generating && (
                   <button className="overlay-close" onClick={closeDispositionOverlay} aria-label="Cancel">✕</button>
                 )}
@@ -3383,7 +3389,7 @@ export default function App({ user, onSignOut }) {
               <div className="billing-overlay-footer">
                 {generating ? (
                   <div className="action-bar-buttons">
-                    <button className="draft-btn" disabled>Working…</button>
+                    <button className="draft-btn" disabled><BusyLabel /></button>
                   </div>
                 ) : (
                   <div className="action-bar-buttons">
