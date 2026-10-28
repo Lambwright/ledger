@@ -1506,8 +1506,3 @@ body {
 .warn-modal.info-modal { border-color: var(--border-input); }
 .info-modal .warn-modal-title { color: var(--ink); }
 
-/* Seasonal decorations (einbau-festive.js, 2026-10-28): the bottom band and the
-   bottom corner webs tuck BEHIND the fixed action bar (z-index 50), so bats and
-   webs never sit over Configure / Write Off etc. in the narrow Procore panel.
-   They never take clicks either way. */
-.ef-band.bottom, .ef-web.bl, .ef-web.br { z-index: 40 !important; }

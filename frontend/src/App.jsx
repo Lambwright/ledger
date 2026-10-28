@@ -183,7 +183,9 @@ export default function App({ user, onSignOut }) {
   const [projectId, setProjectId] = useState(resolveProjectId(params));
   // Seasonal decorations (bats/cobwebs/snow by date) once the header is up.
   useEffect(() => {
-    try { window.EinbauFestive?.init?.({ app: 'LEDGER' }); } catch { /* decorations are optional */ }
+    // bottomZ 40: the bottom bats and corner webs sit behind the fixed action bar
+    // (z-index 50), so they never cover Configure / Write Off in the narrow panel.
+    try { window.EinbauFestive?.init?.({ app: 'LEDGER', bottomZ: 40 }); } catch { /* decorations are optional */ }
   }, []);
   const [contractId, setContractId] = useState(resolveContractId(params));
   const [contractFromProcore, setContractFromProcore] = useState(resolveContractId(params) != null);
