@@ -482,17 +482,17 @@ export default function App() {
     if (dept && !depts.includes(dept)) setDept("");
   }, [dept, depts]);
 
-  const visible = useMemo(() => {
+  // Every filter except "Show hidden", so the hidden count is only the
+  // projects the checkbox would actually add (Ben, 2026-10-28: "Show 23
+  // hidden" counted the whole company while the list showed one department).
+  const matching = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const col = CATALOG_BY_KEY.get(sort.key);
-    const valueOf = col?.sort || ((p) => n(p[sort.key]));
     const rows = period && periodFigures
       ? projects.map((p) => ({ ...p, _period: periodFigures.projects[p.project_id] || {} }))
       : projects;
     return rows
       // A picked month lists only projects with crew hours or invoicing in it.
       .filter((p) => !p._period || (p._period.hours || 0) > 0 || (p._period.invoiced || 0) !== 0)
-      .filter((p) => showAll || isReportable(p))
       .filter((p) => {
         if (!invoiceFilter) return true;
         const done = n(p.pct_invoiced) != null && n(p.pct_invoiced) >= 100;
@@ -503,7 +503,14 @@ export default function App() {
       .filter((p) => typeFilter.size === 0 || typeFilter.has(p.project_type || "(none)"))
       .filter((p) => !region || p.region === region)
       .filter((p) => !dept || String(p.departments || "").split(", ").includes(dept))
-      .filter((p) => !q || `${p.name} ${p.project_number || ""}`.toLowerCase().includes(q))
+      .filter((p) => !q || `${p.name} ${p.project_number || ""}`.toLowerCase().includes(q));
+  }, [projects, search, stageFilter, fiscalFilter, typeFilter, region, dept, invoiceFilter, period, periodFigures]);
+
+  const visible = useMemo(() => {
+    const col = CATALOG_BY_KEY.get(sort.key);
+    const valueOf = col?.sort || ((p) => n(p[sort.key]));
+    return matching
+      .filter((p) => showAll || isReportable(p))
       .sort((a, b) => {
         const va = valueOf(a);
         const vb = valueOf(b);
@@ -513,7 +520,7 @@ export default function App() {
         const cmp = va < vb ? -1 : va > vb ? 1 : 0;
         return sort.dir === "asc" ? cmp : -cmp;
       });
-  }, [projects, search, stageFilter, fiscalFilter, typeFilter, region, dept, showAll, invoiceFilter, sort, period, periodFigures]);
+  }, [matching, showAll, sort]);
 
   // Headline figures always match the projects currently shown (Ben, 2026-09-29).
   const totals = useMemo(() => {
@@ -550,7 +557,7 @@ export default function App() {
   }, [visible]);
   const marginGap = totals.mtdPct != null && totals.budgetedPct != null ? totals.mtdPct - totals.budgetedPct : null;
 
-  const hiddenCount = projects.length - projects.filter(isReportable).length;
+  const hiddenCount = matching.filter((p) => !isReportable(p)).length;
   const notLoaded = projects.filter((p) => !p.refreshed_at).length;
 
   // Opening a project refreshes it from Procore (Ben's ask 2026-09-25) —
@@ -845,9 +852,11 @@ export default function App() {
             <option value="open">Not fully invoiced</option>
             <option value="done">Fully invoiced</option>
           </select>
-          <label className="filter-toggle" title="Overhead projects, projects without the Custom Reporting budget view, and projects not loaded yet">
-            <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} /> Show {hiddenCount} hidden (no budget view or not loaded yet)
-          </label>
+          {(hiddenCount > 0 || showAll) && (
+            <label className="filter-toggle" title="Overhead projects, projects without the Custom Reporting budget view, and projects not loaded yet — counted within the filters above">
+              <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} /> Show {hiddenCount} hidden (no budget view or not loaded yet)
+            </label>
+          )}
           <ColumnPicker
             catalog={COLUMN_CATALOG}
             setup={columnSetup || defaultColumnSetup()}
