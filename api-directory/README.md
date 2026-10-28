@@ -161,6 +161,13 @@ each with CREATE/UPDATE/DELETE. To revive it, point the URL back to
 `https://qbo-dashboard.smoothlink.net/webhook/procore/` and get a fresh Authorization
 value from smoothlink. The original value was lost on 2026-10-07.
 
+## Attachments: T&M ticket → change event → invoice (2026-10-28)
+
+- **Ticket files:** a T&M entry's own uploaded files are `time_and_material_entry_attachments[]` on the entry (list or show): `{id, attachment_id, filename, content_type, url / presentation_url (signed storage URL, downloadable directly)}`.
+- **Change event:** linking tickets to a CE with `bulk_update {change_event_id, update_change_event_attachment: true}` copies those files onto the CE's `attachments`, with the same file id. It does NOT create a ticket document, and nothing reaches the invoice.
+- **Invoice:** a payment application has an `attachments` array (show), and **files are added by multipart PATCH `/rest/v1.0/prime_contracts/{pc}/payment_applications/{id}?project_id=` with a TOP-LEVEL `attachments[]` file field** plus `project_id`. Verified on the test project's invoice #8 (2026-10-28) by downloading ticket #8's photo and re-uploading it. These return 200 but are **silently ignored**: `payment_application[attachment_ids]`, `payment_application[prostore_file_ids]` (JSON), and multipart `payment_application[attachments][]`.
+- Not yet found: an API for Procore's own generated (signed) T&M ticket PDF.
+
 ## Crew timesheet hours (2026-10-27)
 
 **`GET /rest/v1.0/companies/{company_id}/timecard_entries?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&page=&per_page=100`**
