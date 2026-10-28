@@ -2416,17 +2416,30 @@ export async function directCostLineDetail(env, { tenantId, projectId, directCos
 // had lines added to it (not just transiently, per the original 2026-09-17
 // note below), so summing the real lines is the only reliable path once
 // per-line selection exists, not just a nicety for partial bills.
-// What a direct cost's invoice line says (Ben, 2026-10-28: "Unknown vendor
-// isn't good to see"). Leads with the vendor when there is one, else a general
-// descriptor: the cost code's name (e.g. "Woodworking Consumables Supplies"),
-// else the kind of direct cost — then the DC's own description and date.
+// What a direct cost's invoice line says (Ben, 2026-10-28). It leads with a
+// short category from the cost code — 55 "Consumables", 56 "Materials", else
+// the code's own name — then the vendor (when there is one), the DC's
+// description, its invoice number and date:
+// "Materials - Home Depot - Hinges - #4521 (2026-10-02)". Never "Unknown
+// vendor". The amount is already on the line itself, so it isn't repeated.
+const DC_CATEGORY_BY_CODE = { '55': 'Consumables', '56': 'Materials' };
 const DC_TYPE_LABEL = { invoice: 'Supplier invoice', expense: 'Expense', subcontractor_invoice: 'Subcontractor invoice' };
+function directCostCategory(dc, rawLines = []) {
+  const wbs = rawLines[0]?.wbs_code || {};
+  const code = String(wbs.flat_code || '').split('.')[0].trim();
+  const top = code.split('-')[0];
+  return DC_CATEGORY_BY_CODE[code] || DC_CATEGORY_BY_CODE[top]
+    || String(wbs.description || '').split('.')[0].trim()
+    || DC_TYPE_LABEL[dc.direct_cost_type] || 'Direct cost';
+}
 function directCostLineDescription(dc, rawLines = []) {
+  const parts = [directCostCategory(dc, rawLines)];
   const vendor = dc.vendor_name || dc.vendor?.name || null;
-  const codeName = String(rawLines[0]?.wbs_code?.description || '').split('.')[0].trim() || null;
-  const lead = vendor || codeName || DC_TYPE_LABEL[dc.direct_cost_type] || 'Direct cost';
+  if (vendor) parts.push(vendor);
   const desc = String(dc.description || '').trim();
-  return `${lead}${desc && desc !== lead ? ` - ${desc}` : ''}${dc.direct_cost_date ? ` (${dc.direct_cost_date})` : ''}`;
+  if (desc && !parts.includes(desc)) parts.push(desc);
+  if (dc.invoice_number) parts.push(`#${String(dc.invoice_number).replace(/^#/, '')}`);
+  return `${parts.join(' - ')}${dc.direct_cost_date ? ` (${dc.direct_cost_date})` : ''}`;
 }
 
 async function buildDirectCostLineItems(resolvedSelection, markupPercent) {
@@ -3937,6 +3950,18 @@ export async function commitmentLineDetail(env, { tenantId, projectId, commitmen
 function normalizeTmLine(line, wbsCodeIds) {
   return { ...line, quantity: line.hours, unitCost: line.rate, uom: 'Hours', wbsCodeId: wbsCodeIds[line.timeType] };
 }
+// The PM's chosen line order from the preview (Ben, 2026-10-28): keys
+// "tm:i" / "mt:i" / "dc:i" / "cm:i" (each source's preview index). Anything
+// that doesn't match the lines exactly falls back to the default order.
+function applyLineOrder(tagged, lineOrder) {
+  const lines = tagged.map(t => t.line);
+  if (!Array.isArray(lineOrder) || lineOrder.length !== tagged.length) return lines;
+  const byKey = new Map(tagged.map(t => [t.key, t.line]));
+  if (new Set(lineOrder).size !== lineOrder.length || lineOrder.some(k => !byKey.has(String(k)))) return lines;
+  return lineOrder.map(k => byKey.get(String(k)));
+}
+const tagLines = (src, list, map = (l) => l) => (list || []).map((l, i) => ({ key: `${src}:${i}`, line: map(l) }));
+
 function normalizeDcLine(line) {
   return { ...line, quantity: 1, unitCost: line.amount, uom: 'LS' };
 }
@@ -3986,7 +4011,7 @@ async function computeCombinedSources(env, {
 
 async function buildCombinedChangeEventAndOrder(env, {
   tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [], materialLines = [],
-  primeContractId, confirmUnlinked, groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines,
+  lineOrder = null, primeContractId, confirmUnlinked, groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines,
   cmGroupBy, editedCmLines, title, onProgress = () => {}
 }) {
   const { tm, dc, cm, mt } = await computeCombinedSources(env, {
@@ -3994,12 +4019,12 @@ async function buildCombinedChangeEventAndOrder(env, {
     groupBy, rateOverrides, editedTmLines, confirmUnlinked, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, onProgress
   });
 
-  const normalizedLines = [
-    ...(tm ? tm.coLines.map(l => normalizeTmLine(l, tm.wbsCodeIds)) : []),
-    ...(mt ? mt.coLines : []), // already {quantity 1, unitCost, uom LS, wbsCodeId}
-    ...(dc ? dc.coLines.map(normalizeDcLine) : []),
-    ...(cm ? cm.coLines.map(normalizeDcLine) : [])
-  ];
+  const normalizedLines = applyLineOrder([
+    ...tagLines('tm', tm?.coLines, l => normalizeTmLine(l, tm.wbsCodeIds)),
+    ...tagLines('mt', mt?.coLines), // already {quantity 1, unitCost, uom LS, wbsCodeId}
+    ...tagLines('dc', dc?.coLines, normalizeDcLine),
+    ...tagLines('cm', cm?.coLines, normalizeDcLine)
+  ], lineOrder);
 
   // Each source already checked MAX_CO_LINES against its own subset — this
   // catches a combination that's only too big once merged (e.g. 20 T&M lines
@@ -4167,12 +4192,12 @@ export async function previewCombinedBilling(env, {
 // manual review, same as the two single-source versions.
 export async function pushCombinedToDraftCO(env, {
   tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [], materialLines = [],
-  userId, primeContractId, confirmUnlinked, groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines,
+  lineOrder = null, userId, primeContractId, confirmUnlinked, groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines,
   cmGroupBy, editedCmLines, title, onProgress = () => {}
 }) {
   const { tmLineItems, dcLineItems, cmLineItems, mtLineItems, contractId, changeEventId, changeOrderId, totalAmount, label } =
     await buildCombinedChangeEventAndOrder(env, {
-      tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, materialLines, primeContractId, confirmUnlinked,
+      tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, materialLines, lineOrder, primeContractId, confirmUnlinked,
       groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, title, onProgress
     });
 
@@ -4200,7 +4225,7 @@ export async function pushCombinedToDraftCO(env, {
 // list needs no special handling there.
 export async function generateCombinedInvoice(env, {
   tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [], materialLines = [],
-  userId, primeContractId, confirmUnlinked, groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines,
+  lineOrder = null, userId, primeContractId, confirmUnlinked, groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines,
   cmGroupBy, editedCmLines, title, billingPeriodId, newBillingPeriod, invoiceNumber, billingDate, onProgress = () => {}
 }) {
   if (!billingDate) {
@@ -4211,7 +4236,7 @@ export async function generateCombinedInvoice(env, {
 
   const { tmEntries, tmLineItems, tmCoLines, dcLineItems, dcCoLines, cmLineItems, cmCoLines, mtLineItems, mtCoLines, contractId, changeEventId, changeOrderId, totalAmount, label } =
     await buildCombinedChangeEventAndOrder(env, {
-      tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, materialLines, primeContractId, confirmUnlinked,
+      tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, materialLines, lineOrder, primeContractId, confirmUnlinked,
       groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, title, onProgress
     });
 
@@ -4290,7 +4315,7 @@ function defaultStandaloneTitle(label, billingDate) {
 
 export async function generateStandaloneInvoice(env, {
   tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [], materialLines = [],
-  userId, primeContractId, confirmUnlinked, groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines,
+  lineOrder = null, userId, primeContractId, confirmUnlinked, groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines,
   cmGroupBy, editedCmLines, title, billingPeriodId, newBillingPeriod, invoiceNumber, billingDate, ownerVendorId = null, onProgress = () => {}
 }) {
   if (!billingDate) {
@@ -4300,12 +4325,12 @@ export async function generateStandaloneInvoice(env, {
     tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, materialLines,
     groupBy, rateOverrides, editedTmLines, confirmUnlinked, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, onProgress
   });
-  const lines = [
-    ...(tm ? tm.coLines.map(l => ({ ...l, wbsCodeId: tm.wbsCodeIds[l.timeType] })) : []),
-    ...(mt ? mt.coLines : []),
-    ...(dc ? dc.coLines : []),
-    ...(cm ? cm.coLines : [])
-  ];
+  const lines = applyLineOrder([
+    ...tagLines('tm', tm?.coLines, l => ({ ...l, wbsCodeId: tm.wbsCodeIds[l.timeType] })),
+    ...tagLines('mt', mt?.coLines),
+    ...tagLines('dc', dc?.coLines),
+    ...tagLines('cm', cm?.coLines)
+  ], lineOrder);
   const MAX_LINES = 35;
   if (lines.length > MAX_LINES) {
     throw new Error(`This selection needs ${lines.length} invoice lines — too many for one reliable build (limit ${MAX_LINES}). Bill fewer items at once.`);

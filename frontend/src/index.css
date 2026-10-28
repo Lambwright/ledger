@@ -1506,3 +1506,21 @@ body {
 .warn-modal.info-modal { border-color: var(--border-input); }
 .info-modal .warn-modal-title { color: var(--ink); }
 
+
+/* Numbered, re-orderable preview lines (2026-10-28): the position box sits on
+   the far left like Procore's line numbers, styled like the other inputs. */
+.preview-line-numbered { flex-direction: row; align-items: flex-start; gap: 8px; }
+.preview-line-pos {
+  width: 42px;
+  flex: none;
+  background: var(--bg);
+  color: var(--ink-dim);
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  padding: 4px 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: center;
+}
+.preview-line-pos:focus { outline: none; border-color: var(--accent); }
+.preview-line-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }

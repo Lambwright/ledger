@@ -339,6 +339,17 @@ export default function App({ user, onSignOut }) {
   const [previewDcLines, setPreviewDcLines] = useState(null);
   const [previewCmLines, setPreviewCmLines] = useState(null);
   const [previewMtLines, setPreviewMtLines] = useState(null);
+  // The preview's line order, as "tm:0" / "mt:0" / "dc:0" / "cm:0" keys.
+  const [previewOrder, setPreviewOrder] = useState([]);
+  function moveLine(key, value) {
+    setPreviewOrder(prev => {
+      const n = Math.min(Math.max(parseInt(value, 10) || 1, 1), prev.length);
+      if (prev.indexOf(key) === n - 1) return prev;
+      const next = prev.filter(k => k !== key);
+      next.splice(n - 1, 0, key);
+      return next;
+    });
+  }
   const [previewMeta, setPreviewMeta] = useState(null); // { totalAmount, unlinkedCount, label }
   const [previewLoading, setPreviewLoading] = useState(false);
   const previewPopupRef = useRef(null); // the pop-out preview/edit window, if one's open
@@ -869,6 +880,7 @@ export default function App({ user, onSignOut }) {
     setPreviewDcLines(null);
     setPreviewCmLines(null);
     setPreviewMtLines(null);
+    setPreviewOrder([]);
     setPreviewMeta(null);
   }
 
@@ -1182,6 +1194,7 @@ export default function App({ user, onSignOut }) {
         fn({
           tenantId: TENANT_ID, projectId, entryIds, directCostIds, directCostLineIds, commitmentLineIds, userId, confirmUnlinked,
           materials: materialBillingPayload(),
+          lineOrder: previewOrder,
           primeContractId: contractId, groupBy, rateOverrides, markupPercent, cmMarkupPercent, dcGroupBy, cmGroupBy, title: coTitle, onProgress,
           standalone: kind === 'invoice' && standalone,
           ...(kind === 'invoice' && !hasApprovedPc ? { ownerVendorId, primeContractId: null } : {}),
@@ -1237,6 +1250,12 @@ export default function App({ user, onSignOut }) {
       setPreviewDcLines(res.dcLines.map(l => ({ ...l })));
       setPreviewCmLines((res.cmLines || []).map(l => ({ ...l })));
       setPreviewMtLines((res.mtLines || []).map(l => ({ ...l })));
+      setPreviewOrder([
+        ...res.tmLines.map((_, i) => `tm:${i}`),
+        ...(res.mtLines || []).map((_, i) => `mt:${i}`),
+        ...res.dcLines.map((_, i) => `dc:${i}`),
+        ...(res.cmLines || []).map((_, i) => `cm:${i}`)
+      ]);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -3099,98 +3118,76 @@ export default function App({ user, onSignOut }) {
                       </div>
                     )}
 
-                    {previewTmLines?.length > 0 && (
+                    {/* One numbered list in invoice order (Ben, 2026-10-28) — the number on the
+                        far left is the line's position; type a new one (Enter or click away) and the
+                        line moves there, Procore-style. The order goes to the worker as line_order. */}
+                    {previewOrder.length > 0 && (
                       <>
-                        <div className="rate-overrides-label">T&amp;M lines</div>
+                        <div className="rate-overrides-label">Lines — change a number to move that line</div>
                         <div className="preview-lines">
-                          {previewTmLines.map((line, i) => (
-                            <div className="preview-line" key={i}>
-                              <input
-                                className="preview-line-desc"
-                                type="text"
-                                value={line.description}
-                                onChange={e => updatePreviewTmLine(i, 'description', e.target.value)}
-                              />
-                              <div className="preview-line-nums">
-                                <span>{line.hours} hrs @</span>
+                          {previewOrder.map((key, pos) => {
+                            const [src, idx] = key.split(':');
+                            const i = Number(idx);
+                            const line = { tm: previewTmLines, mt: previewMtLines, dc: previewDcLines, cm: previewCmLines }[src]?.[i];
+                            if (!line) return null;
+                            const updateDesc = { tm: updatePreviewTmLine, dc: updatePreviewDcLine, cm: updatePreviewCmLine }[src];
+                            return (
+                              <div className="preview-line preview-line-numbered" key={key}>
                                 <input
-                                  type="number" min="0" step="0.01"
-                                  value={line.rate}
-                                  onChange={e => updatePreviewTmLine(i, 'rate', e.target.value)}
+                                  key={`${key}@${pos}`}
+                                  className="preview-line-pos"
+                                  type="number" min="1" max={previewOrder.length}
+                                  defaultValue={pos + 1}
+                                  aria-label={`Line ${pos + 1} position`}
+                                  onBlur={e => moveLine(key, e.target.value)}
+                                  onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
                                 />
-                                <span className="preview-line-amount">
-                                  {money(line.hours * (Number(line.rate) || 0))}
-                                </span>
+                                <div className="preview-line-body">
+                                  {updateDesc ? (
+                                    <input
+                                      className="preview-line-desc"
+                                      type="text"
+                                      value={line.description}
+                                      onChange={e => updateDesc(i, 'description', e.target.value)}
+                                    />
+                                  ) : (
+                                    <div className="preview-line-desc preview-line-static">{line.description}</div>
+                                  )}
+                                  <div className="preview-line-nums">
+                                    {src === 'tm' && (
+                                      <>
+                                        <span>{line.hours} hrs @</span>
+                                        <input
+                                          type="number" min="0" step="0.01"
+                                          value={line.rate}
+                                          onChange={e => updatePreviewTmLine(i, 'rate', e.target.value)}
+                                        />
+                                        <span className="preview-line-amount">{money(line.hours * (Number(line.rate) || 0))}</span>
+                                      </>
+                                    )}
+                                    {(src === 'dc' || src === 'cm') && (
+                                      <>
+                                        <span>cost {money(line.cost)} @ {line.markupPercent}% markup</span>
+                                        <span className="preview-line-amount">{money(line.amount)}</span>
+                                      </>
+                                    )}
+                                    {src === 'mt' && (
+                                      <>
+                                        <span>T&amp;M material · {line.budgetCode} · lump sum</span>
+                                        <span className="preview-line-amount">{money(line.amount)}</span>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
                               </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
-                      </>
-                    )}
-
-                    {previewDcLines?.length > 0 && (
-                      <>
-                        <div className="rate-overrides-label">Direct cost lines</div>
-                        <div className="preview-lines">
-                          {previewDcLines.map((line, i) => (
-                            <div className="preview-line" key={i}>
-                              <input
-                                className="preview-line-desc"
-                                type="text"
-                                value={line.description}
-                                onChange={e => updatePreviewDcLine(i, 'description', e.target.value)}
-                              />
-                              <div className="preview-line-nums">
-                                <span>cost {money(line.cost)} @ {line.markupPercent}% markup</span>
-                                <span className="preview-line-amount">{money(line.amount)}</span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </>
-                    )}
-
-                    {previewCmLines?.length > 0 && (
-                      <>
-                        <div className="rate-overrides-label">Commitment lines</div>
-                        <div className="preview-lines">
-                          {previewCmLines.map((line, i) => (
-                            <div className="preview-line" key={i}>
-                              <input
-                                className="preview-line-desc"
-                                type="text"
-                                value={line.description}
-                                onChange={e => updatePreviewCmLine(i, 'description', e.target.value)}
-                              />
-                              <div className="preview-line-nums">
-                                <span>
-                                  cost {money(line.cost)} @ {line.markupPercent}% markup
-                                </span>
-                                <span className="preview-line-amount">{money(line.amount)}</span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </>
-                    )}
-
-                    {previewMtLines?.length > 0 && (
-                      <>
-                        <div className="rate-overrides-label">T&amp;M materials (lump sum, no markup)</div>
-                        <div className="preview-lines">
-                          {previewMtLines.map((line, i) => (
-                            <div className="preview-line" key={i}>
-                              <div className="preview-line-desc preview-line-static">{line.description}</div>
-                              <div className="preview-line-nums">
-                                <span>{line.budgetCode}</span>
-                                <span className="preview-line-amount">{money(line.amount)}</span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                        <div className="materials-warning">
-                          ⚠ Check these materials aren't also on a direct cost or subcontractor invoice — LEDGER can't detect that.
-                        </div>
+                        {previewMtLines?.length > 0 && (
+                          <div className="materials-warning">
+                            ⚠ Check the T&amp;M materials aren't also on a direct cost or subcontractor invoice — LEDGER can't detect that.
+                          </div>
+                        )}
                       </>
                     )}
 
@@ -3225,7 +3222,7 @@ export default function App({ user, onSignOut }) {
                     <button className="cancel-btn" onClick={popOutPreview} title="Open this preview in a full window to edit, then it saves back here">
                       ⧉ Pop out for review
                     </button>
-                    <button className="cancel-btn" onClick={() => { setPreviewTmLines(null); setPreviewDcLines(null); setPreviewCmLines(null); setPreviewMtLines(null); }}>← Back to settings</button>
+                    <button className="cancel-btn" onClick={() => { setPreviewTmLines(null); setPreviewDcLines(null); setPreviewCmLines(null); setPreviewMtLines(null); setPreviewOrder([]); }}>← Back to settings</button>
                   </div>
                 ) : (
                   <div className="action-bar-buttons">

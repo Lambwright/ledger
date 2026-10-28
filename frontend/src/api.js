@@ -407,9 +407,10 @@ export function previewCombinedBilling({ tenantId, projectId, entryIds, directCo
 export function generateCombinedInvoice({
   tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, userId, confirmUnlinked, primeContractId, groupBy, rateOverrides,
   editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, title, billingPeriodId, newBillingPeriod, invoiceNumber, billingDate,
-  standalone, materials, ownerVendorId, onProgress
+  standalone, materials, ownerVendorId, lineOrder, onProgress
 }) {
   return streamAction('generate_combined_invoice', {
+    ...(lineOrder?.length ? { line_order: lineOrder } : {}),
     // No approved Prime Contract (2026-10-26): who the standalone invoice bills.
     ...(ownerVendorId ? { owner_vendor_id: ownerVendorId } : {}),
     ...materialLines(materials),
@@ -443,9 +444,10 @@ export function generateCombinedInvoice({
 
 export function pushCombinedToDraftCO({
   tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, userId, confirmUnlinked, primeContractId, groupBy, rateOverrides,
-  editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, title, materials, onProgress
+  editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, title, materials, lineOrder, onProgress
 }) {
   return streamAction('push_combined_to_draft_co', {
+    ...(lineOrder?.length ? { line_order: lineOrder } : {}),
     ...materialLines(materials),
     tenant_id: tenantId, project_id: projectId, entry_ids: entryIds, direct_cost_ids: directCostIds, user_id: userId,
     ...(directCostLineIds?.length ? { direct_cost_line_ids: directCostLineIds } : {}),
