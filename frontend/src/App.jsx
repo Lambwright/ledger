@@ -185,7 +185,8 @@ export default function App({ user, onSignOut }) {
   useEffect(() => {
     // bottomZ 40: the bottom bats and corner webs sit behind the fixed action bar
     // (z-index 50), so they never cover Configure / Write Off in the narrow panel.
-    try { window.EinbauFestive?.init?.({ app: 'LEDGER', bottomZ: 40 }); } catch { /* decorations are optional */ }
+    // topWebs off: Ben (2026-10-28) wants less clutter in the Procore panel.
+    try { window.EinbauFestive?.init?.({ app: 'LEDGER', bottomZ: 40, topWebs: false }); } catch { /* decorations are optional */ }
   }, []);
   const [contractId, setContractId] = useState(resolveContractId(params));
   const [contractFromProcore, setContractFromProcore] = useState(resolveContractId(params) != null);
@@ -426,6 +427,17 @@ export default function App({ user, onSignOut }) {
       setLoading(false);
     }
   }, []);
+
+  // Decorations only on the main menu (Ben, 2026-10-28): hidden as soon as an
+  // action or an overlay is open, back when the panel returns to the menu.
+  useEffect(() => {
+    const festive = window.EinbauFestive;
+    if (!festive) return;
+    try {
+      if (action === null && !configuring) festive.show?.();
+      else festive.hide?.();
+    } catch { /* decorations are optional */ }
+  }, [action, configuring]);
 
   const hasApprovedPc = contracts.some(c => c.status === 'Approved');
   const noPcInvoice = action === 'invoice' && !hasApprovedPc;
@@ -1661,7 +1673,7 @@ export default function App({ user, onSignOut }) {
     // window mostly empty margin either side (Ben's ask 2026-09-15).
     <div className={`ledger ${showPickerFooter ? 'has-actionbar' : ''} ${!EMBEDDED ? 'ledger-wide' : ''} ${viewOnly ? 'view-only' : ''}`}>
       <header className="ledger-header" data-einbau-header>
-        <div className="ledger-logo">LEDGER</div>
+        <div className="ledger-logo" data-einbau-logo>LEDGER</div>
         <div className="ledger-subtitle">Project Billing Reconciliation</div>
         {billingMode && (
           <span className={`mode-badge mode-${billingMode}`}>{MODE_LABEL[billingMode]}</span>
