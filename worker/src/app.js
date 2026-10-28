@@ -1299,7 +1299,23 @@ async function rollbackChangeEventAndOrder(env, projectId, changeEventId, change
 // 'total', which deliberately blends them onto a single WBS code (regular)
 // with an averaged rate. That's a real trade-off, not a bug — the description
 // says so, and the frontend labels it accordingly.
+// Invoice / CO line order (Ben, 2026-10-28): always by T&M ticket number,
+// then time type (Regular, Overtime, Double Time, Per Diem), then worker — so
+// "per ticket + time type" reads T&M #1 Regular, #1 Overtime, #2 Regular, …
+const TIME_TYPE_ORDER = { regular: 0, overtime: 1, double_time: 2, per_diem: 3 };
+function sortCOLines(coLines) {
+  const firstTicket = (l) => Math.min(...l.members.map(m => Number(m.ticketNumber) || Infinity));
+  return coLines.sort((a, b) =>
+    (firstTicket(a) - firstTicket(b)) ||
+    ((TIME_TYPE_ORDER[a.timeType] ?? 9) - (TIME_TYPE_ORDER[b.timeType] ?? 9)) ||
+    String(a.members[0]?.workerName || '').localeCompare(String(b.members[0]?.workerName || '')));
+}
+
 function buildCOLines(lineItems, groupBy, label) {
+  return sortCOLines(groupCOLines(lineItems, groupBy, label));
+}
+
+function groupCOLines(lineItems, groupBy, label) {
   // No grouping specified at all (vs. explicitly 'timecard') defaults to the
   // SAFE choice, not the riskiest one — proven live 2026-09-14 testing
   // directly against the Worker without going through the frontend (which
@@ -2400,6 +2416,19 @@ export async function directCostLineDetail(env, { tenantId, projectId, directCos
 // had lines added to it (not just transiently, per the original 2026-09-17
 // note below), so summing the real lines is the only reliable path once
 // per-line selection exists, not just a nicety for partial bills.
+// What a direct cost's invoice line says (Ben, 2026-10-28: "Unknown vendor
+// isn't good to see"). Leads with the vendor when there is one, else a general
+// descriptor: the cost code's name (e.g. "Woodworking Consumables Supplies"),
+// else the kind of direct cost — then the DC's own description and date.
+const DC_TYPE_LABEL = { invoice: 'Supplier invoice', expense: 'Expense', subcontractor_invoice: 'Subcontractor invoice' };
+function directCostLineDescription(dc, rawLines = []) {
+  const vendor = dc.vendor_name || dc.vendor?.name || null;
+  const codeName = String(rawLines[0]?.wbs_code?.description || '').split('.')[0].trim() || null;
+  const lead = vendor || codeName || DC_TYPE_LABEL[dc.direct_cost_type] || 'Direct cost';
+  const desc = String(dc.description || '').trim();
+  return `${lead}${desc && desc !== lead ? ` - ${desc}` : ''}${dc.direct_cost_date ? ` (${dc.direct_cost_date})` : ''}`;
+}
+
 async function buildDirectCostLineItems(resolvedSelection, markupPercent) {
   const markup = markupPercent != null && markupPercent !== '' ? Number(markupPercent) : 20;
   if (!Number.isFinite(markup) || markup < 0) {
@@ -2415,10 +2444,9 @@ async function buildDirectCostLineItems(resolvedSelection, markupPercent) {
     }
     const cost = Math.round(rawLines.reduce((s, li) => s + Number(li.amount ?? 0), 0) * 100) / 100;
     const amount = Math.round(cost * (1 + markup / 100) * 100) / 100;
-    const vendor = dc.vendor_name || dc.vendor?.name || 'Unknown vendor';
     lineItems.push({
       directCostId: dc.id,
-      description: `${vendor}${dc.description ? ` - ${dc.description}` : ''}${dc.direct_cost_date ? ` (${dc.direct_cost_date})` : ''}`,
+      description: directCostLineDescription(dc, rawLines),
       cost,
       markupPercent: markup,
       amount,
@@ -2929,7 +2957,7 @@ function hasBudgetCode(line) {
 }
 
 function commitmentLabel(c) {
-  return `${c.vendor_name || c.title || 'Unknown vendor'} — ${c.number || `Commitment #${c.id}`}`;
+  return `${c.vendor_name || c.title || 'Subcontract'} — ${c.number || `Commitment #${c.id}`}`;
 }
 
 function commitmentsBase(env, projectId) {
