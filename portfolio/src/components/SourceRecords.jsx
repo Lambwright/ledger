@@ -24,7 +24,9 @@ function Section({ title, total, children, count }) {
   );
 }
 
-export default function SourceRecords({ projectId, onUnauthorized }) {
+// showBudgetGap: the "cost missing from the budget" note is admin-only, like
+// the "Not all in budget" flag (Ben, 2026-10-29: PMs can't act on it).
+export default function SourceRecords({ projectId, onUnauthorized, showBudgetGap = false }) {
   const [state, setState] = useState({ loading: false, data: null, error: null });
 
   async function load() {
@@ -49,7 +51,7 @@ export default function SourceRecords({ projectId, onUnauthorized }) {
     );
   }
 
-  const gap = data.costOutsideBudget;
+  const gap = showBudgetGap ? data.costOutsideBudget : null;
   const dcUrl = (id) => `${PROCORE_ORIGIN}/${projectId}/project/direct_costs/${id}`;
   const cmUrl = (s) =>
     `${PROCORE_ORIGIN}/${projectId}/project/commitments/${s.commitmentType === "PurchaseOrderContract" ? "purchase_order_contracts" : "work_order_contracts"}/${s.commitmentId}`;

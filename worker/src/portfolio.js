@@ -335,7 +335,10 @@ export async function refreshProjectSnapshot(env, tenantId, projectId) {
   values.pct_invoiced = pctOf(values.invoiced, values.revised_contract);
   values.margin_to_date_pct = pctOf(values.margin_to_date, values.invoiced);
   values.budgeted_margin_pct = pctOf(values.budgeted_margin, values.revised_contract);
-  const budgetStatus = !rows ? 'no_view' : (values.revised_budget ?? 0) === 0 ? 'no_budget' : 'ok';
+  // A 200 with no rows is a budget with no lines yet (new jobs, service calls),
+  // not a missing view — until 2026-10-29 it was 'no_view' and hid 22 projects.
+  const emptyBudget = !rows && summary.status === 200;
+  const budgetStatus = !rows ? (emptyBudget ? 'no_budget' : 'no_view') : (values.revised_budget ?? 0) === 0 ? 'no_budget' : 'ok';
 
   // Keep the budget view's own totals (to flag money outside the budget)…
   values.budget_view_cost = rows ? values.jtd_cost : null;
@@ -393,7 +396,7 @@ export async function refreshProjectSnapshot(env, tenantId, projectId) {
     p.project_region?.name || null, (p.departments || []).map(d => d.name).join(', ') || null,
     p.office?.name || null, p.city || null, p.state_code || null, p.active !== false, p.created_at || null,
     ...cols.map(c => values[c]),
-    budgetStatus, rows ? null : `Budget view unavailable (${summary.status})`, startedAt
+    budgetStatus, rows || emptyBudget ? null : `Budget view unavailable (${summary.status})`, startedAt
   ];
   const baseCols = ['name', 'project_number', 'stage', 'region', 'departments', 'office', 'city', 'state_code', 'active', 'procore_created_at'];
   const allCols = [...baseCols, ...cols, 'budget_status', 'refresh_error'];
@@ -945,8 +948,10 @@ export async function listPortfolio(env, tenantId) {
     env,
     `select p.*, b.status as bulk_status, b.disposition as bulk_disposition, b.requested_by_name as bulk_by,
             coalesce(b.completed_at, b.requested_at) as bulk_at, b.record_count as bulk_record_count,
-            b.amount as bulk_amount, b.error as bulk_error, b.notes as bulk_notes
+            b.amount as bulk_amount, b.error as bulk_error, b.notes as bulk_notes,
+            s.billing_mode as billing_mode_override
      from portfolio_projects p
+     left join project_settings s on s.tenant_id::text = p.tenant_id::text and s.project_id::text = p.project_id::text
      left join lateral (
        select * from bulk_reconciliations r
        where r.tenant_id = p.tenant_id and r.project_id = p.project_id
@@ -956,6 +961,9 @@ export async function listPortfolio(env, tenantId) {
      ) b on true
      where p.tenant_id = $1 and p.name is not null and p.active is not false
        and coalesce(p.stage, 'None') <> all($2::text[])
+       -- Einbau's Procore project templates aren't jobs (until 2026-10-29
+       -- their empty budgets happened to hide them as 'no_view').
+       and p.name not ilike 'Standard Project Template%'
      order by p.name`,
     [tenantId, HIDDEN_STAGES]
   );

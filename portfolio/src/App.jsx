@@ -45,6 +45,15 @@ const commitmentsLeft = (p) =>
 // left. `hidden: true` = available but off until someone turns it on.
 // "Project" is always first and can't be hidden.
 const noBudgetFor = (p) => p.budget_status === "no_budget";
+// Billing mode as the sidebar resolves it (worker app.js resolveBillingMode):
+// a PM override wins, else the Procore project type, else T&M.
+const PROJECT_TYPE_TO_MODE = {
+  "Time & Material": "tm", "Service Call": "tm", Contract: "fixed_price", Overhead: "non_billable", Warranty: "non_billable",
+};
+const billingModeOf = (p) => p.billing_mode_override || PROJECT_TYPE_TO_MODE[p.project_type] || "tm";
+// A missing budget only matters on fixed-price work: T&M projects often never
+// get one (Ben, 2026-10-29), and the flag was noise on otherwise healthy rows.
+const flagNoBudget = (p) => noBudgetFor(p) && billingModeOf(p) === "fixed_price";
 // Money on cost codes that aren't in the project's budget (2026-10-07): the
 // figures shown come from the real records; the budget view only sees what's
 // budgeted. Any gap means the budget needs codes added.
@@ -105,15 +114,28 @@ function stalenessClass(p) {
 const COLUMN_CATALOG = [
   {
     key: "name", label: "Project", locked: true, sort: (p) => (p.name || "").toLowerCase(),
-    cell: (p, { isAdmin }) => (
+    cell: (p, { isAdmin, isLedgerAdmin }) => (
       <td className="cell-name">
         <div>{p.name}</div>
         <div className="cell-sub">
           {[p.project_number, p.region, p.departments].filter(Boolean).join(" · ")}
-          {noBudgetFor(p) && <span className="badge badge-warn">Budget not set up</span>}
-          {p.budget_status === "no_view" && <span className="badge badge-muted">No budget view</span>}
-          {!p.refreshed_at && <span className="badge badge-muted">Not loaded</span>}
-          {outsideBudget(p) && (
+          {flagNoBudget(p) && (
+            <span className="badge badge-warn" title="This fixed-price project's budget is $0 in Procore, so there's no budgeted margin to compare against. Enter the budget in Procore.">
+              No budget
+            </span>
+          )}
+          {p.budget_status === "no_view" && (
+            <span className="badge badge-muted" title="LEDGER reads budgets through the Custom Reporting View, which is normally on every project. It's been turned off or removed on this one, so budget figures can't be shown.">
+              No reporting view
+            </span>
+          )}
+          {!p.refreshed_at && (
+            <span className="badge badge-muted" title="LEDGER hasn't read this project yet. It fills in overnight; open the project to load it now.">
+              Loading tonight
+            </span>
+          )}
+          {/* Admin-only (Ben, 2026-10-29): PMs can't act on it. */}
+          {isLedgerAdmin && outsideBudget(p) && (
             <span
               className="badge badge-warn"
               title={`Not in the budget: ${money(outsideBudget(p).cost)} of cost, ${money(outsideBudget(p).invoiced)} of invoicing. Add the cost codes to the project's budget in Procore.`}
@@ -331,6 +353,7 @@ export default function App() {
 
   // Bulk reconciliation (LEDGER admins only — the worker checks it too).
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isLedgerAdmin, setIsLedgerAdmin] = useState(false);
   const [canSourceRecords, setCanSourceRecords] = useState(false); // every LEDGER level (read-only)
   const [canPublishViews, setCanPublishViews] = useState(false); // admin or the publish_views tool
   // This person's column setup ({order, hidden}); null = the default.
@@ -388,6 +411,7 @@ export default function App() {
         setIsAdmin(data.canBulkReconcile === true || (data.canBulkReconcile === undefined && data.isLedgerAdmin === true));
         setCanPublishViews(data.canPublishViews === true || (data.canPublishViews === undefined && data.isLedgerAdmin === true));
         setCanSourceRecords(data.canSourceRecords === true);
+        setIsLedgerAdmin(data.isLedgerAdmin === true);
         defaultColumns.current = data.prefs?.portfolio_columns || null;
         setPersonalViews(Array.isArray(data.prefs?.portfolio_views) ? data.prefs.portfolio_views : []);
         setSharedViews(Array.isArray(data.sharedViews) ? data.sharedViews : []);
@@ -854,7 +878,7 @@ export default function App() {
           </select>
           {(hiddenCount > 0 || showAll) && (
             <label className="filter-toggle" title="Overhead projects, projects without the Custom Reporting budget view, and projects not loaded yet — counted within the filters above">
-              <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} /> Show {hiddenCount} hidden (no budget view or not loaded yet)
+              <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} /> Show {hiddenCount} hidden (no reporting view or not loaded yet)
             </label>
           )}
           <ColumnPicker
@@ -934,7 +958,7 @@ export default function App() {
                         />
                       </td>
                     )}
-                    {visibleColumns.map((c) => <Fragment key={c.key}>{c.cell(p, { isAdmin })}</Fragment>)}
+                    {visibleColumns.map((c) => <Fragment key={c.key}>{c.cell(p, { isAdmin, isLedgerAdmin })}</Fragment>)}
                   </tr>,
                   isOpen && (
                     <tr key={`${p.project_id}-detail`} className="detail-row">
@@ -960,13 +984,13 @@ export default function App() {
                               ? " Recounting from Procore… (a minute or two on big projects)"
                               : p.counts_at ? ` Counted ${ago(p.counts_at)}.` : " Not counted yet."}
                           </div>
-                          {noBudget && (
+                          {noBudget && flagNoBudget(p) && (
                             <div className="detail-note">
                               This project's budget has no revised budget amount, so budgeted margin isn't meaningful yet.
                             </div>
                           )}
                           {p.refresh_error && <div className="detail-note detail-error">{p.refresh_error}</div>}
-                          {canSourceRecords && <SourceRecords projectId={p.project_id} onUnauthorized={handleLogout} />}
+                          {canSourceRecords && <SourceRecords projectId={p.project_id} onUnauthorized={handleLogout} showBudgetGap={isLedgerAdmin} />}
                           <div className="detail-actions">
                             <button
                               className="btn btn-ghost btn-sm"
