@@ -457,3 +457,9 @@ The company projects list **`GET /rest/v1.0/companies/{cid}/projects`** carries 
 **`GET /rest/v1.0/companies/{cid}/project_types`** → Einbau's configured types: `Contract`, `Overhead`, `Service Call`, `Time & Material`, `Warranty`.
 
 Real distribution across 567 Einbau projects: Contract 297, Time & Material 131, Service Call 92, Overhead 19, Warranty 1, unset 27. LEDGER billing-mode mapping lives in the `project-billing-mode` memory: Time & Material + Service Call → T&M mode; Contract → Fixed-Price mode; Overhead + Warranty → not client-billable. Demo project "AB - KPS - Costco #1790 Lloydminster" (562949955397029) is type **Contract** — a quoted job carrying ~18 T&M change tickets.
+
+## Owner (prime contract) payments (2026-10-29)
+
+- **Show:** `GET /rest/v1.0/contract_payments/{id}?project_id=` → 200. Fields: `amount`, `check_number`, `payment_number`, `contract_id`, `draw_request_number` (= the owner invoice's `number` on that contract, which links the payment to the invoice), `invoice_number`, `origin_id` (set when the ERP sync created it), `status`, `date`, `attachments`.
+- **List:** `GET /rest/v1.0/contract_payments?project_id=&filters[contract_id]=` → 404. Use each invoice's `total_amount_paid` from `GET /rest/v1.0/payment_applications?project_id=` instead: it equals the sum of the payments linked to that invoice.
+- Payments carrying an ERP `origin_id` are created nightly at about 01:07 UTC by the ERP sync, not by LEDGER. LEDGER never creates or deletes payments. Delete (`DELETE /rest/v1.0/contract_payments/{id}?project_id=`, per third-party docs) is not verified.
