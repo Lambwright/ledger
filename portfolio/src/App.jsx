@@ -10,6 +10,7 @@ import MultiSelect from "./components/MultiSelect.jsx";
 import ColumnPicker from "./components/ColumnPicker.jsx";
 import ViewBar from "./components/ViewBar.jsx";
 import { BulkBadge, BulkDetail, BulkDialog, hasActiveBatch, reopenMessage } from "./components/BulkReconcile.jsx";
+import { downloadXlsx } from "./exportXlsx.js";
 
 const PROCORE_ORIGIN = "https://us02.procore.com";
 // The full LEDGER app (same one as the Procore sidebar), opened standalone on a project.
@@ -220,6 +221,39 @@ const COLUMN_CATALOG = [
   { key: "refreshed_at", label: "Updated", sort: (p) => (p.refreshed_at ? new Date(p.refreshed_at).getTime() : 0), cell: (p) => <td className="cell-sub">{ago(p.refreshed_at)}</td> },
 ];
 const CATALOG_BY_KEY = new Map(COLUMN_CATALOG.map((c) => [c.key, c]));
+
+// Export to Excel (Ben, 2026-10-29): each column's raw value + Excel format,
+// matching what the table shows (period figures, blanks where the table shows
+// "—"). Columns not listed: numbers as money, text as text. Percents go out as
+// fractions so Excel's % format reads them right.
+const asPct = (v) => (n(v) == null ? null : n(v) / 100);
+const EXPORT_AS = {
+  billing_staleness: { fmt: "int", value: (p) => n(p.billing_staleness) },
+  margin_to_date_pct: { fmt: "pct", value: (p) => asPct(p.margin_to_date_pct) },
+  budgeted_margin_pct: { fmt: "pct", value: (p) => (noBudgetFor(p) ? null : asPct(p.budgeted_margin_pct)) },
+  budgeted_margin: { fmt: "money", value: (p) => (noBudgetFor(p) ? null : n(p.budgeted_margin)) },
+  unbilled_count: { fmt: "int" }, billed_count: { fmt: "int" }, written_off_count: { fmt: "int" }, budgeted_count: { fmt: "int" },
+  invoiced: { fmt: "money", value: periodInvoiced },
+  hours: { fmt: "hours", value: projectHours },
+  invoiced_per_hour: { fmt: "money", value: invoicedPerHour },
+  est_billing: { fmt: "money", value: estimatedBilling },
+  pct_invoiced: { fmt: "pct", value: (p) => asPct(p.pct_invoiced) },
+  commitments_left: { fmt: "money", value: commitmentsLeft },
+  refreshed_at: { value: (p) => (p.refreshed_at ? new Date(p.refreshed_at).toLocaleString("en-CA", { dateStyle: "short", timeStyle: "short" }) : null) },
+};
+// Table columns → export columns. "Project" also gets its number as a column.
+function exportColumns(columns) {
+  return columns.flatMap((c) => {
+    if (c.key === "name") return [
+      { label: "Project", value: (p) => p.name || null },
+      { label: "Project #", value: (p) => p.project_number || null },
+    ];
+    const spec = EXPORT_AS[c.key] || {};
+    const fmt = spec.fmt ?? (c.num ? "money" : undefined);
+    const value = spec.value || ((p) => (c.num ? n(p[c.key]) : p[c.key] ?? null));
+    return [{ label: c.label, fmt, value }];
+  });
+}
 
 // Header tooltips: what each figure is and where it comes from.
 const COLUMN_TIPS = {
@@ -651,6 +685,35 @@ export default function App() {
     : null;
   const viewDirty = !!activeViewObj && normalizedConfig(activeViewObj.config) !== normalizedConfig(currentConfig);
 
+  // Export to Excel: exactly the rows and columns on screen (filters, sort,
+  // period, column choice), plus an "About" sheet recording what was applied.
+  function exportExcel() {
+    const cols = exportColumns(visibleColumns);
+    const viewName = activeViewObj ? activeViewObj.name : "My view";
+    const list = (set) => (set.size ? [...set].join(", ") : "All");
+    const today = new Date().toLocaleDateString("en-CA");
+    const about = [
+      ["Exported", new Date().toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" })],
+      ["Exported by", user?.displayName || user?.username || ""],
+      ["View", viewDirty ? `${viewName} (with unsaved changes)` : viewName],
+      ["Projects", visible.length],
+      ["Period", period ? `${PERIOD_MONTHS.find((m) => m.key === period)?.label}: Hours and Invoiced are that month only; everything else is to date` : "All time"],
+      ["Search", search.trim() || "None"],
+      ["Stage", list(stageFilter)],
+      ["Fiscal year", list(fiscalFilter)],
+      ["Project type", list(typeFilter)],
+      ["Region", region || "All"],
+      ["Department", dept || "All"],
+      ["Invoicing", invoiceFilter === "open" ? "Not fully invoiced" : invoiceFilter === "done" ? "Fully invoiced" : "All"],
+      ["Hidden projects", showAll ? "Included" : "Not included"],
+      ["Note", "Figures are as of each project's Updated time. Contract, invoicing and cost come from Procore's records; budget and commitments from the project's budget."],
+    ];
+    downloadXlsx(`LEDGER - ${viewName.replace(/[\\/:*?"<>|]/g, "-")} - ${today}.xlsx`, [
+      { name: "Projects", columns: cols.map(({ label, fmt }) => ({ label, fmt })), rows: visible.map((p) => cols.map((c) => c.value(p))) },
+      { name: "About", columns: [{ label: "Setting" }, { label: "Value" }], rows: about, widths: [18, 100], filter: false },
+    ]);
+  }
+
   function rememberActive(value) {
     api.savePrefs("portfolio_active_view", value).catch(() => {});
   }
@@ -887,6 +950,9 @@ export default function App() {
             onChange={changeColumns}
             onReset={() => changeColumns(defaultColumnSetup())}
           />
+          <button className="btn btn-ghost btn-sm" onClick={exportExcel} disabled={loading || visible.length === 0} title="Download the projects shown, with these columns and filters, as an Excel file">
+            Export to Excel
+          </button>
           <button className="btn btn-ghost btn-sm" onClick={load} disabled={loading}>{loading ? <BusyLabel fallback="Loading…" /> : "Reload"}</button>
         </div>
 
