@@ -233,6 +233,9 @@ it. Verified with LEDGER's own client on KPS and 140 Lake Drive East (all v2.0, 
   margin and tax rates per category, `labor_cost` ($/hr), and markups. It's not enough
   for a margin.
 - 404s: `proposals/{id}/items`, `/totals`, `/cost_summary`, `estimating_project/summary`.
+- **`proposals/{id}/line_item_groups`** resolves a line's `group_id` to its group name, i.e. the area or sub-job, such as "Bakery Freezer". It's a bare GET on the proposal, with no group id in the path. HANDOFF verified it on KPS on 2026-10-30.
+- Line items carry **no cost code**: no `cost_code` or `cost_code_name` on the line or in `cost_item` (HANDOFF, 2026-10-30). Labour hours aren't a field either. labor_cost ÷ cost_item.unit_labor_rate is an unconfirmed estimate.
+- Path gotcha: a bare `/rest/v2.0/projects/{id}/estimating/...` 404s, so always include `/companies/{co}`. HANDOFF had this bug in its estimating paths until 2026-10-30.
 
 ## Project custom fields, payroll DCs, sub-invoice lines (2026-10-21)
 
