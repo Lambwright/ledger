@@ -284,7 +284,8 @@ async function handleStreamingCombinedAction(env, body) {
     action, tenant_id, project_id, entry_ids, direct_cost_ids, direct_cost_line_ids, commitment_ids, commitment_line_ids, user_id,
     prime_contract_id, confirm_unlinked, group_by, rate_overrides, edited_tm_lines,
     markup_percent, cm_markup_percent, dc_group_by, edited_dc_lines, cm_group_by, edited_cm_lines,
-    title, billing_period_id, new_billing_period, invoice_number, billing_date, standalone, material_lines, owner_vendor_id, line_order
+    title, billing_period_id, new_billing_period, invoice_number, billing_date, standalone, material_lines, owner_vendor_id, line_order,
+    accounting_method, contractor_id, architect_id
   } = body;
   const haveEntries = [entry_ids, direct_cost_ids, direct_cost_line_ids, commitment_ids, commitment_line_ids, material_lines]
     .some(a => Array.isArray(a) && a.length > 0);
@@ -303,6 +304,9 @@ async function handleStreamingCombinedAction(env, body) {
         commitmentIds: commitment_ids || [], commitmentLineIds: commitment_line_ids || [],
         materialLines: materialLinesFrom(material_lines),
         ownerVendorId: owner_vendor_id || null,
+        // Standalone contract setup (2026-11-02): unit (default) or amount billing, contractor, architect/engineer.
+        accountingMethod: accounting_method === 'amount' ? 'amount' : 'unit',
+        contractorId: contractor_id || null, architectId: architect_id || null,
         lineOrder: Array.isArray(line_order) ? line_order.map(String) : null,
         cmGroupBy: cm_group_by, editedCmLines: edited_cm_lines, cmMarkupPercent: cm_markup_percent,
         userId: user_id, primeContractId: prime_contract_id, confirmUnlinked: !!confirm_unlinked,

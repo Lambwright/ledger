@@ -407,12 +407,16 @@ export function previewCombinedBilling({ tenantId, projectId, entryIds, directCo
 export function generateCombinedInvoice({
   tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, userId, confirmUnlinked, primeContractId, groupBy, rateOverrides,
   editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, title, billingPeriodId, newBillingPeriod, invoiceNumber, billingDate,
-  standalone, materials, ownerVendorId, lineOrder, onProgress
+  standalone, materials, ownerVendorId, accountingMethod, contractorId, architectId, lineOrder, onProgress
 }) {
   return streamAction('generate_combined_invoice', {
     ...(lineOrder?.length ? { line_order: lineOrder } : {}),
     // No approved Prime Contract (2026-10-26): who the standalone invoice bills.
     ...(ownerVendorId ? { owner_vendor_id: ownerVendorId } : {}),
+    // Standalone contract setup (2026-11-02): billing method, contractor, architect/engineer.
+    ...(standalone && accountingMethod ? { accounting_method: accountingMethod } : {}),
+    ...(contractorId ? { contractor_id: contractorId } : {}),
+    ...(architectId ? { architect_id: architectId } : {}),
     ...materialLines(materials),
     // standalone (2026-09-26): invoice on a brand-new Prime Contract instead of a CO.
     ...(standalone ? { standalone: true } : {}),

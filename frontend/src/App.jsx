@@ -280,6 +280,12 @@ export default function App({ user, onSignOut }) {
   // standalone invoice to a customer the PM confirms (default: the project's
   // Customer field); Push to CO is blocked.
   const [billingCtx, setBillingCtx] = useState(null);
+  // The standalone Prime Contract's setup (Ben, 2026-11-02): Unit/quantity
+  // billing by default (right for T&M), and with no Prime Contract to copy
+  // from, its Contractor (default Einbau) and Architect/Engineer (a person).
+  const [accountingMethod, setAccountingMethod] = useState('unit');
+  const [contractorId, setContractorId] = useState('');
+  const [architectId, setArchitectId] = useState('');
   const [ownerVendorId, setOwnerVendorId] = useState('');
   const [noPcConfirmed, setNoPcConfirmed] = useState(false);
   // Asked once per project, when Configure is first clicked (Ben, 2026-10-26:
@@ -454,7 +460,10 @@ export default function App({ user, onSignOut }) {
   const noPcInvoice = action === 'invoice' && !hasApprovedPc;
   const noPcDraft = action === 'draft' && !hasApprovedPc;
   // A fresh project starts with no customer context.
-  useEffect(() => { setBillingCtx(null); setOwnerVendorId(''); setNoPcConfirmed(false); }, [projectId]);
+  useEffect(() => {
+    setBillingCtx(null); setOwnerVendorId(''); setNoPcConfirmed(false);
+    setAccountingMethod('unit'); setContractorId(''); setArchitectId('');
+  }, [projectId]);
   // Invoicing with no approved Prime Contract: standalone, and load who to bill.
   useEffect(() => {
     if (!noPcInvoice || loading) return;
@@ -464,9 +473,10 @@ export default function App({ user, onSignOut }) {
       .then((ctx) => {
         setBillingCtx(ctx);
         setOwnerVendorId((prev) => prev || ctx.customer?.id || '');
+        setContractorId((prev) => prev || ctx.contractor?.id || '');
       })
       .catch((e) => {
-        setBillingCtx({ customer: null, vendors: [] });
+        setBillingCtx({ customer: null, vendors: [], people: [] });
         setError(`Couldn't load the project's customer: ${e.message}`);
       });
   }, [noPcInvoice, loading, billingCtx, projectId]);
@@ -1197,7 +1207,8 @@ export default function App({ user, onSignOut }) {
           lineOrder: previewOrder,
           primeContractId: contractId, groupBy, rateOverrides, markupPercent, cmMarkupPercent, dcGroupBy, cmGroupBy, title: coTitle, onProgress,
           standalone: kind === 'invoice' && standalone,
-          ...(kind === 'invoice' && !hasApprovedPc ? { ownerVendorId, primeContractId: null } : {}),
+          ...(kind === 'invoice' && !hasApprovedPc ? { ownerVendorId, contractorId, architectId, primeContractId: null } : {}),
+          ...(kind === 'invoice' && standalone ? { accountingMethod } : {}),
           // Preview is mandatory (the settings screen's button only ever
           // leads to preview, never straight to this) — editedLines is
           // always the real, possibly-PM-edited lines by the time this runs.
@@ -2881,7 +2892,34 @@ export default function App({ user, onSignOut }) {
                             ))}
                           </select>
                         </label>
+                        <label className="action-bar-field">
+                          <span>Contractor</span>
+                          <select value={contractorId} onChange={e => setContractorId(e.target.value)}>
+                            <option value="">{billingCtx ? 'None' : 'Loading…'}</option>
+                            {(billingCtx?.vendors || []).map(v => (
+                              <option key={v.id} value={v.id}>{v.name}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="action-bar-field">
+                          <span>Architect / Engineer</span>
+                          <select value={architectId} onChange={e => setArchitectId(e.target.value)}>
+                            <option value="">{billingCtx ? 'None' : 'Loading…'}</option>
+                            {(billingCtx?.people || []).map(u => (
+                              <option key={u.id} value={u.id}>{u.name}{u.company ? ` (${u.company})` : ''}</option>
+                            ))}
+                          </select>
+                        </label>
                       </>
+                    )}
+                    {action === 'invoice' && standalone && (
+                      <label className="action-bar-field">
+                        <span>Billing method</span>
+                        <select value={accountingMethod} onChange={e => setAccountingMethod(e.target.value)}>
+                          <option value="unit">Unit / quantity (hours × rate)</option>
+                          <option value="amount">Amount</option>
+                        </select>
+                      </label>
                     )}
                     {noPcDraft && (
                       <div className="context-note">

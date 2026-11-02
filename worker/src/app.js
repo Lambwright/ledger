@@ -1160,7 +1160,24 @@ export async function billingContext(env, { projectId }) {
   }
   if (customer && !vendors.some(v => v.id === customer.id)) vendors.push(customer);
   vendors.sort((a, b) => a.name.localeCompare(b.name));
-  return { customer, vendors };
+  // The new contract's Contractor (always Einbau — Ben, 2026-11-02) is a
+  // company; its Architect/Engineer is a PERSON from the project directory
+  // (contracts carry user ids there, e.g. 9130676), so offer the project's people.
+  const contractor = vendors.find(v => /^einbau\b/i.test(v.name)) || null;
+  const people = [];
+  for (let page = 1; page <= 5; page++) {
+    const res = await procoreRequest(env, 'GET', `/rest/v1.0/projects/${projectId}/users?page=${page}&per_page=300`);
+    if (res.status !== 200 || !Array.isArray(res.data)) break;
+    for (const u of res.data) {
+      // Skip inactive people and app/integration accounts (e.g. "bid-prequalifier-60022e41",
+      // "R-IT NetSuite Connector (Do Not Delete)", "Smoothx Integration").
+      if (u.is_active === false || !u.name || /^[a-z0-9-]+-[0-9a-f]{8}$/.test(u.name) || /integration|intergration|connector/i.test(u.name)) continue;
+      people.push({ id: String(u.id), name: u.name, company: u.vendor?.name || '' });
+    }
+    if (res.data.length < 300) break;
+  }
+  people.sort((a, b) => a.name.localeCompare(b.name));
+  return { customer, vendors, contractor, people };
 }
 
 async function findBillableContract(env, projectId) {
@@ -4301,12 +4318,26 @@ export async function generateCombinedInvoice(env, {
 // takes up to a minute; v2.0 DELETE removes the contract (used for rollback).
 // The owner (vendor) and contractor are copied from the project's main
 // contract, so the invoice goes to the same client.
+// 2026-11-02 (Ben): the PM picks Unit/quantity (default) or Amount billing;
+// with no Prime Contract, the PM also picks the Contractor (default Einbau)
+// and the Architect/Engineer (a person). See standaloneUnits.
 // ============================================================
 
-function standaloneLineDescription(line) {
+// Unit/quantity contracts (the default since Ben, 2026-11-02 — better for T&M):
+// T&M lines go on as hours × rate (uom "Hours"), everything else as 1 × the
+// amount (uom "LS"), the same shapes Change Order lines use. Procore works the
+// line's value out as quantity × unit cost, so that's what gets matched and claimed.
+function standaloneUnits(line) {
+  const tm = line.hours != null && line.rate != null;
+  const quantity = tm ? Number(line.hours) : 1;
+  const unitCost = tm ? Number(line.rate) : Number(line.amount);
+  return { quantity, unitCost, uom: tm ? 'Hours' : 'LS', value: Math.round(quantity * unitCost * 100) / 100 };
+}
+
+function standaloneLineDescription(line, method) {
   // An amount-based contract has no quantity/rate fields, so T&M hours and
   // rates go in the description instead.
-  if (line.hours != null && line.rate != null) {
+  if (method === 'amount' && line.hours != null && line.rate != null) {
     return `${line.description} (${line.hours} hrs @ ${Number(line.rate).toFixed(2)})`;
   }
   return line.description;
@@ -4323,11 +4354,13 @@ function defaultStandaloneTitle(label, billingDate) {
 export async function generateStandaloneInvoice(env, {
   tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [], materialLines = [],
   lineOrder = null, userId, primeContractId, confirmUnlinked, groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines,
-  cmGroupBy, editedCmLines, title, billingPeriodId, newBillingPeriod, invoiceNumber, billingDate, ownerVendorId = null, onProgress = () => {}
+  cmGroupBy, editedCmLines, title, billingPeriodId, newBillingPeriod, invoiceNumber, billingDate, ownerVendorId = null,
+  accountingMethod = 'unit', contractorId = null, architectId = null, onProgress = () => {}
 }) {
   if (!billingDate) {
     throw new Error('billingDate is required');
   }
+  const method = accountingMethod === 'amount' ? 'amount' : 'unit';
   const { tm, dc, cm, mt } = await computeCombinedSources(env, {
     tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, materialLines,
     groupBy, rateOverrides, editedTmLines, confirmUnlinked, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, onProgress
@@ -4369,13 +4402,17 @@ export async function generateStandaloneInvoice(env, {
       : "This project has no approved Prime Contract and no customer was picked — choose who to invoice.");
   }
 
+  // Contractor and Architect/Engineer: the PM's picks, else the main contract's.
+  const contractorFor = contractorId || source.contractor?.id;
+  const architectFor = architectId || source.architect?.id;
   const createRes = await requestWithRetry(env, 'POST', v2, {
     title: contractTitle,
     description: `LEDGER-generated standalone invoice: ${label}`,
     status: 'Draft',
-    accounting_method: 'amount',
+    accounting_method: method,
     vendor_id: Number(vendorId),
-    ...(source.contractor?.id ? { contractor_id: Number(source.contractor.id) } : {}),
+    ...(contractorFor ? { contractor_id: Number(contractorFor) } : {}),
+    ...(architectFor ? { architect_id: Number(architectFor) } : {}),
     private: source.private !== false
   }, onProgress);
   if (createRes.status !== 201) throw new Error(`Failed to create the Prime Contract: ${createRes.status} ${JSON.stringify(createRes.data)}`);
@@ -4394,9 +4431,12 @@ export async function generateStandaloneInvoice(env, {
   try {
     let added = 0;
     for (const line of lines) {
+      const units = standaloneUnits(line);
       const res = await requestWithRetry(env, 'POST', `${v2}/${contractId}/line_items`, {
-        description: standaloneLineDescription(line),
-        amount: String(line.amount),
+        description: standaloneLineDescription(line, method),
+        ...(method === 'unit'
+          ? { quantity: String(units.quantity), unit_cost: String(units.unitCost), uom: units.uom }
+          : { amount: String(line.amount) }),
         wbs_code_id: String(line.wbsCodeId)
       }, onProgress);
       await throttleForRateLimit(res.headers, onProgress);
@@ -4450,12 +4490,17 @@ export async function generateStandaloneInvoice(env, {
   let claimedCount = 0;
   const failedLines = [];
   for (const line of lines) {
-    const row = rows.find(r => !claimedIds.has(r.id) && Math.abs(Number(r.scheduled_value) - line.amount) < 0.01);
+    const units = standaloneUnits(line);
+    const value = method === 'unit' ? units.value : line.amount;
+    const row = rows.find(r => !claimedIds.has(r.id) && Math.abs(Number(r.scheduled_value) - value) < 0.01);
     if (!row) { failedLines.push(line.description); continue; }
     claimedIds.add(row.id);
+    // A unit contract won't take a claim without its quantity (found 2026-09-14).
     const r = await requestWithRetry(env, 'PATCH', `/rest/v1.0/prime_contracts/${contractId}/payment_application_line_items/${row.id}`, {
       project_id: Number(projectId),
-      payment_application_line_item: { work_completed_this_period: Number(line.amount).toFixed(2) }
+      payment_application_line_item: method === 'unit'
+        ? { work_completed_this_period: value.toFixed(2), work_completed_this_period_quantity: String(units.quantity) }
+        : { work_completed_this_period: Number(line.amount).toFixed(2) }
     }, onProgress);
     await throttleForRateLimit(r.headers, onProgress);
     if (r.status === 200) claimedCount++;

@@ -19,10 +19,23 @@ const TIME_TYPE_LABEL = { 'Regular Time': 'Regular', Overtime: 'Overtime', 'Doub
 const PAGE = [612, 792]; // US Letter
 const M = 48;
 
+// Rate limits: wait and retry instead of giving up (a 429 on the first call
+// lost a test invoice's backup, 2026-11-02).
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function withRetry(call) {
+  let res;
+  for (const wait of [0, 2000, 5000, 10000, 20000]) {
+    if (wait) await sleep(wait);
+    res = await call();
+    if (res.status !== 429) break;
+  }
+  return res;
+}
+
 async function getAll(env, path) {
   const out = [];
   for (let page = 1; page <= 20; page++) {
-    const res = await procoreRequest(env, 'GET', `${path}${path.includes('?') ? '&' : '?'}page=${page}&per_page=100`);
+    const res = await withRetry(() => procoreRequest(env, 'GET', `${path}${path.includes('?') ? '&' : '?'}page=${page}&per_page=100`));
     if (res.status !== 200 || !Array.isArray(res.data)) throw new Error(`${path.split('?')[0]} ${res.status}`);
     out.push(...res.data);
     if (res.data.length < 100) break;
@@ -191,7 +204,7 @@ export async function attachTicketBackup(env, { projectId, contractId, invoiceId
       getAll(env, `/rest/v1.0/projects/${projectId}/time_and_material_entries`),
       getAll(env, `/rest/v1.0/projects/${projectId}/time_and_material_timecards`),
       getAll(env, `/rest/v1.0/projects/${projectId}/materials`).catch(() => []),
-      procoreRequest(env, 'GET', `/rest/v1.0/projects/${projectId}?company_id=${env.PROCORE_COMPANY_ID}`).catch(() => null)
+      withRetry(() => procoreRequest(env, 'GET', `/rest/v1.0/projects/${projectId}?company_id=${env.PROCORE_COMPANY_ID}`)).catch(() => null)
     ]);
     const projectName = project?.status === 200
       ? [project.data.project_number, project.data.name].filter(Boolean).join(' ')
@@ -228,10 +241,13 @@ export async function attachTicketBackup(env, { projectId, contractId, invoiceId
     let size = 0;
     const flush = async () => {
       if (batch.length === 0) return;
-      const form = new FormData();
-      form.append('project_id', String(projectId));
-      for (const f of batch) form.append('attachments[]', new Blob([f.bytes], { type: f.type }), f.name);
-      const res = await procoreUpload(env, 'PATCH', `/rest/v1.0/prime_contracts/${contractId}/payment_applications/${invoiceId}?project_id=${projectId}`, form);
+      // A fresh form per attempt: a sent FormData body can't be reused.
+      const res = await withRetry(() => {
+        const form = new FormData();
+        form.append('project_id', String(projectId));
+        for (const f of batch) form.append('attachments[]', new Blob([f.bytes], { type: f.type }), f.name);
+        return procoreUpload(env, 'PATCH', `/rest/v1.0/prime_contracts/${contractId}/payment_applications/${invoiceId}?project_id=${projectId}`, form);
+      });
       if (res.status === 200) attached += batch.length;
       else problems.push(`upload ${res.status}`);
       batch = [];
