@@ -466,3 +466,11 @@ Real distribution across 567 Einbau projects: Contract 297, Time & Material 131,
 - **Show:** `GET /rest/v1.0/contract_payments/{id}?project_id=` → 200. Fields: `amount`, `check_number`, `payment_number`, `contract_id`, `draw_request_number` (= the owner invoice's `number` on that contract, which links the payment to the invoice), `invoice_number`, `origin_id` (set when the ERP sync created it), `status`, `date`, `attachments`.
 - **List:** `GET /rest/v1.0/contract_payments?project_id=&filters[contract_id]=` → 404. Use each invoice's `total_amount_paid` from `GET /rest/v1.0/payment_applications?project_id=` instead: it equals the sum of the payments linked to that invoice.
 - Payments carrying an ERP `origin_id` are created nightly at about 01:07 UTC by the ERP sync, not by LEDGER. LEDGER never creates or deletes payments. Delete (`DELETE /rest/v1.0/contract_payments/{id}?project_id=`, per third-party docs) is not verified.
+
+## Creating a unit-based Prime Contract, plus its Contractor and Architect/Engineer (2026-11-02)
+
+Verified live on the test project (contract #8, invoice 9) through `generateStandaloneInvoice`:
+- `POST /rest/v2.0/companies/{co}/projects/{pid}/prime_contracts` takes `accounting_method: "unit"` or `"amount"`, `vendor_id` (the owner/client, a directory **company**), `contractor_id` (a **company**; Einbau Ltd is 562949959021641 on the test project), and `architect_id`, which is a directory **person** (a user id, e.g. 9130676 = Ben), not a company. Reading a contract back gives `vendor`, `contractor` and `architect` as `{id}` only.
+- Unit contract lines: `POST .../prime_contracts/{id}/line_items` with `{description, quantity, unit_cost, uom, wbs_code_id}`. `uom: "Hours"` and `"LS"` are accepted, and Procore computes `amount = quantity × unit_cost`. The same request on an amount contract is rejected; that one takes `amount` instead.
+- Claiming on a unit contract needs `work_completed_this_period_quantity` along with `work_completed_this_period`. The invoice's g703 rows show the quantity.
+- People for the Architect/Engineer picker: `GET /rest/v1.0/projects/{pid}/users`. It includes app and integration accounts (e.g. "bid-prequalifier-60022e41", "R-IT NetSuite Connector (Do Not Delete)"), so filter them out.
