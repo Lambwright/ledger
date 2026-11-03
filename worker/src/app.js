@@ -4262,12 +4262,6 @@ export async function generateCombinedInvoice(env, {
     projectId, contractId, changeOrderId, coLines: [...tmCoLines, ...mtCoLines, ...dcCoLines, ...cmCoLines], billingPeriod, invoiceNumber, billingDate, onProgress
   });
 
-  // T&M ticket backup on the invoice: a PDF per ticket + its own files (ticketbackup.js).
-  await attachTicketBackup(env, {
-    projectId, contractId, invoiceId: invoice.id, onProgress,
-    entryIds: [...tmEntries.map(e => e.id), ...(mtLineItems || []).map(l => l.entryId)]
-  });
-
   const dcRows = [...dcBillingRows(dcLineItems), ...commitmentBillingRows(cmLineItems), ...materialBillingRows(mtLineItems)];
   await insertBillingRecordsBatch(env, [
     ...tmLineItems.map(line => ({
@@ -4283,6 +4277,15 @@ export async function generateCombinedInvoice(env, {
     }))
   ]);
   onProgress({ message: `Recorded ${tmLineItems.length + dcRows.length} item(s) as billed` });
+
+  // T&M ticket backup on the invoice: a PDF per ticket + its own files (ticketbackup.js).
+  // Deliberately LAST: photo uploads can take minutes, and on 2026-11-03 a run
+  // cut off mid-upload left an invoiced ticket with no billing records — it
+  // still looked unbilled, so it got re-billed six more times (2026_0357 T&M #6).
+  await attachTicketBackup(env, {
+    projectId, contractId, invoiceId: invoice.id, onProgress,
+    entryIds: [...tmEntries.map(e => e.id), ...(mtLineItems || []).map(l => l.entryId)]
+  });
 
   return {
     contractId,
@@ -4469,12 +4472,6 @@ export async function generateStandaloneInvoice(env, {
   }
   onProgress({ message: `Invoice ${invoice.invoice_number} created`, invoiceId: invoice.id, invoiceNumber: invoice.invoice_number });
 
-  // T&M ticket backup on the invoice: a PDF per ticket + its own files (ticketbackup.js).
-  await attachTicketBackup(env, {
-    projectId, contractId, invoiceId: invoice.id, onProgress,
-    entryIds: [...(tm?.entries || []).map(e => e.id), ...(mt?.lineItems || []).map(l => l.entryId)]
-  });
-
   // Claim every line at 100%. The rows were there immediately in testing; a
   // couple of short retries cover a slow day.
   let rows = [];
@@ -4526,6 +4523,12 @@ export async function generateStandaloneInvoice(env, {
     }))
   ]);
   onProgress({ message: `Recorded ${tmLineItems.length + dcRows.length} item(s) as billed` });
+
+  // Backup goes last, same as generateCombinedInvoice.
+  await attachTicketBackup(env, {
+    projectId, contractId, invoiceId: invoice.id, onProgress,
+    entryIds: [...(tm?.entries || []).map(e => e.id), ...(mt?.lineItems || []).map(l => l.entryId)]
+  });
 
   return {
     standalone: true,

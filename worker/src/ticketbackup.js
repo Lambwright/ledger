@@ -199,7 +199,7 @@ export async function attachTicketBackup(env, { projectId, contractId, invoiceId
   const ids = [...new Set((entryIds || []).map(String))];
   if (ids.length === 0 || !contractId || !invoiceId) return { attached: 0, problems: [] };
   try {
-    onProgress({ message: `Attaching backup for ${ids.length} T&M ticket(s)…` });
+    onProgress({ message: `Invoice done and recorded. Attaching backup for ${ids.length} T&M ticket(s) (photos can take a few minutes)…` });
     const [entries, timecards, materials, project] = await Promise.all([
       getAll(env, `/rest/v1.0/projects/${projectId}/time_and_material_entries`),
       getAll(env, `/rest/v1.0/projects/${projectId}/time_and_material_timecards`),
@@ -209,33 +209,9 @@ export async function attachTicketBackup(env, { projectId, contractId, invoiceId
     const projectName = project?.status === 200
       ? [project.data.project_number, project.data.name].filter(Boolean).join(' ')
       : '';
-    const files = [];
     const problems = [];
-    for (const entry of entries.filter(e => ids.includes(String(e.id))).sort((a, b) => a.number - b.number)) {
-      try {
-        const bytes = await ticketPdf({
-          entry,
-          projectName,
-          timecards: timecards.filter(tc => String(tc.time_and_material_entry?.id) === String(entry.id)),
-          materials: materials.filter(m => String(m.time_and_material_entry_id) === String(entry.id) && !m.deleted_at)
-        });
-        files.push({ name: `T&M-${entry.number}.pdf`, type: 'application/pdf', bytes });
-      } catch (e) {
-        problems.push(`T&M #${entry.number} PDF: ${e.message}`);
-      }
-      for (const att of entry.time_and_material_entry_attachments || []) {
-        const url = att.url || att.presentation_url;
-        if (!url) continue;
-        try {
-          const bytes = await fetchBytes(url);
-          files.push({ name: `T&M-${entry.number} - ${att.filename || 'attachment'}`, type: att.content_type || 'application/octet-stream', bytes });
-        } catch (e) {
-          problems.push(`T&M #${entry.number} "${att.filename}": ${e.message}`);
-        }
-      }
-    }
-
-    // Upload in batches so no single request gets too large.
+    // Upload in batches as files come in, so neither a single request nor the
+    // worker's memory (128MB — a ticket can carry 20+ phone photos) gets too big.
     let attached = 0;
     let batch = [];
     let size = 0;
@@ -253,10 +229,33 @@ export async function attachTicketBackup(env, { projectId, contractId, invoiceId
       batch = [];
       size = 0;
     };
-    for (const f of files) {
+    const add = async (f) => {
       if (size + f.bytes.length > MAX_BATCH_BYTES) await flush();
       batch.push(f);
       size += f.bytes.length;
+    };
+    for (const entry of entries.filter(e => ids.includes(String(e.id))).sort((a, b) => a.number - b.number)) {
+      try {
+        const bytes = await ticketPdf({
+          entry,
+          projectName,
+          timecards: timecards.filter(tc => String(tc.time_and_material_entry?.id) === String(entry.id)),
+          materials: materials.filter(m => String(m.time_and_material_entry_id) === String(entry.id) && !m.deleted_at)
+        });
+        await add({ name: `T&M-${entry.number}.pdf`, type: 'application/pdf', bytes });
+      } catch (e) {
+        problems.push(`T&M #${entry.number} PDF: ${e.message}`);
+      }
+      for (const att of entry.time_and_material_entry_attachments || []) {
+        const url = att.url || att.presentation_url;
+        if (!url) continue;
+        try {
+          const bytes = await fetchBytes(url);
+          await add({ name: `T&M-${entry.number} - ${att.filename || 'attachment'}`, type: att.content_type || 'application/octet-stream', bytes });
+        } catch (e) {
+          problems.push(`T&M #${entry.number} "${att.filename}": ${e.message}`);
+        }
+      }
     }
     await flush();
     onProgress({
