@@ -1,18 +1,19 @@
 // T&M ticket backup on invoices (Ben, 2026-10-28: "Both"). When LEDGER
 // creates an invoice that bills T&M tickets (their hours or their materials),
 // it attaches, for every ticket involved:
-//   1. a PDF of the ticket made by LEDGER — Procore's own signed ticket
-//      document isn't available through the API — with the project, ticket
-//      number, date, description, every worker's hours by time type, the
-//      ticket's materials, and both signatures (the signature images Procore
-//      stores, else the signer's name / "Not signed");
-//   2. every file people attached to the ticket in Procore (photos, receipts).
+//   1. Procore's own ticket PDF (GET .../time_and_material_entries/{id}.pdf,
+//      found 2026-11-03), which already shows the photos and signatures, plus
+//      any non-image files on the ticket;
+//   2. only if that PDF can't be had: a PDF made by LEDGER (project, ticket
+//      number, date, description, hours per worker by time type, materials,
+//      signature images or the signer's name / "Not signed") plus every file
+//      attached to the ticket (photos, receipts).
 // Invoice attachments go on by multipart PATCH with a top-level attachments[]
 // field (api-directory, 2026-10-28). Direct cost and commitment backup is NOT
 // attached (Ben: those are marked up; backup only on request).
 // Never fails the invoice: problems come back as a progress-log message.
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
-import { procoreRequest, procoreUpload } from './procore.js';
+import { procoreRequest, procoreUpload, procoreDownload } from './procore.js';
 
 const MAX_BATCH_BYTES = 20 * 1024 * 1024;
 const TIME_TYPE_LABEL = { 'Regular Time': 'Regular', Overtime: 'Overtime', 'Double Time': 'Double Time', 'Per Diem': 'Per Diem' };
@@ -199,16 +200,22 @@ export async function attachTicketBackup(env, { projectId, contractId, invoiceId
   const ids = [...new Set((entryIds || []).map(String))];
   if (ids.length === 0 || !contractId || !invoiceId) return { attached: 0, problems: [] };
   try {
-    onProgress({ message: `Invoice done and recorded. Attaching backup for ${ids.length} T&M ticket(s) (photos can take a few minutes)…` });
-    const [entries, timecards, materials, project] = await Promise.all([
-      getAll(env, `/rest/v1.0/projects/${projectId}/time_and_material_entries`),
-      getAll(env, `/rest/v1.0/projects/${projectId}/time_and_material_timecards`),
-      getAll(env, `/rest/v1.0/projects/${projectId}/materials`).catch(() => []),
-      withRetry(() => procoreRequest(env, 'GET', `/rest/v1.0/projects/${projectId}?company_id=${env.PROCORE_COMPANY_ID}`)).catch(() => null)
-    ]);
-    const projectName = project?.status === 200
-      ? [project.data.project_number, project.data.name].filter(Boolean).join(' ')
-      : '';
+    onProgress({ message: `Invoice done and recorded. Attaching backup for ${ids.length} T&M ticket(s)…` });
+    const entries = await getAll(env, `/rest/v1.0/projects/${projectId}/time_and_material_entries`);
+    // Only needed if Procore's own PDF can't be had and LEDGER builds one.
+    let fallbackData = null;
+    const loadFallback = async () => {
+      if (fallbackData) return fallbackData;
+      const [timecards, materials, project] = await Promise.all([
+        getAll(env, `/rest/v1.0/projects/${projectId}/time_and_material_timecards`),
+        getAll(env, `/rest/v1.0/projects/${projectId}/materials`).catch(() => []),
+        withRetry(() => procoreRequest(env, 'GET', `/rest/v1.0/projects/${projectId}?company_id=${env.PROCORE_COMPANY_ID}`)).catch(() => null)
+      ]);
+      const projectName = project?.status === 200
+        ? [project.data.project_number, project.data.name].filter(Boolean).join(' ')
+        : '';
+      return (fallbackData = { timecards, materials, projectName });
+    };
     const problems = [];
     // Upload in batches as files come in, so neither a single request nor the
     // worker's memory (128MB — a ticket can carry 20+ phone photos) gets too big.
@@ -235,18 +242,28 @@ export async function attachTicketBackup(env, { projectId, contractId, invoiceId
       size += f.bytes.length;
     };
     for (const entry of entries.filter(e => ids.includes(String(e.id))).sort((a, b) => a.number - b.number)) {
-      try {
-        const bytes = await ticketPdf({
-          entry,
-          projectName,
-          timecards: timecards.filter(tc => String(tc.time_and_material_entry?.id) === String(entry.id)),
-          materials: materials.filter(m => String(m.time_and_material_entry_id) === String(entry.id) && !m.deleted_at)
-        });
-        await add({ name: `T&M-${entry.number}.pdf`, type: 'application/pdf', bytes });
-      } catch (e) {
-        problems.push(`T&M #${entry.number} PDF: ${e.message}`);
+      // Procore's own ticket PDF (the same one as Export in Procore) already
+      // shows the photos and signatures, so only non-image files go alongside it.
+      const own = await withRetry(() => procoreDownload(env, `/rest/v1.0/projects/${projectId}/time_and_material_entries/${entry.id}.pdf`)).catch(() => null);
+      const procorePdf = own?.status === 200 && own.bytes?.length > 0;
+      if (procorePdf) {
+        await add({ name: `T&M-${entry.number}.pdf`, type: 'application/pdf', bytes: own.bytes });
+      } else {
+        try {
+          const { timecards, materials, projectName } = await loadFallback();
+          const bytes = await ticketPdf({
+            entry,
+            projectName,
+            timecards: timecards.filter(tc => String(tc.time_and_material_entry?.id) === String(entry.id)),
+            materials: materials.filter(m => String(m.time_and_material_entry_id) === String(entry.id) && !m.deleted_at)
+          });
+          await add({ name: `T&M-${entry.number}.pdf`, type: 'application/pdf', bytes });
+        } catch (e) {
+          problems.push(`T&M #${entry.number} PDF: ${e.message}`);
+        }
       }
       for (const att of entry.time_and_material_entry_attachments || []) {
+        if (procorePdf && String(att.content_type || '').startsWith('image/')) continue;
         const url = att.url || att.presentation_url;
         if (!url) continue;
         try {
@@ -261,7 +278,7 @@ export async function attachTicketBackup(env, { projectId, contractId, invoiceId
     onProgress({
       message: problems.length
         ? `Attached ${attached} backup file(s); couldn't attach: ${problems.join('; ')}`
-        : `Attached ${attached} backup file(s): the ticket PDF(s) and the tickets' own files`
+        : `Attached ${attached} backup file(s): the T&M ticket PDF(s)${attached > ids.length ? ' and other ticket files' : ''}`
     });
     return { attached, problems };
   } catch (e) {

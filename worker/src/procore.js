@@ -113,3 +113,23 @@ export async function procoreUpload(env, method, path, form) {
   try { data = text ? JSON.parse(text) : null; } catch { data = { bodyPreview: text.slice(0, 300) }; }
   return { status: res.status, data };
 }
+
+// A file Procore hands out as a redirect to signed storage — e.g. a T&M
+// ticket's own PDF, GET .../time_and_material_entries/{id}.pdf (found
+// 2026-11-03). The storage URL needs no auth, so it's fetched without ours.
+// Returns { status, bytes } (bytes only on 200).
+export async function procoreDownload(env, path) {
+  callCount++;
+  if (!path || !path.startsWith('/rest/')) throw new Error(`path must be a full Procore /rest/... path, got: ${path}`);
+  const token = await getAccessToken(env);
+  const res = await fetch(`https://api.procore.com${path}`, {
+    redirect: 'manual',
+    headers: { Authorization: `Bearer ${token}`, 'Procore-Company-Id': env.PROCORE_COMPANY_ID }
+  });
+  const location = res.headers.get('location');
+  if (res.status >= 300 && res.status < 400 && location) {
+    const file = await fetch(location);
+    return { status: file.status, bytes: file.ok ? new Uint8Array(await file.arrayBuffer()) : null };
+  }
+  return { status: res.status, bytes: res.ok ? new Uint8Array(await res.arrayBuffer()) : null };
+}
