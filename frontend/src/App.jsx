@@ -1194,6 +1194,10 @@ export default function App({ user, onSignOut }) {
       setError('Enter a billing date before generating the invoice.');
       return;
     }
+    if (kind === 'invoice' && standalone && !coTitle.trim()) {
+      setError('Enter a title for the new Prime Contract.');
+      return;
+    }
     setGenerating(true);
     setError(null);
     setProgressLog([]);
@@ -2972,10 +2976,11 @@ export default function App({ user, onSignOut }) {
                         CO/Change Event name (e.g. "T&M #5 + 2 Direct Costs")
                         with something real. Left blank keeps the default. */}
                     <label className="action-bar-field">
-                      <span>{action === 'invoice' && standalone ? 'New Prime Contract title (optional)' : 'CO / CE name (optional)'}</span>
+                      <span>{action === 'invoice' && standalone ? 'New Prime Contract title (required)' : 'CO / CE name (optional)'}</span>
                       <input
                         type="text"
-                        placeholder={action === 'invoice' && standalone ? 'Default: Pass-Thru Invoicing - <items> to <billing date>' : 'e.g. Kitchen Equipment Change Order'}
+                        required={action === 'invoice' && standalone}
+                        placeholder={action === 'invoice' && standalone ? undefined : 'e.g. Kitchen Equipment Change Order'}
                         value={coTitle}
                         onChange={e => setCoTitle(e.target.value)}
                       />
@@ -3266,8 +3271,8 @@ export default function App({ user, onSignOut }) {
                   <div className="action-bar-buttons">
                     <button
                       className="generate-btn" onClick={loadPreview}
-                      disabled={previewLoading || noPcDraft || (noPcInvoice && !ownerVendorId)}
-                      title={noPcDraft ? 'No approved Prime Contract — use Create Invoice' : noPcInvoice && !ownerVendorId ? 'Choose who to bill' : undefined}
+                      disabled={previewLoading || noPcDraft || (noPcInvoice && !ownerVendorId) || (action === 'invoice' && standalone && !coTitle.trim())}
+                      title={noPcDraft ? 'No approved Prime Contract — use Create Invoice' : noPcInvoice && !ownerVendorId ? 'Choose who to bill' : action === 'invoice' && standalone && !coTitle.trim() ? 'Enter a title for the new Prime Contract' : undefined}
                     >
                       {previewLoading ? <BusyLabel fallback="Loading preview…" /> : 'Preview →'}
                     </button>

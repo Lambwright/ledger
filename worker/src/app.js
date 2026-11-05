@@ -4316,7 +4316,7 @@ export async function generateCombinedInvoice(env, {
 // Standalone invoice (Ben's ask 2026-09-26: "new Prime Contract per
 // invoice"). For costs that don't belong on the main contract as a Change
 // Order, e.g. pass-through materials: LEDGER creates a brand-new Prime
-// Contract ("Pass-Thru Invoicing - Materials to Sep 26") whose Schedule of
+// Contract (the PM must title it; no default since 2026-11-05) whose Schedule of
 // Values IS the selected costs, approves it, and invoices it at 100%. Same
 // sources, markup, grouping and preview as the CO flow (computeCombinedSources),
 // but no Change Event or Change Order at all.
@@ -4355,14 +4355,6 @@ function standaloneLineDescription(line, method) {
   return line.description;
 }
 
-function defaultStandaloneTitle(label, billingDate) {
-  const d = new Date(`${billingDate}T12:00:00Z`);
-  const when = Number.isNaN(d.getTime())
-    ? billingDate
-    : d.toLocaleDateString('en-CA', { month: 'short', day: 'numeric', timeZone: 'UTC' });
-  return `Pass-Thru Invoicing - ${label} to ${when}`;
-}
-
 export async function generateStandaloneInvoice(env, {
   tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [], materialLines = [],
   lineOrder = null, userId, primeContractId, confirmUnlinked, groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines,
@@ -4371,6 +4363,10 @@ export async function generateStandaloneInvoice(env, {
 }) {
   if (!billingDate) {
     throw new Error('billingDate is required');
+  }
+  const contractTitle = title?.trim();
+  if (!contractTitle) {
+    throw new Error('Enter a title for the new Prime Contract.');
   }
   const method = accountingMethod === 'amount' ? 'amount' : 'unit';
   const { tm, dc, cm, mt } = await computeCombinedSources(env, {
@@ -4391,7 +4387,6 @@ export async function generateStandaloneInvoice(env, {
   if (missingCode) throw new Error(`"${missingCode.description}" has no budget code, so it can't go on a contract. Fix it in Procore first.`);
   const totalAmount = Math.round(lines.reduce((s, l) => s + l.amount, 0) * 100) / 100;
   const label = [tm?.label, mt?.label, dc?.label, cm?.label].filter(Boolean).join(' + ');
-  const contractTitle = title?.trim() ? title.trim() : defaultStandaloneTitle(label, billingDate);
 
   const billingPeriod = await findOrCreateBillingPeriod(env, projectId, billingPeriodId, newBillingPeriod);
   onProgress({ message: `Billing period ready — id ${billingPeriod.id}` });
