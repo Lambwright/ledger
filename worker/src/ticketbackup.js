@@ -1,6 +1,6 @@
-// T&M ticket backup on invoices (Ben, 2026-10-28: "Both"). When LEDGER
-// creates an invoice that bills T&M tickets (their hours or their materials),
-// it attaches, for every ticket involved:
+// T&M ticket backup on invoices (Ben, 2026-10-28: "Both") and draft Change
+// Orders (2026-11-05). When LEDGER creates either one for T&M tickets (their
+// hours or their materials), it attaches, for every ticket involved:
 //   1. Procore's own ticket PDF (GET .../time_and_material_entries/{id}.pdf,
 //      found 2026-11-03), which already shows the photos and signatures, plus
 //      any non-image files on the ticket;
@@ -9,9 +9,11 @@
 //      signature images or the signer's name / "Not signed") plus every file
 //      attached to the ticket (photos, receipts).
 // Invoice attachments go on by multipart PATCH with a top-level attachments[]
-// field (api-directory, 2026-10-28). Direct cost and commitment backup is NOT
-// attached (Ben: those are marked up; backup only on request).
-// Never fails the invoice: problems come back as a progress-log message.
+// field (api-directory, 2026-10-28). A Change Order ignores that: it takes
+// Procore's two-step upload, then a JSON PATCH of upload_ids (2026-11-05).
+// Direct cost and commitment backup is NOT attached (Ben: those are marked up;
+// backup only on request).
+// Never fails the invoice or CO: problems come back as a progress-log message.
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { procoreRequest, procoreUpload, procoreDownload } from './procore.js';
 
@@ -196,11 +198,28 @@ export async function ticketPdf({ entry, projectName, timecards, materials }) {
   return pdf.save();
 }
 
-export async function attachTicketBackup(env, { projectId, contractId, invoiceId, entryIds, onProgress = () => {} }) {
+// Procore's two-step upload: create the upload, post the bytes to the storage
+// URL it hands back. Returns the id that upload_ids takes.
+async function uploadFile(env, projectId, f) {
+  const created = await withRetry(() => procoreRequest(env, 'POST', `/rest/v1.1/projects/${projectId}/uploads`, {
+    response_filename: f.name, response_content_type: f.type
+  }));
+  if (created.status !== 201 || !created.data?.url || !created.data?.uuid) throw new Error(`create ${created.status}`);
+  const form = new FormData();
+  for (const [k, v] of Object.entries(created.data.fields || {})) form.append(k, v);
+  form.append('file', new Blob([f.bytes], { type: f.type }), f.name);
+  const stored = await fetch(created.data.url, { method: 'POST', body: form });
+  if (!stored.ok) throw new Error(`storage ${stored.status}`);
+  return created.data.uuid;
+}
+
+// Pass contractId + invoiceId for an invoice, or changeOrderId for a Change Order.
+export async function attachTicketBackup(env, { projectId, contractId, invoiceId, changeOrderId, entryIds, onProgress = () => {} }) {
   const ids = [...new Set((entryIds || []).map(String))];
-  if (ids.length === 0 || !contractId || !invoiceId) return { attached: 0, problems: [] };
+  if (ids.length === 0 || !(changeOrderId || (contractId && invoiceId))) return { attached: 0, problems: [] };
+  const target = changeOrderId ? 'Change Order' : 'invoice';
   try {
-    onProgress({ message: `Invoice done and recorded. Attaching backup for ${ids.length} T&M ticket(s)…` });
+    onProgress({ message: `${changeOrderId ? 'Draft Change Order' : 'Invoice'} done and recorded. Attaching backup for ${ids.length} T&M ticket(s)…` });
     const entries = await getAll(env, `/rest/v1.0/projects/${projectId}/time_and_material_entries`);
     // Only needed if Procore's own PDF can't be had and LEDGER builds one.
     let fallbackData = null;
@@ -222,17 +241,32 @@ export async function attachTicketBackup(env, { projectId, contractId, invoiceId
     let attached = 0;
     let batch = [];
     let size = 0;
-    const flush = async () => {
-      if (batch.length === 0) return;
+    const send = async (files) => {
+      if (changeOrderId) {
+        const uploadIds = [];
+        for (const f of files) uploadIds.push(await uploadFile(env, projectId, f));
+        // upload_ids adds to what's already on the CO, it doesn't replace it.
+        return withRetry(() => procoreRequest(env, 'PATCH', `/rest/v1.0/projects/${projectId}/prime_change_orders/${changeOrderId}`, {
+          change_order: { upload_ids: uploadIds }
+        }));
+      }
       // A fresh form per attempt: a sent FormData body can't be reused.
-      const res = await withRetry(() => {
+      return withRetry(() => {
         const form = new FormData();
         form.append('project_id', String(projectId));
-        for (const f of batch) form.append('attachments[]', new Blob([f.bytes], { type: f.type }), f.name);
+        for (const f of files) form.append('attachments[]', new Blob([f.bytes], { type: f.type }), f.name);
         return procoreUpload(env, 'PATCH', `/rest/v1.0/prime_contracts/${contractId}/payment_applications/${invoiceId}?project_id=${projectId}`, form);
       });
-      if (res.status === 200) attached += batch.length;
-      else problems.push(`upload ${res.status}`);
+    };
+    const flush = async () => {
+      if (batch.length === 0) return;
+      try {
+        const res = await send(batch);
+        if (res.status === 200) attached += batch.length;
+        else problems.push(`upload ${res.status}`);
+      } catch (e) {
+        problems.push(`upload ${e.message}`);
+      }
       batch = [];
       size = 0;
     };
@@ -282,7 +316,7 @@ export async function attachTicketBackup(env, { projectId, contractId, invoiceId
     });
     return { attached, problems };
   } catch (e) {
-    onProgress({ message: `Couldn't attach the T&M ticket backup (the invoice itself is fine): ${e.message}` });
+    onProgress({ message: `Couldn't attach the T&M ticket backup (the ${target} itself is fine): ${e.message}` });
     return { attached: 0, problems: [e.message] };
   }
 }

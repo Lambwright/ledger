@@ -172,8 +172,17 @@ value from smoothlink. The original value was lost on 2026-10-07.
   - **Dead ends** (all 404): `/{id}/pdf`, `/{id}/export`, `/{id}/print`, v1.1 and v2.0 entry paths, and v2.0 `POST .../pdf` variants.
   - `?format=pdf` just returns JSON.
   - For comparison, v2.0 `POST .../prime_change_orders/{id}/pdf` and `.../prime_contracts/{id}/pdf` return 204 (export jobs).
+- **Prime Change Order attachments (verified live 2026-11-05 on the test project's draft CO 562949958554401):** this is NOT the invoice method. Use the two-step upload:
+  1. `POST /rest/v1.1/projects/{pid}/uploads` with `{response_filename, response_content_type}` returns 201 with `{url, fields, uuid}`.
+  2. POST the `fields` plus `file` as multipart to that `url`, with no Procore auth. It returns 204.
+  3. JSON `PATCH /rest/v1.0/projects/{pid}/prime_change_orders/{id}` with `{change_order: {upload_ids: [uuid]}}`.
+
+  The file then shows in the CO's `attachments` (show). A later `upload_ids` PATCH **adds** to the existing files without needing `attachment_ids`.
+  - **Silently ignored (200, no file):** multipart PATCH with `change_order[attachments][]`, `change_order[attachment]`, or top-level `attachments[]` alongside a `change_order[...]` field. Always read back.
+  - **400 "param is missing: change_order":** multipart with no `change_order[...]` field at all. `/rest/v1.0/change_order_packages/{legacy_package_id}` gave the same 400 for both fields tried.
+  - **404:** v2.0 `PATCH .../prime_change_orders/{id}` and `POST .../{id}/attachments`.
 - **Signatures:** `customer_signature` / `company_signature` on the entry (list) are `{url, created_at, created_by{name}}` or null. The `url` downloads the signature as an image directly (PNG on the test tickets), with no auth header. Signer names are also in `customer_signee_party` / `company_signee_party`.
-- **Built (2026-10-28; switched 2026-11-03):** `worker/src/ticketbackup.js` attaches Procore's own ticket PDF plus any non-image ticket files. It falls back to LEDGER's own PDF (pdf-lib) plus all the ticket's files only if that download fails. It does this to every invoice LEDGER creates with T&M hours or materials. Files are named `T&M-{n}.pdf` and `T&M-{n} - {filename}`. Uploads go in batches of 20 MB or less. Several files in one PATCH are fine: 3 went on in one request. GET `/rest/v1.0/prime_contracts/{pc}/payment_applications/{id}` returns 404; read the invoice with `/rest/v1.0/payment_applications/{id}?project_id=`.
+- **Built (2026-10-28; switched 2026-11-03):** `worker/src/ticketbackup.js` attaches Procore's own ticket PDF plus any non-image ticket files. It falls back to LEDGER's own PDF (pdf-lib) plus all the ticket's files only if that download fails. It does this to every invoice and draft Change Order LEDGER creates with T&M hours or materials (the CO flows since 2026-11-05). Files are named `T&M-{n}.pdf` and `T&M-{n} - {filename}`. Uploads go in batches of 20 MB or less. Several files in one PATCH are fine: 3 went on in one request. GET `/rest/v1.0/prime_contracts/{pc}/payment_applications/{id}` returns 404; read the invoice with `/rest/v1.0/payment_applications/{id}?project_id=`.
 
 ## Crew timesheet hours (2026-10-27)
 

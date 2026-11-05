@@ -1809,6 +1809,9 @@ export async function pushToDraftCO(env, {
   })));
   onProgress({ message: `Recorded ${lineItems.length} timecard(s) as pushed to draft` });
 
+  // Last, for the same reason as generateCombinedInvoice.
+  await attachTicketBackup(env, { projectId, changeOrderId, onProgress, entryIds: entries.map(e => e.id) });
+
   return {
     contractId,
     changeEventId,
@@ -4213,7 +4216,7 @@ export async function pushCombinedToDraftCO(env, {
   lineOrder = null, userId, primeContractId, confirmUnlinked, groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines,
   cmGroupBy, editedCmLines, title, onProgress = () => {}
 }) {
-  const { tmLineItems, dcLineItems, cmLineItems, mtLineItems, contractId, changeEventId, changeOrderId, totalAmount, label } =
+  const { tmEntries, tmLineItems, dcLineItems, cmLineItems, mtLineItems, contractId, changeEventId, changeOrderId, totalAmount, label } =
     await buildCombinedChangeEventAndOrder(env, {
       tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, materialLines, lineOrder, primeContractId, confirmUnlinked,
       groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, title, onProgress
@@ -4232,6 +4235,12 @@ export async function pushCombinedToDraftCO(env, {
     }))
   ]);
   onProgress({ message: `Recorded ${tmLineItems.length + dcRows.length} item(s) as pushed to draft` });
+
+  // Last, for the same reason as generateCombinedInvoice.
+  await attachTicketBackup(env, {
+    projectId, changeOrderId, onProgress,
+    entryIds: [...tmEntries.map(e => e.id), ...(mtLineItems || []).map(l => l.entryId)]
+  });
 
   return { contractId, changeEventId, changeOrderId, totalAmount, linesPushed: tmLineItems.length + dcRows.length, label };
 }
