@@ -257,7 +257,9 @@ it. Verified with LEDGER's own client on KPS and 140 Lake Drive East (all v2.0, 
 returns `{label, data_type, variant, default_value}`. The dropdown options are at
 `.../custom_field_definitions/{id}/custom_field_lov_entries` (found by HANDOFF). The
 project show call (`GET /projects/{id}?company_id=`) returns every custom field as
-`custom_field_<id>: {data_type, value}`. Einbau's fields:
+`custom_field_<id>: {data_type, value}`. The company project list
+(`GET /projects?company_id=`) returns `custom_fields` too (verified 2026-11-05), so
+one paged call reads a field across every project. Einbau's fields:
 
 | id | label | type |
 |---|---|---|
@@ -266,6 +268,7 @@ project show call (`GET /projects/{id}?company_id=`) returns every custom field 
 | 562949954054370 | Fiscal Year | lov_entry |
 | 562949953933248 | Payment Terms (Net 15/30/…) | lov_entry |
 | 562949953981021 | Contract Type (e.g. "Fixed") | lov_entry |
+| 562949954110145 | **Fixed Cost Project** (checkbox on the project Admin page, 2026-11-05). `true` when ticked, `null` when never set. On all 629 projects in the list call; 1 ticked (2026_0381) when found. Unticking wasn't tested, so it may come back `false`; LEDGER treats anything but `true` as not fixed cost | boolean |
 | 562949953951224 | Market Sector (e.g. "Service Call") | lov_entry |
 | 562949953929326 | PO Number | string |
 | 562949953931741 | HST # (read-only, default text) | rich_text |

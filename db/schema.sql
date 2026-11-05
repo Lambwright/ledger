@@ -247,6 +247,7 @@ create table if not exists portfolio_projects (
   budget_view_invoiced numeric,       -- budget view invoicing to date; a gap = money on codes not in the budget
   fiscal_year text,
   project_type text,                  -- Procore project type name (dashboard filter)
+  fixed_cost boolean,                 -- Procore "Fixed Cost Project" checkbox (dashboard column and filter)
   budget_view_contract numeric,
   hours_to_date numeric,              -- crew timesheet hours, all months LEDGER has read (worker/src/hours.js; tables project_hours_monthly / project_invoiced_monthly)       -- the budget view's own revised contract; budgeted margin % is measured against it
   billing_staleness numeric,          -- Procore "Billing Staleness (Days)" custom field, calculated by Power Automate (LEDGER only reads it)

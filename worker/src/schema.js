@@ -81,7 +81,8 @@ export async function ensurePortfolioActualsColumns(env) {
     add column if not exists est_sub numeric,
     add column if not exists est_tm numeric,
     add column if not exists budget_view_contract numeric,
-    add column if not exists project_type text`, []);
+    add column if not exists project_type text,
+    add column if not exists fixed_cost boolean`, []);
   // One-time catch-up (2026-10-21): rows refreshed under the old budgeted-margin
   // rule (budget_basis 'original'/'live') get re-read overnight. A refresh sets
   // budget_basis to null, so this stops matching once they're done. dirty_at

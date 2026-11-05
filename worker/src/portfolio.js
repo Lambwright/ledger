@@ -50,6 +50,11 @@ const FISCAL_YEAR_FIELD = 'custom_field_562949954054370';
 // "Billing Staleness (Days)" — calculated on every project by Power Automate
 // (Ben, 2026-10-21); LEDGER only reads it.
 const BILLING_STALENESS_FIELD = 'custom_field_562949954055994';
+// "Fixed Cost Project" checkbox (Ben, 2026-11-05): display and filter only for
+// now. Value is true when ticked, null when never set. Both the project list
+// and the project show call return it.
+const FIXED_COST_FIELD = 'custom_field_562949954110145';
+const isFixedCost = (p) => p.custom_fields?.[FIXED_COST_FIELD]?.value === true;
 
 // Estimated billing value (Ben, 2026-10-21), everything to date:
 //   T&M hours × the project's rates (est_tm, from the record count)
@@ -379,6 +384,7 @@ export async function refreshProjectSnapshot(env, tenantId, projectId) {
 
   values.billing_staleness = num(p.custom_fields?.[BILLING_STALENESS_FIELD]?.value);
   values.project_type = p.project_type?.name || null; // dashboard filter (Ben, 2026-10-22)
+  values.fixed_cost = isFixedCost(p);
   values.est_dc = actuals.nonPayrollDirectCosts;
   values.est_sub = await nonLabourSubInvoices(env, tenantId, projectId, actuals.requisitions);
 
@@ -389,7 +395,7 @@ export async function refreshProjectSnapshot(env, tenantId, projectId) {
     ? round2(actuals.contracts.filter(c => ['Approved', 'Complete'].includes(c.status)).reduce((s, c) => s + (num(c.grand_total) || 0), 0))
     : null;
 
-  const cols = [...Object.keys(COLUMN_MAP), 'original_contract', 'budget_basis', 'budget_view_cost', 'budget_view_invoiced', 'fiscal_year', 'pc_original_all', 'billing_staleness', 'est_dc', 'est_sub', 'budget_view_contract', 'project_type'];
+  const cols = [...Object.keys(COLUMN_MAP), 'original_contract', 'budget_basis', 'budget_view_cost', 'budget_view_invoiced', 'fiscal_year', 'pc_original_all', 'billing_staleness', 'est_dc', 'est_sub', 'budget_view_contract', 'project_type', 'fixed_cost'];
   const params = [
     tenantId, String(projectId),
     p.name || null, p.project_number || null, p.project_stage?.name || p.stage || null,
@@ -587,6 +593,7 @@ export async function refreshIfStale(env, tenantId, projectId) {
 // plus region names. Departments/office/budget come from the per-project
 // refresh (the list endpoint doesn't carry them).
 export async function syncProjectList(env, tenantId) {
+  await ensurePortfolioActualsColumns(env);
   const co = env.PROCORE_COMPANY_ID;
   const syncStartedAt = new Date().toISOString();
   const regions = await procoreGet(env, `/rest/v1.0/companies/${co}/project_regions`);
@@ -599,7 +606,7 @@ export async function syncProjectList(env, tenantId) {
     // One multi-row upsert per page — a query per project would blow through
     // Cloudflare's per-invocation subrequest cap on a 500+ project company.
     if (res.data.length > 0) {
-      const perRow = 11;
+      const perRow = 12;
       const values = [];
       const params = [];
       res.data.forEach((p, i) => {
@@ -608,19 +615,20 @@ export async function syncProjectList(env, tenantId) {
         params.push(
           tenantId, String(p.id), p.name || null, p.project_number || null, p.project_stage?.name || p.stage || null,
           regionName.get(String(p.project_region_id)) || null, p.city || null, p.state_code || null,
-          p.active !== false, p.created_at || null, p.project_type?.name || null
+          p.active !== false, p.created_at || null, p.project_type?.name || null, isFixedCost(p)
         );
       });
       await dbQuery(
         env,
-        `insert into portfolio_projects (tenant_id, project_id, name, project_number, stage, region, city, state_code, active, procore_created_at, project_type, listed_at)
+        `insert into portfolio_projects (tenant_id, project_id, name, project_number, stage, region, city, state_code, active, procore_created_at, project_type, fixed_cost, listed_at)
          values ${values.join(', ')}
          on conflict (tenant_id, project_id) do update set
            name = excluded.name, project_number = excluded.project_number, stage = excluded.stage,
            region = coalesce(excluded.region, portfolio_projects.region), city = excluded.city,
            state_code = excluded.state_code, active = excluded.active,
            procore_created_at = excluded.procore_created_at,
-           project_type = coalesce(excluded.project_type, portfolio_projects.project_type), listed_at = now()`,
+           project_type = coalesce(excluded.project_type, portfolio_projects.project_type),
+           fixed_cost = excluded.fixed_cost, listed_at = now()`,
         params
       );
     }
