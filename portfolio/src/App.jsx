@@ -529,12 +529,14 @@ export default function App() {
   // set in HELM). The page opens filtered to it — a default, not a restriction.
   const myDept = user?.fields?.department && !user.fields.department.missing ? user.fields.department.name : null;
   const myDeptOption = myDept ? depts.find((d) => d.trim().toLowerCase() === myDept.trim().toLowerCase()) || null : null;
+  // Super Admins open on the whole company (Ben, 2026-11-05).
+  const defaultDept = user?.jobRole === "superadmin" ? null : myDeptOption;
   const deptDefaulted = useRef(false);
   useEffect(() => {
     if (deptDefaulted.current || projects.length === 0) return;
     deptDefaulted.current = true;
-    if (myDeptOption) setDept(myDeptOption);
-  }, [projects, myDeptOption]);
+    if (defaultDept) setDept(defaultDept);
+  }, [projects, defaultDept]);
   // A picked department that no longer has shown projects is cleared.
   useEffect(() => {
     if (dept && !depts.includes(dept)) setDept("");
@@ -722,7 +724,7 @@ export default function App() {
     rememberActive(value);
     if (!value) {
       // My default: saved columns, no filters except your department.
-      applyViewConfig({ columns: defaultColumns.current, filters: { dept: myDeptOption || "" }, sort: DEFAULT_SORT });
+      applyViewConfig({ columns: defaultColumns.current, filters: { dept: defaultDept || "" }, sort: DEFAULT_SORT });
       return;
     }
     const v = value.startsWith("s:")
