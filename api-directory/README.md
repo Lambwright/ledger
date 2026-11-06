@@ -516,7 +516,12 @@ Verified live through TALLY's Procore account on Test Project 562949954996998: s
 | Purchase order | `GET /rest/v1.0/purchase_order_contracts/{id}?project_id=` | `PATCH` same path | `{project_id, purchase_order_contract: {origin_id}}` |
 | Subcontractor invoice | `GET /rest/v1.0/requisitions/{id}?project_id=` | `PATCH` same path | `{project_id, requisition: {origin_id}}` |
 
-- **A Direct Cost's lock is `synced`, not `origin_id`.** It drives the Synced badge and the greyed-out Edit, and only v1.1 show returns it. A plain `PATCH .../direct_costs/{id}` with `{item: {origin_id}}` changes the ID and leaves `synced` true, so the record stays locked: that happened on 562950049130500 on 2026-11-06. `synced` ignores direct writes (200, no change) on v1.0 and v1.1. `/direct_costs/sync` is what moves it: an ID turns it on, and `""` or `null` turns it off. Tested both ways on Test Project DC 562950047804657. Real DCs agree: 8 sampled, `synced` matched whether `origin_id` was set, whatever `origin_data` held. `origin_data` stays after an unlink, as on the DCs NetSuite unlinked itself.
+- **A Direct Cost's lock is `synced`, not just the header's `origin_id`.** It drives the Synced badge and the greyed-out Edit, and only v1.1 show returns it. It ignores direct writes (200, no change) on v1.0 and v1.1.
+  - **Rule:** `synced` is true while the header **or any line item** has an `origin_id`. NetSuite puts IDs on lines too, like `111101_uk_390762`. Blanking only the header left 562950049130500 locked on 2026-11-06. The 8 real DCs sampled fit this, and the DCs NetSuite unlinked itself have blank lines with `origin_data` kept.
+  - **Unlock:** blank each line with `PATCH /rest/v1.0/projects/{pid}/direct_costs/{id}/line_items/{line}` and `{line_item: {origin_id: ""}}`, then blank the header. Line writes work while the DC is locked.
+  - **Lock:** a header ID through `/direct_costs/sync` turns `synced` on alone. Restore line IDs the same way, so they keep their NetSuite match.
+  - **Line dead ends:** `{item: ...}` gives 400, `.../line_items/sync` gives 404, and nesting `line_items` in the `/sync` update is ignored (200, no change).
+  - Header and line rules were tested both ways on Test Project DC 562950047804657, which ended blank.
 - **404s:** `/rest/v1.0/prime_contracts/{id}` (even GET), `PATCH /rest/v1.0/payment_applications/{id}`, and `PATCH /rest/v1.0/projects/{pid}/payment_applications/{id}`.
 - **List differences:** `change_order_packages` omits `origin_id` on a record that never had one, so treat missing, null and `""` as unlinked. Sub invoices read back `null` after a blank; the others read back `""`.
 - **ID formats seen:** Direct Costs `108222_2908`; Prime Change Orders, contracts and invoices plain numbers like `112240`.
