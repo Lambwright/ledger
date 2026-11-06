@@ -525,7 +525,8 @@ Verified live through TALLY's Procore account on Test Project 562949954996998: s
 - **404s:** `/rest/v1.0/prime_contracts/{id}` (even GET), `PATCH /rest/v1.0/payment_applications/{id}`, and `PATCH /rest/v1.0/projects/{pid}/payment_applications/{id}`.
 - **List differences:** `change_order_packages` omits `origin_id` on a record that never had one, so treat missing, null and `""` as unlinked. Sub invoices read back `null` after a blank; the others read back `""`.
 - **ID formats seen:** Direct Costs `108222_2908`; Prime Change Orders, contracts and invoices plain numbers like `112240`.
-- **Not verified:** the on-screen lock on anything but Direct Costs and COs. Removing `origin_id` cleared the badge on COs, but writing one hasn't been checked on screen, and the other types may have a hidden flag like `synced` (sub invoices return an `erp_status`). ERP-synced owner payments are separate and still refuse edits.
+- **Confirmed on screen by Ben, 2026-11-06:** through the panel, Change Orders, Commitments, Owner Invoices, Prime Contracts and Sub Invoices all unlock and lock correctly, and NetSuite showed no errors. Direct Cost unlock is confirmed on a real Expense. So only Direct Costs need the line-item handling above.
+- **Not verified:** how a later NetSuite sync treats a record left unlocked. ERP-synced owner payments are separate and still refuse edits.
 
 ## Creating a unit-based Prime Contract, plus its Contractor and Architect/Engineer (2026-11-02)
 
