@@ -484,6 +484,14 @@ Real distribution across 567 Einbau projects: Contract 297, Time & Material 131,
 - **List:** `GET /rest/v1.0/contract_payments?project_id=&filters[contract_id]=` → 404. Use each invoice's `total_amount_paid` from `GET /rest/v1.0/payment_applications?project_id=` instead: it equals the sum of the payments linked to that invoice.
 - Payments carrying an ERP `origin_id` are created nightly at about 01:07 UTC by the ERP sync, not by LEDGER. LEDGER never creates or deletes payments. Delete (`DELETE /rest/v1.0/contract_payments/{id}?project_id=`, per third-party docs) is not verified.
 
+## Prime Change Order ERP link (2026-11-06)
+
+- The NetSuite (Rabb-IT) link is on the **package**, not the change order. `GET /rest/v1.0/change_order_packages/{legacy_package_id}?project_id=` and the list `GET /rest/v1.0/change_order_packages?project_id=&per_page=100` return `origin_id` and `origin_data`. `prime_change_orders` shows neither.
+- Linked: `origin_id` is a number string. `origin_data` is `PCCO #001 - Change order: ...` or the NetSuite document number, such as `COSO+00295`.
+- When NetSuite unlinks on delete, `origin_id` becomes `""` and `origin_data` stays.
+- **Unlink through the API:** `PATCH /rest/v1.0/change_order_packages/{id}?project_id=` with `{project_id, change_order: {origin_id: ""}}` → 200. Status and total don't change. This worked on an approved CO, unlike the 404 on ERP-synced payments. Done on 11 COs on 2026_0357.
+- Prime contracts and owner invoices carry `origin_id` too.
+
 ## Creating a unit-based Prime Contract, plus its Contractor and Architect/Engineer (2026-11-02)
 
 Verified live on the test project (contract #8, invoice 9) through `generateStandaloneInvoice`:
