@@ -508,7 +508,7 @@ Verified live through TALLY's Procore account on Test Project 562949954996998: s
 
 | Record | Read | Write | Body |
 |---|---|---|---|
-| Direct Cost | `GET /rest/v1.0/projects/{pid}/direct_costs/{id}` | `PATCH` same path | `{item: {origin_id}}` |
+| Direct Cost | `GET /rest/v1.1/projects/{pid}/direct_costs/{id}` (only v1.1 shows `synced`) | `PATCH /rest/v1.0/projects/{pid}/direct_costs/sync` | `{updates: [{id, origin_id}]}` |
 | Prime Change Order | `GET /rest/v1.0/change_order_packages/{id}?project_id=` | `PATCH` same path | `{project_id, change_order: {origin_id}}` |
 | Prime Contract | `GET /rest/v1.0/prime_contract/{id}?project_id=` (**singular**) | `PATCH` same path | `{project_id, prime_contract: {origin_id}}` |
 | Owner invoice | `GET /rest/v1.0/payment_applications/{id}?project_id=` | `PATCH /rest/v1.0/prime_contracts/{pc}/payment_applications/{id}?project_id=` | `{project_id, payment_application: {origin_id}}` |
@@ -516,10 +516,11 @@ Verified live through TALLY's Procore account on Test Project 562949954996998: s
 | Purchase order | `GET /rest/v1.0/purchase_order_contracts/{id}?project_id=` | `PATCH` same path | `{project_id, purchase_order_contract: {origin_id}}` |
 | Subcontractor invoice | `GET /rest/v1.0/requisitions/{id}?project_id=` | `PATCH` same path | `{project_id, requisition: {origin_id}}` |
 
+- **A Direct Cost's lock is `synced`, not `origin_id`.** It drives the Synced badge and the greyed-out Edit, and only v1.1 show returns it. A plain `PATCH .../direct_costs/{id}` with `{item: {origin_id}}` changes the ID and leaves `synced` true, so the record stays locked: that happened on 562950049130500 on 2026-11-06. `synced` ignores direct writes (200, no change) on v1.0 and v1.1. `/direct_costs/sync` is what moves it: an ID turns it on, and `""` or `null` turns it off. Tested both ways on Test Project DC 562950047804657. Real DCs agree: 8 sampled, `synced` matched whether `origin_id` was set, whatever `origin_data` held. `origin_data` stays after an unlink, as on the DCs NetSuite unlinked itself.
 - **404s:** `/rest/v1.0/prime_contracts/{id}` (even GET), `PATCH /rest/v1.0/payment_applications/{id}`, and `PATCH /rest/v1.0/projects/{pid}/payment_applications/{id}`.
 - **List differences:** `change_order_packages` omits `origin_id` on a record that never had one, so treat missing, null and `""` as unlinked. Sub invoices read back `null` after a blank; the others read back `""`.
 - **ID formats seen:** Direct Costs `108222_2908`; Prime Change Orders, contracts and invoices plain numbers like `112240`.
-- **Not verified:** whether writing `origin_id` alone brings back the badge and the UI lock. Removing it does clear them on COs. `origin_data` was left alone and may also matter. ERP-synced owner payments are separate and still refuse edits.
+- **Not verified:** the on-screen lock on anything but Direct Costs and COs. Removing `origin_id` cleared the badge on COs, but writing one hasn't been checked on screen, and the other types may have a hidden flag like `synced` (sub invoices return an `erp_status`). ERP-synced owner payments are separate and still refuse edits.
 
 ## Creating a unit-based Prime Contract, plus its Contractor and Architect/Engineer (2026-11-02)
 
