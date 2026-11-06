@@ -492,6 +492,34 @@ Real distribution across 567 Einbau projects: Contract 297, Time & Material 131,
 - **Unlink through the API:** `PATCH /rest/v1.0/change_order_packages/{id}?project_id=` with `{project_id, change_order: {origin_id: ""}}` → 200. Status and total don't change. This worked on an approved CO, unlike the 404 on ERP-synced payments. Done on 11 COs on 2026_0357.
 - Prime contracts and owner invoices carry `origin_id` too.
 
+## Attaching a file to an ERP-linked Direct Cost (2026-11-06)
+
+- **Works, verified live** through TALLY's Procore account on DC 562950048877091 (project 562949954025969, approved, `origin_id` `108222_2908`), which Ben picked as a locked DC. That DC began as a TALLY expense that went out to NetSuite, not as a record created in NetSuite.
+- **Call:** multipart `PATCH /rest/v1.0/projects/{pid}/direct_costs/{id}` with the file as `attachments[]` and no other fields (`procoreAttachMultipart` in TALLY/worker/src/index.js) → 200.
+- **It adds, it doesn't replace:** 2 existing files stayed and the count went 2 → 3. The downloaded file was byte-identical to the original.
+- **Nothing else moved** except `updated_at`: `origin_id`, status, total and line items were unchanged.
+- **Don't use `upload_ids` on a DC:** per TALLY's 2026-10-27 commit it answers 200 and links nothing. That is the opposite of Prime Change Orders, which need `upload_ids`.
+- **Not verified:** removing a file from a locked DC, a DC created in NetSuite, and whether the `updated_at` change affects the ERP sync.
+
+## Writing `origin_id` (the ERP link) on any record (2026-11-06)
+
+Verified live through TALLY's Procore account on Test Project 562949954996998: set a fake value, read it back, blank it, read it back. All test records were left blank. Approved records accept it too. `TALLY/worker/src/index.js` (`ERP_TYPES`) is the working reference.
+
+| Record | Read | Write | Body |
+|---|---|---|---|
+| Direct Cost | `GET /rest/v1.0/projects/{pid}/direct_costs/{id}` | `PATCH` same path | `{item: {origin_id}}` |
+| Prime Change Order | `GET /rest/v1.0/change_order_packages/{id}?project_id=` | `PATCH` same path | `{project_id, change_order: {origin_id}}` |
+| Prime Contract | `GET /rest/v1.0/prime_contract/{id}?project_id=` (**singular**) | `PATCH` same path | `{project_id, prime_contract: {origin_id}}` |
+| Owner invoice | `GET /rest/v1.0/payment_applications/{id}?project_id=` | `PATCH /rest/v1.0/prime_contracts/{pc}/payment_applications/{id}?project_id=` | `{project_id, payment_application: {origin_id}}` |
+| Subcontract | `GET /rest/v1.0/work_order_contracts/{id}?project_id=` | `PATCH` same path | `{project_id, work_order_contract: {origin_id}}` |
+| Purchase order | `GET /rest/v1.0/purchase_order_contracts/{id}?project_id=` | `PATCH` same path | `{project_id, purchase_order_contract: {origin_id}}` |
+| Subcontractor invoice | `GET /rest/v1.0/requisitions/{id}?project_id=` | `PATCH` same path | `{project_id, requisition: {origin_id}}` |
+
+- **404s:** `/rest/v1.0/prime_contracts/{id}` (even GET), `PATCH /rest/v1.0/payment_applications/{id}`, and `PATCH /rest/v1.0/projects/{pid}/payment_applications/{id}`.
+- **List differences:** `change_order_packages` omits `origin_id` on a record that never had one, so treat missing, null and `""` as unlinked. Sub invoices read back `null` after a blank; the others read back `""`.
+- **ID formats seen:** Direct Costs `108222_2908`; Prime Change Orders, contracts and invoices plain numbers like `112240`.
+- **Not verified:** whether writing `origin_id` alone brings back the badge and the UI lock. Removing it does clear them on COs. `origin_data` was left alone and may also matter. ERP-synced owner payments are separate and still refuse edits.
+
 ## Creating a unit-based Prime Contract, plus its Contractor and Architect/Engineer (2026-11-02)
 
 Verified live on the test project (contract #8, invoice 9) through `generateStandaloneInvoice`:
