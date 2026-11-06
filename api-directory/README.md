@@ -499,7 +499,8 @@ Real distribution across 567 Einbau projects: Contract 297, Time & Material 131,
 - **It adds, it doesn't replace:** 2 existing files stayed and the count went 2 → 3. The downloaded file was byte-identical to the original.
 - **Nothing else moved** except `updated_at`: `origin_id`, status, total and line items were unchanged.
 - **Don't use `upload_ids` on a DC:** per TALLY's 2026-10-27 commit it answers 200 and links nothing. That is the opposite of Prime Change Orders, which need `upload_ids`.
-- **Not verified:** removing a file from a locked DC, a DC created in NetSuite, and whether the `updated_at` change affects the ERP sync.
+- **Also confirmed by Ben through the live panel:** a synced Expense DC, 562950049130500 on the same project (vendor `2370 BMO MC PAYABLE`, `origin_id` `111101_2908`). It shows Procore's Synced badge, with Edit greyed out, and the file still attached.
+- **Not verified:** removing a file from a locked DC, and whether the `updated_at` change affects the ERP sync.
 
 ## Writing `origin_id` (the ERP link) on any record (2026-11-06)
 
