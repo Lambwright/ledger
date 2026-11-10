@@ -82,11 +82,20 @@ function json(body, status) {
 // Always resolves to a 200 response; success/failure lives in the final NDJSON
 // line, not the HTTP status (the frontend's stream reader checks that line,
 // not res.ok — see api.js streamAction).
-function ndjsonResponse() {
+//
+// Because of that, a failure never shows up as an error status, so it's logged here too, with the step it
+// was on. Before 2026-11-10 `wrangler tail` showed nothing but clean 200s for a failed run.
+function ndjsonResponse(body = {}) {
   const encoder = new TextEncoder();
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
+  let lastStep = null;
   async function send(obj) {
+    if (obj.type === 'progress' && obj.message) lastStep = obj.message;
+    if (obj.type === 'error') {
+      console.error(`[billing] ${body.action || 'unknown'} failed on project ${body.project_id ?? '?'}: ${obj.error}`
+        + (obj.code ? ` (code ${obj.code})` : '') + (lastStep ? ` | last step: ${lastStep}` : ''));
+    }
     try {
       await writer.write(encoder.encode(JSON.stringify(obj) + '\n'));
     } catch {
@@ -110,7 +119,7 @@ async function handleStreamingBillingAction(env, body) {
     billing_period_id, new_billing_period, invoice_number, billing_date
   } = body;
   const haveEntries = entry_id || (Array.isArray(entry_ids) && entry_ids.length > 0);
-  const { response, send, close } = ndjsonResponse();
+  const { response, send, close } = ndjsonResponse(body);
 
   (async () => {
     try {
@@ -156,7 +165,7 @@ async function handleStreamingDirectCostAction(env, body) {
   } = body;
   const haveEntries = direct_cost_id || (Array.isArray(direct_cost_ids) && direct_cost_ids.length > 0) ||
     (Array.isArray(direct_cost_line_ids) && direct_cost_line_ids.length > 0);
-  const { response, send, close } = ndjsonResponse();
+  const { response, send, close } = ndjsonResponse(body);
 
   (async () => {
     try {
@@ -201,7 +210,7 @@ async function handleStreamingCommitmentAction(env, body) {
   } = body;
   const haveEntries = commitment_id || (Array.isArray(commitment_ids) && commitment_ids.length > 0) ||
     (Array.isArray(commitment_line_ids) && commitment_line_ids.length > 0);
-  const { response, send, close } = ndjsonResponse();
+  const { response, send, close } = ndjsonResponse(body);
 
   (async () => {
     try {
@@ -243,7 +252,7 @@ async function handleStreamingInvoiceExistingCoAction(env, body) {
     project_id, contract_id, change_order_id,
     billing_period_id, new_billing_period, invoice_number, billing_date
   } = body;
-  const { response, send, close } = ndjsonResponse();
+  const { response, send, close } = ndjsonResponse(body);
 
   (async () => {
     try {
@@ -289,7 +298,7 @@ async function handleStreamingCombinedAction(env, body) {
   } = body;
   const haveEntries = [entry_ids, direct_cost_ids, direct_cost_line_ids, commitment_ids, commitment_line_ids, material_lines]
     .some(a => Array.isArray(a) && a.length > 0);
-  const { response, send, close } = ndjsonResponse();
+  const { response, send, close } = ndjsonResponse(body);
 
   (async () => {
     try {

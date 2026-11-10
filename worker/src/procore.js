@@ -68,6 +68,19 @@ export async function procoreRequest(env, method, path, data) {
     pcResponse = await doRequest(accessToken);
   }
 
+  // A gateway error (502/503/504) is Procore's servers timing out, and one used to kill a whole billing run
+  // on a plain read (2026-11-10, a 504 fetching a T&M entry). Reads are safe to repeat, so they get two more
+  // tries. Writes don't: a write that timed out may still have gone through, and a repeat could duplicate it.
+  if (!canHaveBody && httpMethod !== 'DELETE') {
+    for (let retry = 1; retry <= 2 && [502, 503, 504].includes(pcResponse.status); retry++) {
+      await pcResponse.text().catch(() => {});
+      console.warn(`[procore] ${pcResponse.status} on ${httpMethod} ${path}, retry ${retry}/2`);
+      await new Promise((r) => setTimeout(r, retry * 1500));
+      callCount++;
+      pcResponse = await doRequest(accessToken);
+    }
+  }
+
   const responseText = await pcResponse.text();
   let responseData;
   if (!responseText) {
