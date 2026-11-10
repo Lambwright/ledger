@@ -9,6 +9,12 @@ import { attachTicketBackup } from './ticketbackup.js';
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Procore's v2 line item endpoints (Change Order lines, unit-contract lines) match a unit against the company's
+// list by its lowercase name: "hours", "ls". "Hours" and "LS" worked until 2026-11, then started getting
+// 422 "Units Invalid Unit of Measure" (tested 2026-11-10 on a Test Project draft CO). Change Events (v1.1
+// unit_of_measure) still take the old spelling, so only v2 calls go through this.
+const v2Uom = (uom) => String(uom || '').toLowerCase();
+
 // Confirmed live 2026-09-14 by reading Procore's own rate-limit headers
 // (x-rate-limit-limit/-remaining/-reset) off real responses: 25 requests per
 // rolling 60-second window, ONE shared bucket for the whole Connector app +
@@ -1755,7 +1761,7 @@ async function buildChangeEventAndOrder(env, {
       const lineRes = await requestWithRetry(
         env, 'POST',
         `/rest/v2.0/companies/${env.PROCORE_COMPANY_ID}/projects/${projectId}/prime_change_orders/${changeOrderId}/line_items`,
-        { description: line.description, quantity: String(line.hours), unit_cost: String(line.rate), uom: 'Hours', wbs_code_id: String(wbsCodeId) },
+        { description: line.description, quantity: String(line.hours), unit_cost: String(line.rate), uom: v2Uom('Hours'), wbs_code_id: String(wbsCodeId) },
         onProgress
       );
       await throttleForRateLimit(lineRes.headers, onProgress);
@@ -2821,7 +2827,7 @@ async function buildDirectCostChangeEventAndOrder(env, {
       const lineRes = await requestWithRetry(
         env, 'POST',
         `/rest/v2.0/companies/${env.PROCORE_COMPANY_ID}/projects/${projectId}/prime_change_orders/${changeOrderId}/line_items`,
-        { description: line.description, quantity: '1', unit_cost: String(line.amount), uom: 'LS', wbs_code_id: String(line.wbsCodeId) },
+        { description: line.description, quantity: '1', unit_cost: String(line.amount), uom: v2Uom('LS'), wbs_code_id: String(line.wbsCodeId) },
         onProgress
       );
       await throttleForRateLimit(lineRes.headers, onProgress);
@@ -3678,7 +3684,7 @@ async function buildCommitmentChangeEventAndOrder(env, {
       const lineRes = await requestWithRetry(
         env, 'POST',
         `/rest/v2.0/companies/${env.PROCORE_COMPANY_ID}/projects/${projectId}/prime_change_orders/${changeOrderId}/line_items`,
-        { description: line.description, quantity: '1', unit_cost: String(line.amount), uom: 'LS', wbs_code_id: String(line.wbsCodeId) },
+        { description: line.description, quantity: '1', unit_cost: String(line.amount), uom: v2Uom('LS'), wbs_code_id: String(line.wbsCodeId) },
         onProgress
       );
       await throttleForRateLimit(lineRes.headers, onProgress);
@@ -4143,7 +4149,7 @@ async function buildCombinedChangeEventAndOrder(env, {
       const lineRes = await requestWithRetry(
         env, 'POST',
         `/rest/v2.0/companies/${env.PROCORE_COMPANY_ID}/projects/${projectId}/prime_change_orders/${changeOrderId}/line_items`,
-        { description: line.description, quantity: String(line.quantity), unit_cost: String(line.unitCost), uom: line.uom, wbs_code_id: String(line.wbsCodeId) },
+        { description: line.description, quantity: String(line.quantity), unit_cost: String(line.unitCost), uom: v2Uom(line.uom), wbs_code_id: String(line.wbsCodeId) },
         onProgress
       );
       await throttleForRateLimit(lineRes.headers, onProgress);
@@ -4442,7 +4448,7 @@ export async function generateStandaloneInvoice(env, {
       const res = await requestWithRetry(env, 'POST', `${v2}/${contractId}/line_items`, {
         description: standaloneLineDescription(line, method),
         ...(method === 'unit'
-          ? { quantity: String(units.quantity), unit_cost: String(units.unitCost), uom: units.uom }
+          ? { quantity: String(units.quantity), unit_cost: String(units.unitCost), uom: v2Uom(units.uom) }
           : { amount: String(line.amount) }),
         wbs_code_id: String(line.wbsCodeId)
       }, onProgress);

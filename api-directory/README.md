@@ -484,6 +484,13 @@ Real distribution across 567 Einbau projects: Contract 297, Time & Material 131,
 - **List:** `GET /rest/v1.0/contract_payments?project_id=&filters[contract_id]=` → 404. Use each invoice's `total_amount_paid` from `GET /rest/v1.0/payment_applications?project_id=` instead: it equals the sum of the payments linked to that invoice.
 - Payments carrying an ERP `origin_id` are created nightly at about 01:07 UTC by the ERP sync, not by LEDGER. LEDGER never creates or deletes payments. Delete (`DELETE /rest/v1.0/contract_payments/{id}?project_id=`, per third-party docs) is not verified.
 
+## Units of measure on v2 line items are lowercase (2026-11-10)
+
+- **Symptom:** every Change Order build failed with `422 {"error":{"code":"UNPROCESSABLE_ENTITY","message":"Units Invalid Unit of Measure",...,"source":"uom"}}` on the first line, around when Procore's Change Events tool changed look.
+- **Cause:** `POST /rest/v2.0/companies/{cid}/projects/{pid}/prime_change_orders/{id}/line_items` now matches `uom` against the company's unit list by its lowercase name. Tested on Test Project draft CO 562949958554401: `"Hours"` and `"LS"` get 422; `"hours"` and `"ls"` get 201. Lines added earlier still read back as `"LS"`. LEDGER sends lowercase on every v2 line POST, including unit Prime Contract lines (`v2Uom` in app.js). The Prime Contract line endpoint wasn't tested separately.
+- **Unit list:** `GET /rest/v1.0/companies/{cid}/uoms` (20, `name` like `hours`, `ls`, `ea`, `sf`), `GET /rest/v2.0/companies/{cid}/uoms` (`identity` is the value to send), and `GET /rest/v1.0/companies/{cid}/uom_categories`. `/units_of_measure` is a 404.
+- **Change Events** (`POST /rest/v1.1/change_events`, `unit_of_measure: "Hours"`) still accepted the old spelling on 2026-11-10, so LEDGER left them alone.
+
 ## Prime Change Order ERP link (2026-11-06)
 
 - The NetSuite (Rabb-IT) link is on the **package**, not the change order. `GET /rest/v1.0/change_order_packages/{legacy_package_id}?project_id=` and the list `GET /rest/v1.0/change_order_packages?project_id=&per_page=100` return `origin_id` and `origin_data`. `prime_change_orders` shows neither.
