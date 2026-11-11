@@ -2513,6 +2513,7 @@ async function buildDirectCostLineItems(resolvedSelection, markupPercent) {
       amount,
       hours: 1,
       wbsCodeId,
+      wbsFlatCode: rawLines[0]?.wbs_code?.flat_code || null,
       rawLines
     });
   }
@@ -2557,7 +2558,7 @@ function buildDirectCostCOLines(lineItems, groupBy, markup) {
         const amount = Math.round(cost * (1 + markup / 100) * 100) / 100;
         coLines.push({
           description: `${l.description}${raw.description ? ` - ${raw.description}` : ''}`,
-          cost, markupPercent: markup, amount, hours: 1, wbsCodeId, members: [l]
+          cost, markupPercent: markup, amount, hours: 1, wbsCodeId, wbsFlatCode: raw.wbs_code?.flat_code || null, members: [l]
         });
       }
     }
@@ -2572,7 +2573,7 @@ function buildDirectCostCOLines(lineItems, groupBy, markup) {
       : (lineItems[0]?.description || 'Direct Cost');
     return [{
       description: label, cost: totalCost, markupPercent: markup, amount, hours: 1,
-      wbsCodeId: lineItems[0]?.wbsCodeId, members: lineItems
+      wbsCodeId: lineItems[0]?.wbsCodeId, wbsFlatCode: lineItems[0]?.wbsFlatCode || null, members: lineItems
     }];
   }
 
@@ -2686,7 +2687,7 @@ async function fetchUnbilledDcLines(env, {
 // 2026-09-16 so the new combined (T&M + direct cost) flow can compute direct
 // cost lines without also building a Change Event.
 async function computeDirectCostLines(env, {
-  tenantId, projectId, directCostIds = [], directCostLineIds = [], markupPercent, groupBy, editedLines, onProgress = () => {}
+  tenantId, projectId, directCostIds = [], directCostLineIds = [], markupPercent, groupBy, editedLines, preview = false, onProgress = () => {}
 }) {
   const { mode, projectTypeName } = await resolveBillingMode(env, { tenantId, projectId });
   if (mode === 'non_billable') {
@@ -2733,6 +2734,7 @@ async function computeDirectCostLines(env, {
     }
     coLines.forEach((line, i) => applyDirectCostLineEdit(line, editedLines[i]));
   }
+  await applyRevenueCodeRules(env, projectId, coLines, editedLines, { preview });
 
   const totalAmount = Math.round(coLines.reduce((s, l) => s + l.amount, 0) * 100) / 100;
   onProgress({ message: `${coLines.length} direct cost(s) to bill — $${totalAmount.toLocaleString()} (markup included)` });
@@ -2754,12 +2756,12 @@ async function computeDirectCostLines(env, {
 // direct costs).
 export async function previewDirectCostBilling(env, { tenantId, projectId, directCostIds, directCostLineIds, markupPercent, groupBy }) {
   const { label, totalAmount, coLines } = await computeDirectCostLines(env, {
-    tenantId, projectId, directCostIds, directCostLineIds, markupPercent, groupBy
+    tenantId, projectId, directCostIds, directCostLineIds, markupPercent, groupBy, preview: true
   });
   return {
     label,
     totalAmount,
-    lines: coLines.map(l => ({ description: l.description, cost: l.cost, markupPercent: l.markupPercent, amount: l.amount }))
+    lines: coLines.map(costLinePreview)
   };
 }
 
@@ -3021,6 +3023,17 @@ function commitmentLabel(c) {
   return `${c.vendor_name || c.title || 'Subcontract'} — ${c.number || `Commitment #${c.id}`}`;
 }
 
+// What the CLIENT sees for a commitment (Ben, 2026-11-11): the sub's company name, never the commitment number,
+// which would make it easier for a client to go to the sub direct. commitmentLabel stays for LEDGER's own
+// messages. A PM swaps the company for the worker's name by hand where that's better.
+function commitmentClientName(c) {
+  return c.vendor_name || c.title || 'Subcontract';
+}
+function commitmentClientDescription(c, rawLines) {
+  const descs = [...new Set(rawLines.map(clientLineDescription).filter(Boolean))].join('; ');
+  return `${commitmentClientName(c)}${descs ? ` - ${descs}` : ''}`.slice(0, 250);
+}
+
 function commitmentsBase(env, projectId) {
   return `/rest/v2.0/companies/${env.PROCORE_COMPANY_ID}/projects/${projectId}/commitment_contracts`;
 }
@@ -3156,6 +3169,55 @@ export async function listBudgetCodes(env, { projectId }) {
     .sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }));
 }
 
+// Ben's cost code rules (2026-11-11, "gospel"): 49-series codes are revenue, 59-series are cost, and the
+// Commitment (S) cost type must never reach an invoice, because it moves the revenue to a different NetSuite
+// account. A cost line (direct cost, commitment) carrying either gets its code blanked and the PM must pick a
+// revenue code. Every other code passes through (Ben chose that over "only 55/56/62"). Returns why a code
+// can't be invoiced, or null. An unreadable code counts as a problem: better a blank than a guess.
+function revenueCodeProblem(flatCode) {
+  const full = String(flatCode || '').trim();
+  if (!full) return "LEDGER couldn't read its code";
+  const [costCode, ...rest] = full.split('.');
+  const costType = rest.length ? rest[rest.length - 1].trim().toUpperCase() : '';
+  if (costCode.trim().split('-')[0] === '59') return `${full} is a cost code (59 series)`;
+  if (costType === 'S') return `${full} has the Commitment (S) cost type`;
+  return null;
+}
+
+// Applies revenueCodeProblem to computed direct cost / commitment CO lines, and the PM's picks from the
+// preview (editedLines[i].wbsCodeId), which must be a budgeted code that passes the same rule. A line that
+// fails gets wbsCodeId null plus a `codeProblem`. The preview shows those; anything else refuses to build
+// until every line has a code.
+async function applyRevenueCodeRules(env, projectId, coLines, editedLines, { preview = false } = {}) {
+  const picks = (editedLines || []).map(e => (e?.wbsCodeId != null && String(e.wbsCodeId) !== '' ? String(e.wbsCodeId) : null));
+  const codes = picks.some(Boolean) ? new Map((await listBudgetCodes(env, { projectId })).map(c => [c.id, c])) : null;
+  coLines.forEach((line, i) => {
+    const pick = picks[i];
+    if (pick && pick !== String(line.wbsCodeId)) {
+      const chosen = codes.get(pick);
+      if (!chosen) throw new Error(`"${line.description}": that revenue code isn't on this project's budget. Pick another.`);
+      const problem = revenueCodeProblem(chosen.code);
+      if (problem) throw new Error(`"${line.description}": ${problem}, so it can't go on an invoice. Pick a revenue code.`);
+      Object.assign(line, { wbsCodeId: chosen.id, wbsFlatCode: chosen.code, codeProblem: null });
+      return;
+    }
+    const problem = revenueCodeProblem(line.wbsFlatCode);
+    if (problem) Object.assign(line, { wbsCodeId: null, codeProblem: problem });
+  });
+  if (!preview) {
+    const missing = coLines.filter(l => !l.wbsCodeId);
+    if (missing.length) {
+      throw new Error(`Pick a revenue code for ${missing.length} line(s) first: ${missing.map(l => `"${l.description}" (${l.codeProblem})`).join('; ')}.`);
+    }
+  }
+}
+
+// What the preview shows for a direct cost / commitment line, code included.
+const costLinePreview = (l) => ({
+  description: l.description, cost: l.cost, markupPercent: l.markupPercent, amount: l.amount,
+  wbsCodeId: l.wbsCodeId || null, code: l.wbsCodeId ? l.wbsFlatCode || null : null, codeProblem: l.codeProblem || null
+});
+
 // materialLines: [{ id, amount, wbsCodeId, description? }] from the sidebar.
 // Validates everything before anything touches Procore.
 async function computeMaterialLines(env, { tenantId, projectId, materialLines = [] }) {
@@ -3188,6 +3250,8 @@ async function computeMaterialLines(env, { tenantId, projectId, materialLines = 
     if (!(amount > 0)) throw new Error(`Enter an amount for "${label}".`);
     const code = codeById.get(String(sel.wbsCodeId));
     if (!code) throw new Error(`Pick a budget code for "${label}" — it has to be one on this project's budget.`);
+    const codeProblem = revenueCodeProblem(code.code);
+    if (codeProblem) throw new Error(`"${label}": ${codeProblem}, so it can't go on an invoice. Pick a revenue code.`);
     const ticket = ticketNumber.get(String(m.time_and_material_entry_id));
     const description = String(sel.description || '').trim() || `${label}${ticket != null ? ` — T&M #${ticket}` : ''}`;
     return {
@@ -3493,11 +3557,13 @@ function buildCommitmentLineItems(resolvedSelection, markupPercent) {
     const amount = Math.round(cost * (1 + markup / 100) * 100) / 100;
     lineItems.push({
       commitmentId: commitment.id,
-      description: commitmentLabel(commitment),
+      description: commitmentClientDescription(commitment, rawLines),
+      clientName: commitmentClientName(commitment),
       cost,
       markupPercent: markup,
       amount,
       wbsCodeId: first.wbs_code_id,
+      wbsFlatCode: first.wbs_code?.flat_code || null,
       rawLines
     });
   }
@@ -3527,8 +3593,8 @@ function buildCommitmentCOLines(lineItems, groupBy, markup) {
         const amount = Math.round(cost * (1 + markup / 100) * 100) / 100;
         const rawDescription = clientLineDescription(raw);
         coLines.push({
-          description: `${l.description}${rawDescription ? ` - ${rawDescription}` : ''}`,
-          cost, markupPercent: markup, amount, wbsCodeId: raw.wbs_code_id, members: [l]
+          description: `${l.clientName}${rawDescription ? ` - ${rawDescription}` : ''}`.slice(0, 250),
+          cost, markupPercent: markup, amount, wbsCodeId: raw.wbs_code_id, wbsFlatCode: raw.wbs_code?.flat_code || null, members: [l]
         });
       }
     }
@@ -3543,7 +3609,7 @@ function buildCommitmentCOLines(lineItems, groupBy, markup) {
       : (lineItems[0]?.description || 'Commitment');
     return [{
       description: label, cost: totalCost, markupPercent: markup, amount,
-      wbsCodeId: lineItems[0]?.wbsCodeId, members: lineItems
+      wbsCodeId: lineItems[0]?.wbsCodeId, wbsFlatCode: lineItems[0]?.wbsFlatCode || null, members: lineItems
     }];
   }
 
@@ -3563,7 +3629,7 @@ function applyCommitmentLineEdit(coLine, edit) {
 // Mirrors computeDirectCostLines' role for commitments — the single place
 // preview/build/write-off can never drift from each other.
 async function computeCommitmentLines(env, {
-  tenantId, projectId, commitmentIds = [], commitmentLineIds = [], markupPercent, groupBy, editedLines, onProgress = () => {}
+  tenantId, projectId, commitmentIds = [], commitmentLineIds = [], markupPercent, groupBy, editedLines, preview = false, onProgress = () => {}
 }) {
   const { mode, projectTypeName } = await resolveBillingMode(env, { tenantId, projectId });
   if (mode === 'non_billable') {
@@ -3578,7 +3644,7 @@ async function computeCommitmentLines(env, {
   const resolvedSelection = await fetchUnbilledCommitmentLines(env, { tenantId, projectId, commitmentIds, commitmentLineIds, onProgress });
   const commitments = [...resolvedSelection.values()].map(v => v.commitment);
   const multi = commitments.length > 1;
-  const label = multi ? `${commitments.length} Commitments` : commitmentLabel(commitments[0]);
+  const label = multi ? `${commitments.length} Commitments` : commitmentClientName(commitments[0]);
   onProgress({ message: `Fetched ${commitments.length} commitment(s)` });
 
   const { lineItems, skipped, markup } = buildCommitmentLineItems(resolvedSelection, markupPercent);
@@ -3606,6 +3672,7 @@ async function computeCommitmentLines(env, {
     }
     coLines.forEach((line, i) => applyCommitmentLineEdit(line, editedLines[i]));
   }
+  await applyRevenueCodeRules(env, projectId, coLines, editedLines, { preview });
 
   const totalAmount = Math.round(coLines.reduce((s, l) => s + l.amount, 0) * 100) / 100;
   onProgress({
@@ -3626,12 +3693,12 @@ async function computeCommitmentLines(env, {
 // Mirrors previewDirectCostBilling.
 export async function previewCommitmentBilling(env, { tenantId, projectId, commitmentIds, commitmentLineIds, markupPercent, groupBy }) {
   const { label, totalAmount, coLines } = await computeCommitmentLines(env, {
-    tenantId, projectId, commitmentIds, commitmentLineIds, markupPercent, groupBy
+    tenantId, projectId, commitmentIds, commitmentLineIds, markupPercent, groupBy, preview: true
   });
   return {
     label,
     totalAmount,
-    lines: coLines.map(l => ({ description: l.description, cost: l.cost, markupPercent: l.markupPercent, amount: l.amount }))
+    lines: coLines.map(costLinePreview)
   };
 }
 
@@ -4021,7 +4088,7 @@ function normalizeDcLine(line) {
 // and the already-billed checks can't catch that since neither is billed yet.
 async function computeCombinedSources(env, {
   tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [], materialLines = [],
-  groupBy, rateOverrides, editedTmLines, confirmUnlinked, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, onProgress = () => {}
+  groupBy, rateOverrides, editedTmLines, confirmUnlinked, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, preview = false, onProgress = () => {}
 }) {
   if (entryIds.length === 0 && directCostIds.length === 0 && directCostLineIds.length === 0 &&
       commitmentIds.length === 0 && commitmentLineIds.length === 0 && materialLines.length === 0) {
@@ -4032,12 +4099,12 @@ async function computeCombinedSources(env, {
     ? await computeCOLines(env, { tenantId, projectId, entryIds, groupBy, rateOverrides, editedLines: editedTmLines, confirmUnlinked, onProgress })
     : null;
   const dc = (directCostIds.length > 0 || directCostLineIds.length > 0)
-    ? await computeDirectCostLines(env, { tenantId, projectId, directCostIds, directCostLineIds, markupPercent, groupBy: dcGroupBy, editedLines: editedDcLines, onProgress })
+    ? await computeDirectCostLines(env, { tenantId, projectId, directCostIds, directCostLineIds, markupPercent, groupBy: dcGroupBy, editedLines: editedDcLines, preview, onProgress })
     : null;
   const cm = (commitmentIds.length > 0 || commitmentLineIds.length > 0)
     ? await computeCommitmentLines(env, {
         tenantId, projectId, commitmentIds, commitmentLineIds, markupPercent: cmMarkupPercent ?? markupPercent,
-        groupBy: cmGroupBy, editedLines: editedCmLines, onProgress
+        groupBy: cmGroupBy, editedLines: editedCmLines, preview, onProgress
       })
     : null;
 
@@ -4220,7 +4287,7 @@ export async function previewCombinedBilling(env, {
 }) {
   const { tm, dc, cm, mt } = await computeCombinedSources(env, {
     tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, materialLines,
-    groupBy, rateOverrides, confirmUnlinked: true, markupPercent, cmMarkupPercent, dcGroupBy, cmGroupBy
+    groupBy, rateOverrides, confirmUnlinked: true, markupPercent, cmMarkupPercent, dcGroupBy, cmGroupBy, preview: true
   });
 
   return {
@@ -4231,8 +4298,8 @@ export async function previewCombinedBilling(env, {
     mtLines: (mt?.coLines || []).map(l => ({ materialId: l.materialId, description: l.description, amount: l.amount, budgetCode: l.budgetCode })),
     unlinkedCount: tm?.unlinkedCount || 0,
     tmLines: (tm?.coLines || []).map(l => ({ description: l.description, hours: l.hours, rate: l.rate, amount: l.amount, timeType: l.timeType })),
-    dcLines: (dc?.coLines || []).map(l => ({ description: l.description, cost: l.cost, markupPercent: l.markupPercent, amount: l.amount })),
-    cmLines: (cm?.coLines || []).map(l => ({ description: l.description, cost: l.cost, markupPercent: l.markupPercent, amount: l.amount }))
+    dcLines: (dc?.coLines || []).map(costLinePreview),
+    cmLines: (cm?.coLines || []).map(costLinePreview)
   };
 }
 

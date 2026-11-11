@@ -788,6 +788,21 @@ body {
   color: var(--ink-muted);
 }
 
+/* Revenue code picker on direct cost / commitment preview lines (2026-11-11). */
+.preview-line-code { margin-top: 6px; }
+.preview-line-code select {
+  width: 100%;
+  background: var(--bg);
+  color: var(--ink-dim);
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.preview-line-code select.needs-code { border-color: var(--danger); color: var(--ink); }
+.code-problem { margin-top: 4px; font-size: 11px; color: #e8a08a; }
+
 .preview-line-nums input {
   width: 64px;
   background: var(--bg);

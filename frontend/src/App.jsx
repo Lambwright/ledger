@@ -751,6 +751,13 @@ export default function App({ user, onSignOut }) {
   // take an optional value. LEDGER can't see whether the same material is on a
   // direct cost or sub invoice, so the list carries a warning.
   const MATERIAL_STATUS_LABEL = { billed: 'Billed', draft_co: 'In draft CO', written_off: 'Written off', budgeted: 'Budgeted' };
+  // Ben's cost code rules (2026-11-11): 59-series codes are cost and the Commitment (S) cost type never goes on
+  // an invoice, so neither is offered as a revenue code. The worker enforces the same rule (revenueCodeProblem).
+  const isRevenueCode = (code) => {
+    const [costCode, ...rest] = String(code || '').split('.');
+    return costCode.split('-')[0] !== '59' && (rest[rest.length - 1] || '').toUpperCase() !== 'S';
+  };
+  const revenueCodes = (budgetCodes || []).filter(c => isRevenueCode(c.code));
   async function loadBudgetCodes() {
     if (!projectId) return;
     setBudgetCodesLoading(true);
@@ -868,7 +875,7 @@ export default function App({ user, onSignOut }) {
                       <span>Budget code</span>
                       <select value={inp.wbsCodeId ?? ''} onChange={e => setMaterialInput(m.id, 'wbsCodeId', e.target.value)}>
                         <option value="" disabled>{budgetCodes == null ? 'Loading codes…' : 'Choose a budgeted code…'}</option>
-                        {(budgetCodes || []).map(c => <option key={c.id} value={c.id}>{c.code} — {c.name}</option>)}
+                        {revenueCodes.map(c => <option key={c.id} value={c.id}>{c.code} — {c.name}</option>)}
                       </select>
                     </label>
                   )}
@@ -1198,6 +1205,11 @@ export default function App({ user, onSignOut }) {
       setError('Enter a title for the new Prime Contract.');
       return;
     }
+    const uncoded = [...(previewDcLines || []), ...(previewCmLines || [])].filter(l => !l.wbsCodeId);
+    if (uncoded.length > 0) {
+      setError(`Pick a revenue code for ${uncoded.length} line(s) first: ${uncoded.map(l => `"${l.description}"`).join('; ')}.`);
+      return;
+    }
     setGenerating(true);
     setError(null);
     setProgressLog([]);
@@ -1217,8 +1229,8 @@ export default function App({ user, onSignOut }) {
           // leads to preview, never straight to this) — editedLines is
           // always the real, possibly-PM-edited lines by the time this runs.
           editedTmLines: previewTmLines?.map(l => ({ description: l.description, rate: l.rate })),
-          editedDcLines: previewDcLines?.map(l => ({ description: l.description })),
-          editedCmLines: previewCmLines?.map(l => ({ description: l.description })),
+          editedDcLines: previewDcLines?.map(l => ({ description: l.description, wbsCodeId: l.wbsCodeId })),
+          editedCmLines: previewCmLines?.map(l => ({ description: l.description, wbsCodeId: l.wbsCodeId })),
           ...(kind === 'invoice' && creatingPeriod
             ? { newBillingPeriod: { startDate: newPeriodStart, endDate: newPeriodEnd } }
             : kind === 'invoice' && billingPeriodId
@@ -1265,6 +1277,8 @@ export default function App({ user, onSignOut }) {
       setPreviewDcLines(res.dcLines.map(l => ({ ...l })));
       setPreviewCmLines((res.cmLines || []).map(l => ({ ...l })));
       setPreviewMtLines((res.mtLines || []).map(l => ({ ...l })));
+      // Direct cost and commitment lines get a revenue code picker.
+      if ((res.dcLines.length > 0 || (res.cmLines || []).length > 0) && budgetCodes == null && !budgetCodesLoading) loadBudgetCodes();
       setPreviewOrder([
         ...res.tmLines.map((_, i) => `tm:${i}`),
         ...(res.mtLines || []).map((_, i) => `mt:${i}`),
@@ -3221,6 +3235,25 @@ export default function App({ user, onSignOut }) {
                                       </>
                                     )}
                                   </div>
+                                  {(src === 'dc' || src === 'cm') && (
+                                    <div className="preview-line-code">
+                                      <select
+                                        className={line.wbsCodeId ? '' : 'needs-code'}
+                                        value={line.wbsCodeId ?? ''}
+                                        aria-label={`Revenue code for ${line.description}`}
+                                        onChange={e => updateDesc(i, 'wbsCodeId', e.target.value)}
+                                      >
+                                        <option value="" disabled>{budgetCodes == null ? 'Loading codes…' : 'Pick a revenue code…'}</option>
+                                        {line.wbsCodeId && !revenueCodes.some(c => c.id === String(line.wbsCodeId)) && (
+                                          <option value={line.wbsCodeId}>{line.code || 'Current code'}</option>
+                                        )}
+                                        {revenueCodes.map(c => <option key={c.id} value={c.id}>{c.code} — {c.name}</option>)}
+                                      </select>
+                                      {!line.wbsCodeId && line.codeProblem && (
+                                        <div className="code-problem">{line.codeProblem}, so it can't go on an invoice. Pick a revenue code.</div>
+                                      )}
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             );

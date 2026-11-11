@@ -340,6 +340,12 @@ actual 429 waits for the real `x-rate-limit-reset` time rather than guessing.
 
 ## g703 continuation sheet — the real mechanics of claiming an invoice line (2026-09-14)
 
+> **2026-11-11: a 200 is not proof of a claim.** On a unit-accounting contract, a claim PATCH with
+> `work_completed_this_period_quantity: "undefined"` returned 200, and the row kept `work_completed_this_period: "0.00"`.
+> That was commitment and material lines, which carry no `hours`, on invoice 562949954801717 (project 562949955464978).
+> LEDGER now sends the line's own quantity, else the row's `scheduled_quantity`. It re-reads the invoice and only counts a
+> line as claimed if its amount landed.
+
 **`GET /rest/v1.0/payment_applications/{id}?project_id={project_id}`** — full invoice
 detail, including the `g703` array (the AIA-style continuation sheet). Each row: `id`,
 `added_from_source` (`'contract'` = base SOV, or `'change_order'` + `added_from_source_id`),
