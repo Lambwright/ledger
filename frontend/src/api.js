@@ -376,6 +376,11 @@ export function getBillingContext({ projectId }) {
   return callAction('billing_context', { project_id: projectId });
 }
 
+// The side panel on an owner invoice (2026-11-11).
+export function invoiceDetail({ tenantId, projectId, invoiceId }) {
+  return callAction('invoice_detail', { tenant_id: tenantId, project_id: projectId, invoice_id: invoiceId });
+}
+
 export function listBudgetCodes({ projectId }) {
   return callAction('list_budget_codes', { project_id: projectId });
 }

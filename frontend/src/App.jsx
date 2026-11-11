@@ -10,6 +10,7 @@ import {
 import { connectProcoreSidePanel, isEmbedded } from './procore';
 import { withTokenHash } from './auth';
 import ProjectPicker, { recentProjects } from './ProjectPicker';
+import InvoicePanel from './InvoicePanel.jsx';
 
 const MODE_LABEL = { tm: 'T&M', fixed_price: 'Fixed-Price', non_billable: 'Not Billable' };
 const TIME_TYPE_LABEL = { regular: 'Regular', overtime: 'Overtime', double_time: 'Double Time', per_diem: 'Per Diem' };
@@ -83,6 +84,15 @@ const WRITE_OFF_REASON_OPTIONS = [
 const TENANT_ID = import.meta.env.VITE_TENANT_ID;
 const DEFAULT_PROJECT_ID = import.meta.env.VITE_DEFAULT_PROJECT_ID;
 const EMBEDDED = isEmbedded();
+
+// An owner invoice page in Procore. The real view name isn't known yet (it's logged as "[LEDGER] Procore
+// message" once the panel is added there), so this matches the likely spellings and leaves sub invoices
+// (requisitions) alone. If it misses, the panel shows normal LEDGER, as it does today.
+function isInvoiceView(view) {
+  const v = String(view || '').toLowerCase();
+  if (/requisition|subcontractor/.test(v)) return false;
+  return /payment[\s_-]?application|owner[\s_-]?invoice|invoic/.test(v);
+}
 const FALLBACK_PROCORE_ORIGIN = 'https://us02.procore.com';
 
 function money(n) {
@@ -192,6 +202,10 @@ export default function App({ user, onSignOut }) {
   const [contractFromProcore, setContractFromProcore] = useState(resolveContractId(params) != null);
   const [contracts, setContracts] = useState([]);
   const [procoreView, setProcoreView] = useState(null);
+  // The record Procore says is open, kept as sent: contractId gets cleared when it isn't a contract, and on
+  // an owner invoice page it never is. Feeds the invoice panel.
+  const [procoreRecordId, setProcoreRecordId] = useState(null);
+  const [showFullLedger, setShowFullLedger] = useState(false);
   const [procoreOrigin, setProcoreOrigin] = useState(FALLBACK_PROCORE_ORIGIN);
   // Who is acting = the signed-in Einbau ID (the worker records this itself;
   // no person ids live in LEDGER's code or config — Ben, 2026-10-22).
@@ -388,6 +402,7 @@ export default function App({ user, onSignOut }) {
         setContractId(ctx.resourceId || null);
         setContractFromProcore(ctx.resourceId != null);
         setProcoreView(ctx.view || null);
+        setProcoreRecordId(ctx.resourceId || null);
         if (ctx.origin) setProcoreOrigin(ctx.origin);
       },
     });
@@ -1713,6 +1728,11 @@ export default function App({ user, onSignOut }) {
     </>
   );
   const showPickerFooter = action !== null && !overlayOpen && checkedCount > 0 && !viewOnly;
+
+  // On an owner invoice in Procore, the panel opens on what LEDGER knows about that invoice.
+  if (EMBEDDED && isInvoiceView(procoreView) && projectId && procoreRecordId && !showFullLedger) {
+    return <InvoicePanel projectId={projectId} invoiceId={procoreRecordId} onOpenLedger={() => setShowFullLedger(true)} />;
+  }
 
   return (
     // .ledger-wide only when standalone (popped out / direct browser) — the

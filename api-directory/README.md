@@ -490,6 +490,16 @@ Real distribution across 567 Einbau projects: Contract 297, Time & Material 131,
 - **List:** `GET /rest/v1.0/contract_payments?project_id=&filters[contract_id]=` → 404. Use each invoice's `total_amount_paid` from `GET /rest/v1.0/payment_applications?project_id=` instead: it equals the sum of the payments linked to that invoice.
 - Payments carrying an ERP `origin_id` are created nightly at about 01:07 UTC by the ERP sync, not by LEDGER. LEDGER never creates or deletes payments. Delete (`DELETE /rest/v1.0/contract_payments/{id}?project_id=`, per third-party docs) is not verified.
 
+## Where backup files live: commitments and sub invoices (2026-11-11)
+
+Read live on project 562949955464978 (2026_0373). Each file object is `{id, name, filename, url}`, and `url` is a signed `storage.procore.com` link that opens without auth.
+
+- **Sub invoices:** `GET /rest/v1.0/requisitions?project_id=` returns `attachments[]` on every row, plus the commitment it's against. That was the sub's invoice PDF, like `ORMEN_SOLUTIONS_INC Invoice_68480_from_.pdf`. `GET /rest/v1.0/requisitions/{id}?project_id=` has the same field.
+- **Commitments:** the list (`/rest/v1.0/work_order_contracts?project_id=`) has **no** attachments. The show (`/rest/v1.0/work_order_contracts/{id}?project_id=`, or `purchase_order_contracts`) has `attachments[]`, e.g. the PO PDF. v2.0 `commitment_contracts/{id}` only gives `prostore_file_ids`.
+- **Direct Costs:** `GET /rest/v1.0/projects/{pid}/direct_costs/{id}` gives `attachments[]`.
+- **T&M tickets:** `time_and_material_entry_attachments[]`, in the entries list.
+- **Used by:** LEDGER's invoice panel (`worker/src/invoicepanel.js`) lists all of these for an invoice's records.
+
 ## Units of measure on v2 line items are lowercase (2026-11-10)
 
 - **Symptom:** every Change Order build failed with `422 {"error":{"code":"UNPROCESSABLE_ENTITY","message":"Units Invalid Unit of Measure",...,"source":"uom"}}` on the first line, around when Procore's Change Events tool changed look.

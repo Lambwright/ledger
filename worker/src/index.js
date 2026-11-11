@@ -42,6 +42,7 @@ import { pushFinancialsToCrm, handleCrmRefresh } from './crm.js';
 import { listSharedViews, saveSharedView, deleteSharedView } from './views.js';
 import { watchRefusals, einbauAppHeader, clientHeaders } from './security.js';
 import { monthFigures } from './hours.js';
+import { invoicePanelDetail } from './invoicepanel.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -545,6 +546,15 @@ async function handleAction(env, body, ctx) {
     // Opening a project in the sidebar keeps its portfolio row current.
     ctx?.waitUntil(refreshIfStale(env, tenant_id, project_id).catch(() => {}));
     return json(tickets, 200);
+  }
+
+  // The side panel on an owner invoice: what LEDGER billed onto it, and each record's files.
+  if (action === 'invoice_detail') {
+    const { tenant_id, project_id, invoice_id } = body;
+    if (!tenant_id || !project_id || !invoice_id) {
+      return json({ error: 'tenant_id, project_id, and invoice_id are required' }, 400);
+    }
+    return json(await invoicePanelDetail(env, { tenantId: tenant_id, projectId: project_id, invoiceId: invoice_id }), 200);
   }
 
   if (action === 'ticket_detail') {
