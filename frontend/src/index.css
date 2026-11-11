@@ -1555,3 +1555,14 @@ body {
 .invoice-panel-facts dd { margin: 0; color: var(--ink-dim); overflow-wrap: anywhere; }
 .invoice-panel-file { color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
 .invoice-panel-open { align-self: flex-start; }
+
+/* ---- optional DC / commitment backup picker (2026-11-11) ---- */
+.backup-records { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; min-height: 0; }
+.backup-record { border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px; background: var(--surface-2); }
+.backup-record-title { font-size: 12px; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+.backup-record-note { font-size: 11px; color: var(--ink-muted); margin-top: 3px; }
+.backup-file { display: flex; align-items: center; gap: 6px; margin-top: 5px; font-size: 12px; min-width: 0; cursor: pointer; }
+.backup-file input { flex: none; accent-color: var(--accent); }
+.backup-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-dim); }
+.backup-file-label { flex: none; font-size: 10px; color: var(--ink-faint); }
+.backup-file a { flex: none; color: var(--accent); font-size: 11px; }

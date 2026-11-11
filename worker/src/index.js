@@ -43,6 +43,7 @@ import { listSharedViews, saveSharedView, deleteSharedView } from './views.js';
 import { watchRefusals, einbauAppHeader, clientHeaders } from './security.js';
 import { monthFigures } from './hours.js';
 import { invoicePanelDetail } from './invoicepanel.js';
+import { listBackupFiles } from './ticketbackup.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -295,7 +296,7 @@ async function handleStreamingCombinedAction(env, body) {
     prime_contract_id, confirm_unlinked, group_by, rate_overrides, edited_tm_lines,
     markup_percent, cm_markup_percent, dc_group_by, edited_dc_lines, cm_group_by, edited_cm_lines,
     title, billing_period_id, new_billing_period, invoice_number, billing_date, standalone, material_lines, owner_vendor_id, line_order,
-    accounting_method, contractor_id, architect_id
+    accounting_method, contractor_id, architect_id, backup_files
   } = body;
   const haveEntries = [entry_ids, direct_cost_ids, direct_cost_line_ids, commitment_ids, commitment_line_ids, material_lines]
     .some(a => Array.isArray(a) && a.length > 0);
@@ -318,6 +319,8 @@ async function handleStreamingCombinedAction(env, body) {
         accountingMethod: accounting_method === 'amount' ? 'amount' : 'unit',
         contractorId: contractor_id || null, architectId: architect_id || null,
         lineOrder: Array.isArray(line_order) ? line_order.map(String) : null,
+        // Direct cost / commitment backup the PM picked (2026-11-11): [{ source, recordId, fileId }], max 50.
+        backupFiles: Array.isArray(backup_files) ? backup_files.slice(0, 50) : [],
         cmGroupBy: cm_group_by, editedCmLines: edited_cm_lines, cmMarkupPercent: cm_markup_percent,
         userId: user_id, primeContractId: prime_contract_id, confirmUnlinked: !!confirm_unlinked,
         groupBy: group_by, rateOverrides: rate_overrides, editedTmLines: edited_tm_lines,
@@ -546,6 +549,14 @@ async function handleAction(env, body, ctx) {
     // Opening a project in the sidebar keeps its portfolio row current.
     ctx?.waitUntil(refreshIfStale(env, tenant_id, project_id).catch(() => {}));
     return json(tickets, 200);
+  }
+
+  // The optional backup picker (2026-11-11): files on the direct costs / commitments being billed.
+  if (action === 'list_backup_files') {
+    const { project_id, direct_cost_ids, commitment_ids } = body;
+    if (!project_id) return json({ error: 'project_id is required' }, 400);
+    const ids = (a) => (Array.isArray(a) ? a.map(String).filter(x => /^\d{1,20}$/.test(x)).slice(0, 40) : []);
+    return json({ records: await listBackupFiles(env, { projectId: project_id, directCostIds: ids(direct_cost_ids), commitmentIds: ids(commitment_ids) }) }, 200);
   }
 
   // The side panel on an owner invoice: what LEDGER billed onto it, and each record's files.

@@ -376,6 +376,11 @@ export function getBillingContext({ projectId }) {
   return callAction('billing_context', { project_id: projectId });
 }
 
+// The optional backup picker (2026-11-11): files on the direct costs / commitments being billed.
+export function listBackupFiles({ projectId, directCostIds, commitmentIds }) {
+  return callAction('list_backup_files', { project_id: projectId, direct_cost_ids: directCostIds, commitment_ids: commitmentIds });
+}
+
 // The side panel on an owner invoice (2026-11-11).
 export function invoiceDetail({ tenantId, projectId, invoiceId }) {
   return callAction('invoice_detail', { tenant_id: tenantId, project_id: projectId, invoice_id: invoiceId });
@@ -412,10 +417,11 @@ export function previewCombinedBilling({ tenantId, projectId, entryIds, directCo
 export function generateCombinedInvoice({
   tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, userId, confirmUnlinked, primeContractId, groupBy, rateOverrides,
   editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, title, billingPeriodId, newBillingPeriod, invoiceNumber, billingDate,
-  standalone, materials, ownerVendorId, accountingMethod, contractorId, architectId, lineOrder, onProgress
+  standalone, materials, ownerVendorId, accountingMethod, contractorId, architectId, lineOrder, backupFiles, onProgress
 }) {
   return streamAction('generate_combined_invoice', {
     ...(lineOrder?.length ? { line_order: lineOrder } : {}),
+    ...(backupFiles?.length ? { backup_files: backupFiles } : {}),
     // No approved Prime Contract (2026-10-26): who the standalone invoice bills.
     ...(ownerVendorId ? { owner_vendor_id: ownerVendorId } : {}),
     // Standalone contract setup (2026-11-02): billing method, contractor, architect/engineer.
@@ -453,10 +459,11 @@ export function generateCombinedInvoice({
 
 export function pushCombinedToDraftCO({
   tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, userId, confirmUnlinked, primeContractId, groupBy, rateOverrides,
-  editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, title, materials, lineOrder, onProgress
+  editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, title, materials, lineOrder, backupFiles, onProgress
 }) {
   return streamAction('push_combined_to_draft_co', {
     ...(lineOrder?.length ? { line_order: lineOrder } : {}),
+    ...(backupFiles?.length ? { backup_files: backupFiles } : {}),
     ...materialLines(materials),
     tenant_id: tenantId, project_id: projectId, entry_ids: entryIds, direct_cost_ids: directCostIds, user_id: userId,
     ...(directCostLineIds?.length ? { direct_cost_line_ids: directCostLineIds } : {}),

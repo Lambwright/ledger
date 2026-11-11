@@ -175,7 +175,8 @@ async function describeRecords(env, projectId, rows) {
         kind: 'cm',
         procoreId: c ? String(id) : null,
         commitmentType,
-        title: c ? [c.vendor?.name, c.number].filter(Boolean).join(' — ') || `Commitment #${id}` : `Commitment #${id}`,
+        // A single commitment names its sub as vendor.company (the list uses vendor.name).
+        title: c ? [c.vendor?.name || c.vendor?.company, c.number].filter(Boolean).join(' — ') || `Commitment #${id}` : `Commitment #${id}`,
         subtitle: c?.title || null,
         files: [...subFiles, ...filesOf(c?.attachments, 'Commitment')]
       });

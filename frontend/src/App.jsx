@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   listPendingTickets, listPendingDirectCosts, listPrimeContracts, listBillingPeriods, nextInvoiceNumber,
   previewCombinedBilling, generateCombinedInvoice, pushCombinedToDraftCO, getProjectSettings, saveProjectSettings, revertToUnbilled,
-  revertMaterial, listBudgetCodes, getBillingContext,
+  revertMaterial, listBudgetCodes, getBillingContext, listBackupFiles,
   revertDirectCost, writeOffRecords, markAsBudgeted, markAlreadyBilled, directCostLineDetail, listCommitments, commitmentLineDetail, revertCommitment, saveProjectCounts,
   getProjectReconciliation
 } from './api';
@@ -257,6 +257,9 @@ export default function App({ user, onSignOut }) {
   const [cmLineDetailLoading, setCmLineDetailLoading] = useState(null);
   // Labour-from-a-subcontract warning pop-up: { lines, onProceed } while open.
   const [labourWarning, setLabourWarning] = useState(null); // { title, text, lines, onProceed }
+  // Optional backup step: { kind, stage: 'ask' | 'loading' | 'pick', records, error? }, plus the ticked files.
+  const [backupPrompt, setBackupPrompt] = useState(null);
+  const [backupPicked, setBackupPicked] = useState(() => new Set());
   const [cmLegacy, setCmLegacy] = useState(false);
   // Legacy-project warning is acknowledged once per session, not per line.
   const [legacyAck, setLegacyAck] = useState(false);
@@ -1193,7 +1196,39 @@ export default function App({ user, onSignOut }) {
     }
   }
 
-  async function runBilling(kind) {
+  // Optional direct cost / commitment backup (Ben, 2026-11-11). Before billing anything with those in it,
+  // warn that attachments may reach the client, then Don't attach or Choose backups. T&M backup is automatic.
+  async function openBackupPicker(kind) {
+    setBackupPrompt({ kind, stage: 'loading', records: [] });
+    try {
+      const { records } = await listBackupFiles({
+        projectId,
+        directCostIds: [...new Set([...checkedDcIds, ...[...checkedDcLineIds].map(k => String(k).split(':')[0])])],
+        commitmentIds: [...new Set([...checkedCmLineIds].map(k => String(k).split(':')[0]))]
+      });
+      setBackupPicked(new Set());
+      setBackupPrompt({ kind, stage: 'pick', records });
+    } catch (e) {
+      setBackupPrompt({ kind, stage: 'pick', records: [], error: e.message });
+    }
+  }
+  const backupKey = (f) => `${f.source}:${f.recordId}:${f.fileId}`;
+  function toggleBackup(f) {
+    setBackupPicked(prev => {
+      const next = new Set(prev);
+      if (next.has(backupKey(f))) next.delete(backupKey(f)); else next.add(backupKey(f));
+      return next;
+    });
+  }
+  function continueWithBackups() {
+    const { kind, records } = backupPrompt;
+    const picks = records.flatMap(r => r.files).filter(f => backupPicked.has(backupKey(f)))
+      .map(f => ({ source: f.source, recordId: f.recordId, fileId: f.fileId }));
+    setBackupPrompt(null);
+    runBilling(kind, picks);
+  }
+
+  async function runBilling(kind, backupFiles) {
     const entryIds = [...checkedIds];
     const directCostIds = [...checkedDcIds];
     const directCostLineIds = [...checkedDcLineIds];
@@ -1225,6 +1260,10 @@ export default function App({ user, onSignOut }) {
       setError(`Pick a revenue cost code for ${uncoded.length} line(s) first: ${uncoded.map(l => `"${l.description}"`).join('; ')}.`);
       return;
     }
+    if (backupFiles === undefined && ((previewDcLines?.length || 0) + (previewCmLines?.length || 0)) > 0) {
+      setBackupPrompt({ kind, stage: 'ask', records: [] });
+      return;
+    }
     setGenerating(true);
     setError(null);
     setProgressLog([]);
@@ -1236,6 +1275,7 @@ export default function App({ user, onSignOut }) {
           tenantId: TENANT_ID, projectId, entryIds, directCostIds, directCostLineIds, commitmentLineIds, userId, confirmUnlinked,
           materials: materialBillingPayload(),
           lineOrder: previewOrder,
+          backupFiles: backupFiles || [],
           primeContractId: contractId, groupBy, rateOverrides, markupPercent, cmMarkupPercent, dcGroupBy, cmGroupBy, title: coTitle, onProgress,
           standalone: kind === 'invoice' && standalone,
           ...(kind === 'invoice' && !hasApprovedPc ? { ownerVendorId, contractorId, architectId, primeContractId: null } : {}),
@@ -3534,6 +3574,62 @@ export default function App({ user, onSignOut }) {
                 Proceed anyway
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {backupPrompt && (
+        <div className="warn-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="backup-title">
+          <div className="warn-modal info-modal backup-modal">
+            {backupPrompt.stage === 'ask' ? (
+              <>
+                <div className="warn-modal-title" id="backup-title">Attach backup?</div>
+                <p className="warn-modal-text">
+                  You can attach the direct cost and commitment backup to this {backupPrompt.kind === 'invoice' ? 'invoice' : 'Change Order'}.
+                  Any file attached may be sent to the client automatically. If you don't want the client to see it, don't attach it.
+                  (T&amp;M ticket backup is always attached.)
+                </p>
+                <div className="warn-modal-buttons">
+                  <button className="cancel-btn" autoFocus onClick={() => { const { kind } = backupPrompt; setBackupPrompt(null); runBilling(kind, []); }}>
+                    Don't attach
+                  </button>
+                  <button className="generate-btn" onClick={() => openBackupPicker(backupPrompt.kind)}>Choose backups</button>
+                </div>
+              </>
+            ) : backupPrompt.stage === 'loading' ? (
+              <Loading size={70} text="Finding the backup files…" />
+            ) : (
+              <>
+                <div className="warn-modal-title" id="backup-title">Choose backups</div>
+                <p className="warn-modal-text">Tick what to attach. Open a file to check it first. Anything ticked may be sent to the client.</p>
+                {backupPrompt.error && <div className="banner banner-error">{backupPrompt.error}</div>}
+                <div className="backup-records">
+                  {backupPrompt.records.map(r => (
+                    <div className="backup-record" key={`${r.kind}:${r.id}`}>
+                      <div className="backup-record-title">{r.title}</div>
+                      {r.kind === 'cm' && !r.hasSubInvoice && (
+                        <div className="backup-record-note">No sub invoice yet: only the commitment's own documents.</div>
+                      )}
+                      {r.files.length === 0 && <div className="backup-record-note">No files on this record.</div>}
+                      {r.files.map(f => (
+                        <label className="backup-file" key={backupKey(f)}>
+                          <input type="checkbox" checked={backupPicked.has(backupKey(f))} onChange={() => toggleBackup(f)} />
+                          <span className="backup-file-name" title={f.name}>{f.name}</span>
+                          <span className="backup-file-label">{f.label}</span>
+                          <a href={f.url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}>Open</a>
+                        </label>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+                <div className="warn-modal-buttons">
+                  <button className="cancel-btn" onClick={() => setBackupPrompt({ ...backupPrompt, stage: 'ask' })}>Back</button>
+                  <button className="generate-btn" onClick={continueWithBackups}>
+                    {backupPicked.size ? `Attach ${backupPicked.size} & continue` : 'Continue without backup'}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

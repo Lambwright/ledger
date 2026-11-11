@@ -11,8 +11,8 @@
 // Invoice attachments go on by multipart PATCH with a top-level attachments[]
 // field (api-directory, 2026-10-28). A Change Order ignores that: it takes
 // Procore's two-step upload, then a JSON PATCH of upload_ids (2026-11-05).
-// Direct cost and commitment backup is NOT attached (Ben: those are marked up;
-// backup only on request).
+// Direct cost and commitment backup is only attached when the PM picks it
+// (attachChosenBackup below, 2026-11-11): those are marked up.
 // Never fails the invoice or CO: problems come back as a progress-log message.
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { procoreRequest, procoreUpload, procoreDownload } from './procore.js';
@@ -213,6 +213,51 @@ async function uploadFile(env, projectId, f) {
   return created.data.uuid;
 }
 
+// Uploads files to an invoice (contractId + invoiceId) or a Change Order (changeOrderId) in batches as they
+// come in, so neither one request nor the worker's memory (128MB; a ticket can carry 20+ phone photos)
+// gets too big. add() a file at a time, then flush() once at the end.
+function makeUploader(env, { projectId, contractId, invoiceId, changeOrderId }) {
+  const problems = [];
+  let attached = 0;
+  let batch = [];
+  let size = 0;
+  const send = async (files) => {
+    if (changeOrderId) {
+      const uploadIds = [];
+      for (const f of files) uploadIds.push(await uploadFile(env, projectId, f));
+      // upload_ids adds to what's already on the CO, it doesn't replace it.
+      return withRetry(() => procoreRequest(env, 'PATCH', `/rest/v1.0/projects/${projectId}/prime_change_orders/${changeOrderId}`, {
+        change_order: { upload_ids: uploadIds }
+      }));
+    }
+    // A fresh form per attempt: a sent FormData body can't be reused.
+    return withRetry(() => {
+      const form = new FormData();
+      form.append('project_id', String(projectId));
+      for (const f of files) form.append('attachments[]', new Blob([f.bytes], { type: f.type }), f.name);
+      return procoreUpload(env, 'PATCH', `/rest/v1.0/prime_contracts/${contractId}/payment_applications/${invoiceId}?project_id=${projectId}`, form);
+    });
+  };
+  const flush = async () => {
+    if (batch.length === 0) return;
+    try {
+      const res = await send(batch);
+      if (res.status === 200) attached += batch.length;
+      else problems.push(`upload ${res.status}`);
+    } catch (e) {
+      problems.push(`upload ${e.message}`);
+    }
+    batch = [];
+    size = 0;
+  };
+  const add = async (f) => {
+    if (size + f.bytes.length > MAX_BATCH_BYTES) await flush();
+    batch.push(f);
+    size += f.bytes.length;
+  };
+  return { add, flush, problems, attachedCount: () => attached };
+}
+
 // Pass contractId + invoiceId for an invoice, or changeOrderId for a Change Order.
 export async function attachTicketBackup(env, { projectId, contractId, invoiceId, changeOrderId, entryIds, onProgress = () => {} }) {
   const ids = [...new Set((entryIds || []).map(String))];
@@ -235,46 +280,7 @@ export async function attachTicketBackup(env, { projectId, contractId, invoiceId
         : '';
       return (fallbackData = { timecards, materials, projectName });
     };
-    const problems = [];
-    // Upload in batches as files come in, so neither a single request nor the
-    // worker's memory (128MB — a ticket can carry 20+ phone photos) gets too big.
-    let attached = 0;
-    let batch = [];
-    let size = 0;
-    const send = async (files) => {
-      if (changeOrderId) {
-        const uploadIds = [];
-        for (const f of files) uploadIds.push(await uploadFile(env, projectId, f));
-        // upload_ids adds to what's already on the CO, it doesn't replace it.
-        return withRetry(() => procoreRequest(env, 'PATCH', `/rest/v1.0/projects/${projectId}/prime_change_orders/${changeOrderId}`, {
-          change_order: { upload_ids: uploadIds }
-        }));
-      }
-      // A fresh form per attempt: a sent FormData body can't be reused.
-      return withRetry(() => {
-        const form = new FormData();
-        form.append('project_id', String(projectId));
-        for (const f of files) form.append('attachments[]', new Blob([f.bytes], { type: f.type }), f.name);
-        return procoreUpload(env, 'PATCH', `/rest/v1.0/prime_contracts/${contractId}/payment_applications/${invoiceId}?project_id=${projectId}`, form);
-      });
-    };
-    const flush = async () => {
-      if (batch.length === 0) return;
-      try {
-        const res = await send(batch);
-        if (res.status === 200) attached += batch.length;
-        else problems.push(`upload ${res.status}`);
-      } catch (e) {
-        problems.push(`upload ${e.message}`);
-      }
-      batch = [];
-      size = 0;
-    };
-    const add = async (f) => {
-      if (size + f.bytes.length > MAX_BATCH_BYTES) await flush();
-      batch.push(f);
-      size += f.bytes.length;
-    };
+    const { add, flush, problems, attachedCount } = makeUploader(env, { projectId, contractId, invoiceId, changeOrderId });
     for (const entry of entries.filter(e => ids.includes(String(e.id))).sort((a, b) => a.number - b.number)) {
       // Procore's own ticket PDF (the same one as Export in Procore) already
       // shows the photos and signatures, so only non-image files go alongside it.
@@ -309,6 +315,7 @@ export async function attachTicketBackup(env, { projectId, contractId, invoiceId
       }
     }
     await flush();
+    const attached = attachedCount();
     onProgress({
       message: problems.length
         ? `Attached ${attached} backup file(s); couldn't attach: ${problems.join('; ')}`
@@ -317,6 +324,110 @@ export async function attachTicketBackup(env, { projectId, contractId, invoiceId
     return { attached, problems };
   } catch (e) {
     onProgress({ message: `Couldn't attach the T&M ticket backup (the ${target} itself is fine): ${e.message}` });
+    return { attached: 0, problems: [e.message] };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Optional backup for direct costs and commitments (Ben, 2026-11-11). Unlike T&M, it's only attached when
+// the PM picks it, after a warning that attachments may go to the client automatically. For a commitment
+// the sub's invoices come first (the real backup), then the commitment's own documents for when the sub
+// hasn't invoiced yet. Files are always looked up again here: the browser only says which file it wants.
+// ---------------------------------------------------------------------------
+
+const fileList = (attachments) => (attachments || [])
+  .map((a) => ({ fileId: String(a.id), name: a.name || a.filename || 'File', url: a.url || a.presentation_url || null, type: a.content_type || null }))
+  .filter((f) => f.fileId && f.url);
+const subInvoiceCommitmentId = (s) => String(s.commitment_id ?? s.contract_id ?? s.contract?.id ?? s.commitment?.id ?? '');
+
+async function readCommitment(env, projectId, id) {
+  for (const type of ['work_order_contracts', 'purchase_order_contracts']) {
+    const res = await withRetry(() => procoreRequest(env, 'GET', `/rest/v1.0/${type}/${id}?project_id=${projectId}`));
+    if (res.status === 200) return res.data;
+  }
+  return null;
+}
+
+// For the backup picker: every file on the selected direct costs and commitments, grouped per record.
+export async function listBackupFiles(env, { projectId, directCostIds = [], commitmentIds = [] }) {
+  const records = [];
+  for (const id of [...new Set(directCostIds.map(String))]) {
+    const res = await withRetry(() => procoreRequest(env, 'GET', `/rest/v1.0/projects/${projectId}/direct_costs/${id}`));
+    const dc = res.status === 200 ? res.data : null;
+    records.push({
+      kind: 'dc', id,
+      title: [dc?.vendor_name || dc?.vendor?.name, String(dc?.description || '').trim()].filter(Boolean).join(' - ') || `Direct Cost #${id}`,
+      files: fileList(dc?.attachments).map((f) => ({ ...f, source: 'dc', recordId: id, label: 'Direct Cost' }))
+    });
+  }
+  const cmIds = [...new Set(commitmentIds.map(String))];
+  if (cmIds.length) {
+    const subInvoices = await getAll(env, `/rest/v1.0/requisitions?project_id=${projectId}`).catch(() => []);
+    for (const id of cmIds) {
+      const c = await readCommitment(env, projectId, id);
+      const subFiles = subInvoices.filter((s) => subInvoiceCommitmentId(s) === id).flatMap((s) =>
+        fileList(s.attachments).map((f) => ({ ...f, source: 'sub_invoice', recordId: String(s.id), label: `Sub invoice #${s.number ?? s.invoice_number ?? s.id}` })));
+      records.push({
+        kind: 'cm', id,
+        // A single commitment names its sub as vendor.company (the list uses vendor.name).
+        title: [c?.vendor?.name || c?.vendor?.company, c?.number].filter(Boolean).join(' — ') || `Commitment #${id}`,
+        hasSubInvoice: subFiles.length > 0,
+        files: [...subFiles, ...fileList(c?.attachments).map((f) => ({ ...f, source: 'commitment', recordId: id, label: 'Commitment' }))]
+      });
+    }
+  }
+  return records;
+}
+
+// Attaches the PM's picks: [{ source: 'dc' | 'sub_invoice' | 'commitment', recordId, fileId }]. Only files on
+// records in this billing run are allowed (allowedDcIds / allowedCmIds); a sub invoice counts if its
+// commitment is in the run. Like the T&M backup, never fails the invoice or CO.
+export async function attachChosenBackup(env, { projectId, contractId, invoiceId, changeOrderId, picks = [], allowedDcIds = [], allowedCmIds = [], onProgress = () => {} }) {
+  if (!Array.isArray(picks) || picks.length === 0 || !(changeOrderId || (contractId && invoiceId))) return { attached: 0, problems: [] };
+  const target = changeOrderId ? 'Change Order' : 'invoice';
+  const dcOk = new Set(allowedDcIds.map(String));
+  const cmOk = new Set(allowedCmIds.map(String));
+  try {
+    onProgress({ message: `Attaching ${picks.length} chosen backup file(s) for direct costs / commitments…` });
+    const { add, flush, problems, attachedCount } = makeUploader(env, { projectId, contractId, invoiceId, changeOrderId });
+    const cache = new Map(); // `${source}:${recordId}` -> its files
+    const filesOf = async (source, recordId) => {
+      const key = `${source}:${recordId}`;
+      if (cache.has(key)) return cache.get(key);
+      let files = [];
+      if (source === 'dc' && dcOk.has(recordId)) {
+        const res = await withRetry(() => procoreRequest(env, 'GET', `/rest/v1.0/projects/${projectId}/direct_costs/${recordId}`));
+        if (res.status === 200) files = fileList(res.data.attachments);
+      } else if (source === 'commitment' && cmOk.has(recordId)) {
+        files = fileList((await readCommitment(env, projectId, recordId))?.attachments);
+      } else if (source === 'sub_invoice') {
+        const res = await withRetry(() => procoreRequest(env, 'GET', `/rest/v1.0/requisitions/${recordId}?project_id=${projectId}`));
+        if (res.status === 200 && cmOk.has(subInvoiceCommitmentId(res.data))) files = fileList(res.data.attachments);
+      }
+      cache.set(key, files);
+      return files;
+    };
+    for (const pick of picks) {
+      const source = String(pick?.source || '');
+      const recordId = String(pick?.recordId || '');
+      const file = (await filesOf(source, recordId)).find((f) => f.fileId === String(pick?.fileId || ''));
+      if (!file) { problems.push(`a file that isn't on a record in this billing run (${source} ${recordId})`); continue; }
+      try {
+        await add({ name: file.name, type: file.type || 'application/octet-stream', bytes: await fetchBytes(file.url) });
+      } catch (e) {
+        problems.push(`"${file.name}": ${e.message}`);
+      }
+    }
+    await flush();
+    const attached = attachedCount();
+    onProgress({
+      message: problems.length
+        ? `Attached ${attached} chosen backup file(s); couldn't attach: ${problems.join('; ')}`
+        : `Attached ${attached} chosen backup file(s)`
+    });
+    return { attached, problems };
+  } catch (e) {
+    onProgress({ message: `Couldn't attach the chosen backup (the ${target} itself is fine): ${e.message}` });
     return { attached: 0, problems: [e.message] };
   }
 }

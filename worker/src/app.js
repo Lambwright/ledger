@@ -5,7 +5,7 @@
 import { procoreRequest } from './procore.js';
 import { dbQuery } from './db.js';
 import { ensureBulkSchema, ensureMaterialSchema } from './schema.js';
-import { attachTicketBackup } from './ticketbackup.js';
+import { attachTicketBackup, attachChosenBackup } from './ticketbackup.js';
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -4308,7 +4308,7 @@ export async function previewCombinedBilling(env, {
 export async function pushCombinedToDraftCO(env, {
   tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [], materialLines = [],
   lineOrder = null, userId, primeContractId, confirmUnlinked, groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines,
-  cmGroupBy, editedCmLines, title, onProgress = () => {}
+  cmGroupBy, editedCmLines, title, backupFiles = [], onProgress = () => {}
 }) {
   const { tmEntries, tmLineItems, dcLineItems, cmLineItems, mtLineItems, contractId, changeEventId, changeOrderId, totalAmount, label } =
     await buildCombinedChangeEventAndOrder(env, {
@@ -4335,6 +4335,10 @@ export async function pushCombinedToDraftCO(env, {
     projectId, changeOrderId, onProgress,
     entryIds: [...tmEntries.map(e => e.id), ...(mtLineItems || []).map(l => l.entryId)]
   });
+  await attachChosenBackup(env, {
+    projectId, changeOrderId, onProgress, picks: backupFiles,
+    allowedDcIds: dcLineItems.map(l => l.directCostId), allowedCmIds: cmLineItems.map(l => l.commitmentId)
+  });
 
   return { contractId, changeEventId, changeOrderId, totalAmount, linesPushed: tmLineItems.length + dcRows.length, label };
 }
@@ -4347,7 +4351,7 @@ export async function pushCombinedToDraftCO(env, {
 export async function generateCombinedInvoice(env, {
   tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [], materialLines = [],
   lineOrder = null, userId, primeContractId, confirmUnlinked, groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines,
-  cmGroupBy, editedCmLines, title, billingPeriodId, newBillingPeriod, invoiceNumber, billingDate, onProgress = () => {}
+  cmGroupBy, editedCmLines, title, billingPeriodId, newBillingPeriod, invoiceNumber, billingDate, backupFiles = [], onProgress = () => {}
 }) {
   if (!billingDate) {
     throw new Error('billingDate is required');
@@ -4388,6 +4392,11 @@ export async function generateCombinedInvoice(env, {
   await attachTicketBackup(env, {
     projectId, contractId, invoiceId: invoice.id, onProgress,
     entryIds: [...tmEntries.map(e => e.id), ...(mtLineItems || []).map(l => l.entryId)]
+  });
+  // Direct cost / commitment backup the PM chose, after the client warning (2026-11-11).
+  await attachChosenBackup(env, {
+    projectId, contractId, invoiceId: invoice.id, onProgress, picks: backupFiles,
+    allowedDcIds: dcLineItems.map(l => l.directCostId), allowedCmIds: cmLineItems.map(l => l.commitmentId)
   });
 
   return {
@@ -4453,7 +4462,7 @@ export async function generateStandaloneInvoice(env, {
   tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [], materialLines = [],
   lineOrder = null, userId, primeContractId, confirmUnlinked, groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines,
   cmGroupBy, editedCmLines, title, billingPeriodId, newBillingPeriod, invoiceNumber, billingDate, ownerVendorId = null,
-  accountingMethod = 'unit', contractorId = null, architectId = null, onProgress = () => {}
+  accountingMethod = 'unit', contractorId = null, architectId = null, backupFiles = [], onProgress = () => {}
 }) {
   if (!billingDate) {
     throw new Error('billingDate is required');
@@ -4626,6 +4635,10 @@ export async function generateStandaloneInvoice(env, {
   await attachTicketBackup(env, {
     projectId, contractId, invoiceId: invoice.id, onProgress,
     entryIds: [...(tm?.entries || []).map(e => e.id), ...(mt?.lineItems || []).map(l => l.entryId)]
+  });
+  await attachChosenBackup(env, {
+    projectId, contractId, invoiceId: invoice.id, onProgress, picks: backupFiles,
+    allowedDcIds: (dc?.lineItems || []).map(l => l.directCostId), allowedCmIds: (cm?.lineItems || []).map(l => l.commitmentId)
   });
 
   return {
