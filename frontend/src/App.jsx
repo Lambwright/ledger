@@ -1207,7 +1207,7 @@ export default function App({ user, onSignOut }) {
     }
     const uncoded = [...(previewDcLines || []), ...(previewCmLines || [])].filter(l => !l.wbsCodeId);
     if (uncoded.length > 0) {
-      setError(`Pick a revenue code for ${uncoded.length} line(s) first: ${uncoded.map(l => `"${l.description}"`).join('; ')}.`);
+      setError(`Pick a revenue cost code for ${uncoded.length} line(s) first: ${uncoded.map(l => `"${l.description}"`).join('; ')}.`);
       return;
     }
     setGenerating(true);
@@ -3240,17 +3240,17 @@ export default function App({ user, onSignOut }) {
                                       <select
                                         className={line.wbsCodeId ? '' : 'needs-code'}
                                         value={line.wbsCodeId ?? ''}
-                                        aria-label={`Revenue code for ${line.description}`}
+                                        aria-label={`Revenue cost code for ${line.description}`}
                                         onChange={e => updateDesc(i, 'wbsCodeId', e.target.value)}
                                       >
-                                        <option value="" disabled>{budgetCodes == null ? 'Loading codes…' : 'Pick a revenue code…'}</option>
+                                        <option value="" disabled>{budgetCodes == null ? 'Loading codes…' : 'Pick a revenue cost code…'}</option>
                                         {line.wbsCodeId && !revenueCodes.some(c => c.id === String(line.wbsCodeId)) && (
                                           <option value={line.wbsCodeId}>{line.code || 'Current code'}</option>
                                         )}
                                         {revenueCodes.map(c => <option key={c.id} value={c.id}>{c.code} — {c.name}</option>)}
                                       </select>
                                       {!line.wbsCodeId && line.codeProblem && (
-                                        <div className="code-problem">{line.codeProblem}, so it can't go on an invoice. Pick a revenue code.</div>
+                                        <div className="code-problem">{line.codeProblem}. Pick a revenue cost code.</div>
                                       )}
                                     </div>
                                   )}

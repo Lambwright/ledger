@@ -3175,12 +3175,12 @@ export async function listBudgetCodes(env, { projectId }) {
 // revenue code. Every other code passes through (Ben chose that over "only 55/56/62"). Returns why a code
 // can't be invoiced, or null. An unreadable code counts as a problem: better a blank than a guess.
 function revenueCodeProblem(flatCode) {
+  // Ben's wording (2026-11-11): nobody says "revenue code", so it's "revenue cost code".
   const full = String(flatCode || '').trim();
-  if (!full) return "LEDGER couldn't read its code";
+  if (!full) return "LEDGER couldn't read this line's cost code";
   const [costCode, ...rest] = full.split('.');
   const costType = rest.length ? rest[rest.length - 1].trim().toUpperCase() : '';
-  if (costCode.trim().split('-')[0] === '59') return `${full} is a cost code (59 series)`;
-  if (costType === 'S') return `${full} has the Commitment (S) cost type`;
+  if (costCode.trim().split('-')[0] === '59' || costType === 'S') return `This cost code (${full}) and/or cost type is not billable`;
   return null;
 }
 
@@ -3195,9 +3195,9 @@ async function applyRevenueCodeRules(env, projectId, coLines, editedLines, { pre
     const pick = picks[i];
     if (pick && pick !== String(line.wbsCodeId)) {
       const chosen = codes.get(pick);
-      if (!chosen) throw new Error(`"${line.description}": that revenue code isn't on this project's budget. Pick another.`);
+      if (!chosen) throw new Error(`"${line.description}": that cost code isn't on this project's budget. Pick another.`);
       const problem = revenueCodeProblem(chosen.code);
-      if (problem) throw new Error(`"${line.description}": ${problem}, so it can't go on an invoice. Pick a revenue code.`);
+      if (problem) throw new Error(`"${line.description}": ${problem}. Pick a revenue cost code.`);
       Object.assign(line, { wbsCodeId: chosen.id, wbsFlatCode: chosen.code, codeProblem: null });
       return;
     }
@@ -3207,7 +3207,7 @@ async function applyRevenueCodeRules(env, projectId, coLines, editedLines, { pre
   if (!preview) {
     const missing = coLines.filter(l => !l.wbsCodeId);
     if (missing.length) {
-      throw new Error(`Pick a revenue code for ${missing.length} line(s) first: ${missing.map(l => `"${l.description}" (${l.codeProblem})`).join('; ')}.`);
+      throw new Error(`Pick a revenue cost code for ${missing.length} line(s) first: ${missing.map(l => `"${l.description}" (${l.codeProblem})`).join('; ')}.`);
     }
   }
 }
@@ -3251,7 +3251,7 @@ async function computeMaterialLines(env, { tenantId, projectId, materialLines = 
     const code = codeById.get(String(sel.wbsCodeId));
     if (!code) throw new Error(`Pick a budget code for "${label}" — it has to be one on this project's budget.`);
     const codeProblem = revenueCodeProblem(code.code);
-    if (codeProblem) throw new Error(`"${label}": ${codeProblem}, so it can't go on an invoice. Pick a revenue code.`);
+    if (codeProblem) throw new Error(`"${label}": ${codeProblem}. Pick a revenue cost code.`);
     const ticket = ticketNumber.get(String(m.time_and_material_entry_id));
     const description = String(sel.description || '').trim() || `${label}${ticket != null ? ` — T&M #${ticket}` : ''}`;
     return {
