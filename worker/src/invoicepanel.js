@@ -127,7 +127,7 @@ async function describeRecords(env, projectId, rows) {
     const ticketItem = (entryId) => {
       const e = entries.get(String(entryId));
       return e
-        ? { kind: 'tm', groupKey: `tm:${e.id}`, title: `T&M #${e.number}`, subtitle: [e.date, firstLine(e.description)].filter(Boolean).join(' · ') || null, files: filesOf(e.time_and_material_entry_attachments, 'Ticket'), ticketPdfOnInvoice: true }
+        ? { kind: 'tm', groupKey: `tm:${e.id}`, procoreId: String(e.id), title: `T&M #${e.number}`, subtitle: [e.date, firstLine(e.description)].filter(Boolean).join(' · ') || null, files: filesOf(e.time_and_material_entry_attachments, 'Ticket'), ticketPdfOnInvoice: true }
         : { kind: 'tm', groupKey: 'tm:missing', title: 'T&M ticket (no longer in Procore)', files: [] };
     };
     const entryOfTimecard = new Map(listOf(timecardsRes).map((tc) => [timecardKey(tc), tc.time_and_material_entry?.id]));
@@ -149,6 +149,7 @@ async function describeRecords(env, projectId, rows) {
     items.set(`dc:${id}`, dc
       ? {
           kind: 'dc',
+          procoreId: String(id),
           subtitle: [dc.invoice_number ? `#${dc.invoice_number}` : null, dc.direct_cost_date].filter(Boolean).join(' · ') || null,
           title: firstLine([dc.vendor_name || dc.vendor?.name, String(dc.description || '').trim()].filter(Boolean).join(' - ')) || `Direct Cost #${id}`,
           files: filesOf(dc.attachments, 'Direct Cost')
@@ -165,12 +166,15 @@ async function describeRecords(env, projectId, rows) {
       const subFiles = subInvoicesOf(id).flatMap((s) => filesOf(s.attachments, `Sub invoice #${s.number ?? s.invoice_number ?? s.id}`));
       if (i >= MAX_FETCH) { items.set(`cm:${id}`, { kind: 'cm', title: `Commitment #${id}`, files: subFiles }); continue; }
       let c = null;
+      let commitmentType = null;
       for (const type of ['work_order_contracts', 'purchase_order_contracts']) {
         const res = await get(env, `/rest/v1.0/${type}/${id}?project_id=${projectId}`);
-        if (res.status === 200) { c = res.data; break; }
+        if (res.status === 200) { c = res.data; commitmentType = type; break; }
       }
       items.set(`cm:${id}`, {
         kind: 'cm',
+        procoreId: c ? String(id) : null,
+        commitmentType,
         title: c ? [c.vendor?.name, c.number].filter(Boolean).join(' — ') || `Commitment #${id}` : `Commitment #${id}`,
         subtitle: c?.title || null,
         files: [...subFiles, ...filesOf(c?.attachments, 'Commitment')]

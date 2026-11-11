@@ -1731,7 +1731,7 @@ export default function App({ user, onSignOut }) {
 
   // On an owner invoice in Procore, the panel opens on what LEDGER knows about that invoice.
   if (EMBEDDED && isInvoiceView(procoreView) && projectId && procoreRecordId && !showFullLedger) {
-    return <InvoicePanel projectId={projectId} invoiceId={procoreRecordId} onOpenLedger={() => setShowFullLedger(true)} />;
+    return <InvoicePanel projectId={projectId} invoiceId={procoreRecordId} procoreOrigin={procoreOrigin} onOpenLedger={() => setShowFullLedger(true)} />;
   }
 
   return (
@@ -1805,7 +1805,11 @@ export default function App({ user, onSignOut }) {
           Billing to Prime Contract <strong>{contracts[0].title || `#${contracts[0].number}`}</strong>.
         </div>
       ) : tickets && (
-        <div className="banner banner-warning">No Prime Contract found on this project — billing will fail.</div>
+        // Ben's wording (2026-11-11): with no Prime Contract, Create Invoice makes a standalone one.
+        <div className="banner banner-warning">
+          No Prime Contract to add a Change Order to. Confirm there's no Purchase Order to create a Prime Contract
+          against. If there isn't, LEDGER will create a standalone invoice.
+        </div>
       )}
 
       {bulkRecon?.status === 'done' && (
