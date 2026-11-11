@@ -2014,21 +2014,42 @@ async function approveAndInvoiceChangeOrder(env, {
   }
 
   const claimedIds = new Set();
-  let claimedCount = 0;
+  const claimed = []; // { row, line } Procore answered 200 for
   const failedLines = [];
   for (const line of coLines) {
     const row = ownRows.find(r => !claimedIds.has(r.id) && Math.abs(Number(r.scheduled_value) - line.amount) < 0.01);
     if (!row) { failedLines.push(line.description); continue; }
     claimedIds.add(row.id);
+    // A unit contract records nothing without a quantity. Only T&M lines carry `hours`, so commitment and
+    // material lines used to send quantity "undefined": Procore answered 200 and claimed $0 (2026-11-11,
+    // invoice 562949954801717 on 2026_0373). Use the line's own quantity, else the row's scheduled one.
+    const quantity = line.hours ?? line.quantity ?? Number(row.scheduled_quantity ?? 1);
     const r = await claimLine(
       `/rest/v1.0/prime_contracts/${contractId}/payment_application_line_items/${row.id}`,
-      line.amount, line.hours
+      line.amount, quantity
     );
     await throttleForRateLimit(r.headers, onProgress);
     if (r.status === 200) {
-      claimedCount++;
+      claimed.push({ row, line });
     } else {
       failedLines.push(line.description);
+    }
+  }
+
+  // A 200 isn't proof: read the invoice back and count a line as claimed only if its amount really landed.
+  let claimedCount = claimed.length;
+  if (claimed.length > 0) {
+    const check = await getWithRetry(`/rest/v1.0/payment_applications/${invoice.id}?project_id=${projectId}`);
+    if (check.status === 200) {
+      const now = new Map((check.data.g703 || []).map(r => [String(r.id), r]));
+      claimedCount = 0;
+      for (const { row, line } of claimed) {
+        const landed = Number(now.get(String(row.id))?.work_completed_this_period ?? 0);
+        if (Math.abs(landed - line.amount) < 0.01) claimedCount++;
+        else failedLines.push(`${line.description} (Procore accepted the claim but shows $${landed.toFixed(2)} of $${line.amount.toFixed(2)})`);
+      }
+    } else {
+      onProgress({ message: `Couldn't read the invoice back to confirm the claims (${check.status}) — check them in Procore.` });
     }
   }
   if (failedLines.length > 0) {

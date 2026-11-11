@@ -1810,7 +1810,7 @@ export default function App({ user, onSignOut }) {
           {result.unclaimedLines?.length > 0 ? (
             <>
               {' '}Only <strong>{result.claimedCount} of {result.totalCoLines}</strong> {result.standalone ? 'invoice' : 'Change Order'} line(s) got claimed to 100%
-              — the rest need it done by hand in Procore (likely rate-limited): {result.unclaimedLines.join('; ')}.
+              — enter the rest at 100% by hand in Procore: {result.unclaimedLines.join('; ')}.
             </>
           ) : (
             <> Every line is claimed at 100%, but it's still a <strong>draft</strong> in Procore — submit it there when ready.</>
