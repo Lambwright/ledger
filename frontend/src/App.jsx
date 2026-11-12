@@ -493,6 +493,12 @@ export default function App({ user, onSignOut }) {
   const hasApprovedPc = contracts.some(c => c.status === 'Approved');
   const noPcInvoice = action === 'invoice' && !hasApprovedPc;
   const noPcDraft = action === 'draft' && !hasApprovedPc;
+  // Procore refuses a CO on a contract that isn't Approved (e.g. a Draft
+  // pass-thru contract LEDGER was opened from). A standalone invoice only
+  // borrows the contract's client, so that's fine.
+  const selectedContract = contracts.find(c => String(c.id) === String(contractId)) || null;
+  const contractBlocksCo = !!(hasApprovedPc && selectedContract && selectedContract.status !== 'Approved' &&
+    (action === 'invoice' || action === 'draft') && !(action === 'invoice' && standalone));
   // A fresh project starts with no customer context.
   useEffect(() => {
     setBillingCtx(null); setOwnerVendorId(''); setNoPcConfirmed(false);
@@ -3069,7 +3075,7 @@ export default function App({ user, onSignOut }) {
                       </div>
                     )}
 
-                    {!hasApprovedPc ? null : contracts.length > 1 && contractFromProcore ? (
+                    {!hasApprovedPc ? null : contracts.length > 1 && contractFromProcore && !contractBlocksCo ? (
                       <div className="action-bar-field">
                         <span>Prime Contract</span>
                         <div className="locked-contract">
@@ -3091,6 +3097,11 @@ export default function App({ user, onSignOut }) {
                           ))}
                         </select>
                       </label>
+                    )}
+                    {contractBlocksCo && (
+                      <div className="settings-hint warn-text">
+                        This contract is {selectedContract.status}. Procore only takes a Change Order on an Approved contract, so approve it in Procore first or pick another one.
+                      </div>
                     )}
 
                     {/* Ben's ask 2026-09-22: override the auto-generated

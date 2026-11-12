@@ -1361,6 +1361,7 @@ body {
 }
 
 .settings-buttons { margin-top: 8px; }
+.settings-hint.warn-text { color: var(--danger); }
 
 /* ---- "Already Billed" (Ben's ask 2026-09-25): green, listed first ---- */
 

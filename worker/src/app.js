@@ -1196,6 +1196,19 @@ async function findBillableContract(env, projectId) {
   return candidate.id;
 }
 
+// Procore only takes a Change Order on an Approved Prime Contract (2026-11-11:
+// 400 "Contract is not Approved" on a Draft pass-thru contract the PM opened
+// LEDGER from). Check before the Change Event is built, so a refusal leaves
+// nothing to roll back and says what to do. No chosen contract = LEDGER picks
+// an Approved one itself, so nothing to check.
+async function assertContractTakesChangeOrders(env, projectId, primeContractId) {
+  if (!primeContractId) return;
+  const contract = (await findPrimeContracts(env, projectId)).find(c => String(c.id) === String(primeContractId));
+  if (!contract || contract.status === 'Approved') return;
+  const name = `Prime Contract #${contract.number ?? contract.id}${contract.title ? ` "${contract.title}"` : ''}`;
+  throw new Error(`${name} is ${contract.status}, and Procore only takes a Change Order on an Approved contract. Approve it in Procore, or pick another contract. Nothing was created.`);
+}
+
 // Exported for the frontend's billing-period picker — same reasoning as
 // listPrimeContracts: an auto-pick is fine when there's one obvious answer,
 // ambiguous otherwise, and worth letting the PM see/choose explicitly since
@@ -1664,6 +1677,7 @@ async function buildChangeEventAndOrder(env, {
   // created something, so a retry can't double up a CE, a CO, or a line
   // item. This is a per-call retry only, not a whole-pipeline retry — it
   // never re-runs a step that already succeeded.
+  await assertContractTakesChangeOrders(env, projectId, primeContractId);
   const ceRes = await requestWithRetry(env, 'POST', `/rest/v1.1/change_events?project_id=${projectId}`, {
     change_event: {
       title: label,
@@ -2785,6 +2799,7 @@ async function buildDirectCostChangeEventAndOrder(env, {
   // (unit_of_measure 'LS' — lump sum) since these are dollar costs, not hours.
   // Retries on 429 same as the CO line-item loop and generic build above —
   // see buildChangeEventAndOrder's comment for the full reasoning.
+  await assertContractTakesChangeOrders(env, projectId, primeContractId);
   const ceRes = await requestWithRetry(env, 'POST', `/rest/v1.1/change_events?project_id=${projectId}`, {
     change_event: {
       title: label,
@@ -3713,6 +3728,7 @@ async function buildCommitmentChangeEventAndOrder(env, {
     tenantId, projectId, commitmentIds, commitmentLineIds, markupPercent, groupBy, editedLines, onProgress
   });
 
+  await assertContractTakesChangeOrders(env, projectId, primeContractId);
   const ceRes = await requestWithRetry(env, 'POST', `/rest/v1.1/change_events?project_id=${projectId}`, {
     change_event: {
       title: label,
@@ -4164,6 +4180,7 @@ async function buildCombinedChangeEventAndOrder(env, {
   // list so both sources land on ONE Change Event.
   // Retries on 429 — see buildChangeEventAndOrder's comment for the full
   // reasoning (safe: a 429 means rejected, never partially created).
+  await assertContractTakesChangeOrders(env, projectId, primeContractId);
   const ceRes = await requestWithRetry(env, 'POST', `/rest/v1.1/change_events?project_id=${projectId}`, {
     change_event: {
       title: label,
