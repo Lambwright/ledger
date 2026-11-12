@@ -490,6 +490,17 @@ Real distribution across 567 Einbau projects: Contract 297, Time & Material 131,
 - **List:** `GET /rest/v1.0/contract_payments?project_id=&filters[contract_id]=` → 404. Use each invoice's `total_amount_paid` from `GET /rest/v1.0/payment_applications?project_id=` instead: it equals the sum of the payments linked to that invoice.
 - Payments carrying an ERP `origin_id` are created nightly at about 01:07 UTC by the ERP sync, not by LEDGER. LEDGER never creates or deletes payments. Delete (`DELETE /rest/v1.0/contract_payments/{id}?project_id=`, per third-party docs) is not verified.
 
+## Deleting a LEDGER invoice run: invoice, CO, CE, standalone contract (2026-11-11)
+
+Tested on Test Project 562949954996998 with LEDGER's `deleteRun` (`worker/src/invoicedelete.js`). Every record was confirmed gone afterwards: a GET on it returned 404.
+
+- **Owner invoice:** `DELETE /rest/v1.0/payment_applications/{id}?project_id=` → success on a draft invoice with claimed lines and a T&M PDF attached. The show has no `contract_id`; its contract is `contract.id`.
+- **Approved Prime Change Order:** `PATCH /rest/v1.0/projects/{pid}/prime_change_orders/{id}` with `{change_order: {status: "draft", executed: false}}`, then `DELETE` on the same path. A draft CO only needs the DELETE.
+- **Change Event:** `DELETE /rest/v1.1/change_events/{id}?project_id=`, after its CO is gone. The T&M ticket's `change_event` goes back to `null` by itself.
+- **Approved standalone Prime Contract:** v2.0 `PATCH .../prime_contracts/{id}` with `{status: "Draft", executed: false}`, then v2.0 `DELETE`. LEDGER only deletes a contract whose description contains "LEDGER-generated standalone invoice" and that has no other invoice on it.
+- **NetSuite check:** before anything is deleted, `origin_id` is read on the invoice, the CO's package (`change_order_packages/{legacy_package_id}`) and the standalone contract. Any value refuses the whole delete.
+- Not tried: deleting an invoice that's past draft (approved or sent) or ERP-synced.
+
 ## Where backup files live: commitments and sub invoices (2026-11-11)
 
 Read live on project 562949955464978 (2026_0373). Each file object is `{id, name, filename, url}`, and `url` is a signed `storage.procore.com` link that opens without auth.

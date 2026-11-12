@@ -386,6 +386,18 @@ export function invoiceDetail({ tenantId, projectId, invoiceId }) {
   return callAction('invoice_detail', { tenant_id: tenantId, project_id: projectId, invoice_id: invoiceId });
 }
 
+// Deleting a LEDGER invoice or draft CO run: the invoice, its CO/CE (or standalone contract), and its records
+// back to Unbilled (2026-11-11). Plan first (read-only), then delete.
+export function listLedgerRuns({ tenantId, projectId }) {
+  return callAction('list_ledger_runs', { tenant_id: tenantId, project_id: projectId });
+}
+export function planRunDeletion({ tenantId, projectId, invoiceId, changeOrderId }) {
+  return callAction('plan_run_deletion', { tenant_id: tenantId, project_id: projectId, invoice_id: invoiceId || null, change_order_id: changeOrderId || null });
+}
+export function deleteLedgerRun({ tenantId, projectId, invoiceId, changeOrderId }) {
+  return callAction('delete_ledger_run', { tenant_id: tenantId, project_id: projectId, invoice_id: invoiceId || null, change_order_id: changeOrderId || null });
+}
+
 export function listBudgetCodes({ projectId }) {
   return callAction('list_budget_codes', { project_id: projectId });
 }

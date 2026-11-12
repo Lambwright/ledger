@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import Loading from './Loading.jsx';
 import { invoiceDetail } from './api';
+import DeleteRunDialog from './DeleteRunDialog.jsx';
 
 // LEDGER in the Procore side panel on an owner invoice (Ben, 2026-11-11): who billed it, when, which records
 // built it, and each record's own files (signed links, fresh on every load), whether or not they were
@@ -85,9 +86,11 @@ function Section({ title, data, origin, projectId }) {
   );
 }
 
-export default function InvoicePanel({ projectId, invoiceId, procoreOrigin, onOpenLedger }) {
+export default function InvoicePanel({ projectId, invoiceId, procoreOrigin, onOpenLedger, canDelete }) {
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     let live = true;
@@ -97,7 +100,7 @@ export default function InvoicePanel({ projectId, invoiceId, procoreOrigin, onOp
       .then((d) => live && setDetail(d))
       .catch((e) => live && setError(e.message));
     return () => { live = false; };
-  }, [projectId, invoiceId]);
+  }, [projectId, invoiceId, reload]);
 
   const footer = <button className="cancel-btn invoice-panel-open" onClick={onOpenLedger}>Open LEDGER</button>;
 
@@ -106,7 +109,7 @@ export default function InvoicePanel({ projectId, invoiceId, procoreOrigin, onOp
   if (!detail.found) {
     return (
       <div className="invoice-panel">
-        <p className="invoice-panel-note">This page doesn't look like an owner invoice LEDGER can read.</p>
+        <p className="invoice-panel-note">This invoice is gone from Procore, or this page isn't an owner invoice LEDGER can read.</p>
         {footer}
       </div>
     );
@@ -123,8 +126,21 @@ export default function InvoicePanel({ projectId, invoiceId, procoreOrigin, onOp
       </header>
       {nothing && <p className="invoice-panel-note">LEDGER didn't build this invoice, and nothing has been marked as billed against it.</p>}
       <Section title="Built by LEDGER" data={detail.built} origin={procoreOrigin} projectId={projectId} />
+      {detail.built && canDelete?.(detail.built.by) && (
+        <button className="undo-link undo-link-danger invoice-panel-delete" onClick={() => setDeleting(true)}>
+          Delete this invoice…
+        </button>
+      )}
       <Section title="Marked as already billed on this invoice" data={detail.alreadyBilled} origin={procoreOrigin} projectId={projectId} />
       {footer}
+      {deleting && (
+        <DeleteRunDialog
+          projectId={projectId}
+          run={{ kind: 'invoice', invoiceId, invoiceNumber: inv.number }}
+          onClose={() => setDeleting(false)}
+          onDeleted={() => setReload((n) => n + 1)}
+        />
+      )}
     </div>
   );
 }

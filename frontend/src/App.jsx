@@ -5,12 +5,13 @@ import {
   previewCombinedBilling, generateCombinedInvoice, pushCombinedToDraftCO, getProjectSettings, saveProjectSettings, revertToUnbilled,
   revertMaterial, listBudgetCodes, getBillingContext, listBackupFiles,
   revertDirectCost, writeOffRecords, markAsBudgeted, markAlreadyBilled, directCostLineDetail, listCommitments, commitmentLineDetail, revertCommitment, saveProjectCounts,
-  getProjectReconciliation
+  getProjectReconciliation, listLedgerRuns
 } from './api';
 import { connectProcoreSidePanel, isEmbedded } from './procore';
 import { withTokenHash } from './auth';
 import ProjectPicker, { recentProjects } from './ProjectPicker';
 import InvoicePanel from './InvoicePanel.jsx';
+import DeleteRunDialog from './DeleteRunDialog.jsx';
 
 const MODE_LABEL = { tm: 'T&M', fixed_price: 'Fixed-Price', non_billable: 'Not Billable' };
 const TIME_TYPE_LABEL = { regular: 'Regular', overtime: 'Overtime', double_time: 'Double Time', per_diem: 'Per Diem' };
@@ -189,6 +190,10 @@ export default function App({ user, onSignOut }) {
   // says which kinds the signed-in user made. The worker re-checks on undo.
   const canUndoAnyone = ledgerLevel === 'admin';
   const canUndo = (rec, kind) => !viewOnly && (canUndoAnyone || rec?.myMarks?.[kind] === true);
+  // Deleting a whole LEDGER invoice run (2026-11-11) follows the same rule: admins any, others their own.
+  const canDeleteRun = (run) => !viewOnly && (canUndoAnyone || (run.by.length > 0 && run.by.every(b => b === user?.username)));
+  const [ledgerRuns, setLedgerRuns] = useState(null);
+  const [deleteRunTarget, setDeleteRunTarget] = useState(null);
 
   const [projectId, setProjectId] = useState(resolveProjectId(params));
   // Seasonal decorations (bats/cobwebs/snow by date) once the header is up.
@@ -221,6 +226,17 @@ export default function App({ user, onSignOut }) {
   // Review Project tabs (2026-09-24): 'unbilled' is the picker in
   // disposition-only mode; the other three are the billing history.
   const [reviewTab, setReviewTab] = useState('unbilled'); // 'unbilled' | 'billed' | 'writtenoff' | 'budgeted'
+  // The Billed tab lists LEDGER's own invoices / draft COs, each deletable in one go (2026-11-11).
+  const [runsVersion, setRunsVersion] = useState(0);
+  useEffect(() => {
+    if (action !== 'review' || reviewTab !== 'billed' || !projectId) return;
+    let live = true;
+    setLedgerRuns(null);
+    listLedgerRuns({ tenantId: TENANT_ID, projectId })
+      .then(r => live && setLedgerRuns(r.runs))
+      .catch(() => live && setLedgerRuns([]));
+    return () => { live = false; };
+  }, [action, reviewTab, projectId, runsVersion]);
 
   const [tickets, setTickets] = useState(null);
   const [directCosts, setDirectCosts] = useState(null); // { unbilled, billed }
@@ -1771,7 +1787,7 @@ export default function App({ user, onSignOut }) {
 
   // On an owner invoice in Procore, the panel opens on what LEDGER knows about that invoice.
   if (EMBEDDED && isInvoiceView(procoreView) && projectId && procoreRecordId && !showFullLedger) {
-    return <InvoicePanel projectId={projectId} invoiceId={procoreRecordId} procoreOrigin={procoreOrigin} onOpenLedger={() => setShowFullLedger(true)} />;
+    return <InvoicePanel projectId={projectId} invoiceId={procoreRecordId} procoreOrigin={procoreOrigin} onOpenLedger={() => setShowFullLedger(true)} canDelete={by => canDeleteRun({ by })} />;
   }
 
   return (
@@ -1958,6 +1974,33 @@ export default function App({ user, onSignOut }) {
           {reviewHeader}
 
           {loading && <Loading />}
+
+          {!loading && reviewTab === 'billed' && ledgerRuns?.length > 0 && (
+            <>
+              <div className="list-hint">Invoices &amp; draft COs built by LEDGER</div>
+              <div className="ticket-list">
+                {ledgerRuns.map(run => (
+                  <div className="ticket-card readonly run-card" key={run.invoiceId || `co:${run.changeOrderId}`}>
+                    <div className="ticket-card-header">
+                      <span className="ticket-number">{run.kind === 'invoice' ? `Invoice ${run.invoiceNumber ?? run.invoiceId}` : 'Draft Change Order'}</span>
+                      <span className="ticket-amount">{money(run.amount)}</span>
+                    </div>
+                    <div className="ticket-meta">
+                      {run.records} record{run.records === 1 ? '' : 's'} · {new Date(run.createdAt).toLocaleDateString('en-CA')}
+                      {run.by.length > 0 && ` · ${run.by.map(b => (/^\d+$/.test(b) ? 'Unknown' : b)).join(', ')}`}
+                    </div>
+                    {canDeleteRun(run) && (
+                      <div className="ticket-links">
+                        <button className="undo-link undo-link-danger" onClick={() => setDeleteRunTarget(run)}>
+                          {run.kind === 'invoice' ? 'Delete invoice…' : 'Delete draft CO…'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
 
           {!loading && reviewTab === 'billed' && billedTickets.length === 0 && billedDc.length === 0 && billedCm.length === 0 && (
             <div className="empty">Nothing billed from this project yet.</div>
@@ -3554,6 +3597,15 @@ export default function App({ user, onSignOut }) {
             </div>
           )}
         </>
+      )}
+
+      {deleteRunTarget && (
+        <DeleteRunDialog
+          projectId={projectId}
+          run={deleteRunTarget}
+          onClose={() => setDeleteRunTarget(null)}
+          onDeleted={() => { setRunsVersion(v => v + 1); load(projectId, { preserveResult: true }); }}
+        />
       )}
 
       {noPcPrompt && (

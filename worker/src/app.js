@@ -45,7 +45,7 @@ async function throttleForRateLimit(headers, onProgress) {
 // after a single wait-for-reset. Loops up to maxAttempts times (default 5),
 // each time waiting for Procore's own reported reset rather than guessing —
 // worst case is slow, never a silent partial failure.
-async function requestWithRetry(env, method, path, body, onProgress, maxAttempts = 5) {
+export async function requestWithRetry(env, method, path, body, onProgress, maxAttempts = 5) {
   const doRequest = () => procoreRequest(env, method, path, body);
   let r = await doRequest();
   for (let attempt = 1; r.status === 429 && attempt < maxAttempts; attempt++) {
@@ -381,7 +381,7 @@ async function reconcileStaleDraftCOs(env, tenantId, projectId) {
 // so deleting the parent row first would fail with a foreign-key violation
 // on any row that was actually written off. Harmless no-op when none of the
 // ids were ever written off (a DELETE matching zero rows is not an error).
-async function deleteLinkedWriteOffs(env, billingRecordIds) {
+export async function deleteLinkedWriteOffs(env, billingRecordIds) {
   if (billingRecordIds.length === 0) return;
   await dbQuery(env, `delete from write_offs where billing_record_id = any($1::uuid[])`, [billingRecordIds]);
 }

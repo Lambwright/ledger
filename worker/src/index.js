@@ -44,6 +44,7 @@ import { watchRefusals, einbauAppHeader, clientHeaders } from './security.js';
 import { monthFigures } from './hours.js';
 import { invoicePanelDetail } from './invoicepanel.js';
 import { listBackupFiles } from './ticketbackup.js';
+import { listLedgerRuns, planRunDeletion, deleteRun } from './invoicedelete.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -566,6 +567,32 @@ async function handleAction(env, body, ctx) {
       return json({ error: 'tenant_id, project_id, and invoice_id are required' }, 400);
     }
     return json(await invoicePanelDetail(env, { tenantId: tenant_id, projectId: project_id, invoiceId: invoice_id }), 200);
+  }
+
+  // Delete a LEDGER invoice / draft CO run (invoicedelete.js, 2026-11-11).
+  if (action === 'list_ledger_runs') {
+    const { tenant_id, project_id } = body;
+    if (!tenant_id || !project_id) return json({ error: 'tenant_id and project_id are required' }, 400);
+    return json({ runs: await listLedgerRuns(env, { tenantId: tenant_id, projectId: project_id }) }, 200);
+  }
+  if (action === 'plan_run_deletion' || action === 'delete_ledger_run') {
+    const { tenant_id, project_id, invoice_id, change_order_id } = body;
+    const idOk = (v) => v == null || /^\d{1,20}$/.test(String(v));
+    if (!tenant_id || !project_id || (!invoice_id && !change_order_id) || !idOk(invoice_id) || !idOk(change_order_id)) {
+      return json({ error: 'tenant_id, project_id, and an invoice_id or change_order_id are required' }, 400);
+    }
+    const args = {
+      tenantId: tenant_id, projectId: project_id,
+      invoiceId: invoice_id ? String(invoice_id) : null,
+      changeOrderId: invoice_id ? null : String(change_order_id),
+      // pm/accounting: only runs they billed (set server-side in the session branch).
+      onlyReconciledBy: body.only_reconciled_by ?? null
+    };
+    if (action === 'plan_run_deletion') return json(await planRunDeletion(env, args), 200);
+    const log = [];
+    const result = await deleteRun(env, { ...args, onProgress: (e) => log.push(e.message) });
+    console.log(`[delete-run] project ${project_id} ${invoice_id ? `invoice ${invoice_id}` : `draft CO ${change_order_id}`} by ${body.user_id || 'service'}: ${JSON.stringify(result)}`);
+    return json({ ...result, log }, 200);
   }
 
   if (action === 'ticket_detail') {
