@@ -572,3 +572,13 @@ Verified live on the test project (contract #8, invoice 9) through `generateStan
 - Unit contract lines: `POST .../prime_contracts/{id}/line_items` with `{description, quantity, unit_cost, uom, wbs_code_id}`. `uom: "Hours"` and `"LS"` are accepted, and Procore computes `amount = quantity × unit_cost`. The same request on an amount contract is rejected; that one takes `amount` instead.
 - Claiming on a unit contract needs `work_completed_this_period_quantity` along with `work_completed_this_period`. The invoice's g703 rows show the quantity.
 - People for the Architect/Engineer picker: `GET /rest/v1.0/projects/{pid}/users`. It includes app and integration accounts (e.g. "bid-prequalifier-60022e41", "R-IT NetSuite Connector (Do Not Delete)"), so filter them out.
+
+## Header stamps and existing-contract edits (2026-11-16)
+
+- **A DC line edit vs. the DC header** (Test Project DC 562950047268244, line 562950148819060, restored after):
+  - `PATCH /rest/v1.0/projects/{pid}/direct_costs/{id}/line_items/{line}` with `{line_item: {description}}` → 200. The line's own `updated_at` moved; the DC header's `updated_at` (show and list) did **not**.
+  - The same PATCH with `{line_item: {amount: "51.0"}}` → 200 (quantity/unit_cost left as they were). The header's `amount`, `grand_total` **and** `updated_at` all moved, in the list call too.
+  - So `updated_at` alone can't tell you a DC's lines changed; `updated_at` + total catches amount changes and any non-zero line added or removed. LEDGER's sidebar line cache (`worker/src/linecache.js`) stamps on both, with a 6-hour cap for what slips past.
+- The v2 commitment list (`.../commitment_contracts`) and v1.0 `commitment_change_orders` list both carry `updated_at` and `grand_total` per row.
+- `PATCH .../commitment_contracts/{id}/line_items/{line}` with a bare `{description}` → 422 (shape not worked out; not needed).
+- **Existing Prime Contract, set client + contractor, then approve** (project 562949955522549, 2027_0044): v2.0 `PATCH .../prime_contracts/{id}` with `{vendor_id, contractor_id}` → 200 (status stays Draft), then `{status: "Approved", executed: true}` → 200. Then `POST /rest/v1.0/prime_contracts/{id}/payment_applications` (draft) and one `payment_application_line_items` PATCH per g703 row (`work_completed_this_period` only, amount contract) all worked first time.
