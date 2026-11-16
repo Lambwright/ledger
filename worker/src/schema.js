@@ -99,6 +99,27 @@ export async function ensurePortfolioActualsColumns(env) {
   portfolioActualsReady = true;
 }
 
+let lineCacheReady = false;
+
+// The sidebar lists' memory of each record's line ids and amounts (2026-11-16),
+// see linecache.js. record_kind: 'direct_cost', 'commitment',
+// 'commitment_change_order', or 'prime_change_order' (draft-CO existence checks,
+// lines always []).
+export async function ensureLineCacheSchema(env) {
+  if (lineCacheReady) return;
+  await dbQuery(env, `create table if not exists procore_line_cache (
+    tenant_id text not null,
+    project_id text not null,
+    record_kind text not null,
+    record_id text not null,
+    stamp text not null,
+    lines jsonb not null,
+    fetched_at timestamptz not null default now(),
+    primary key (tenant_id, project_id, record_kind, record_id)
+  )`, []);
+  lineCacheReady = true;
+}
+
 let materialSchemaReady = false;
 
 // T&M ticket materials (2026-10-23) bill as billing_records.record_type

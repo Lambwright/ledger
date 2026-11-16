@@ -318,3 +318,20 @@ create table if not exists user_preferences (
   updated_at timestamptz not null default now(),
   primary key (tenant_id, username, pref_key)
 );
+
+-- The sidebar lists' memory of each Procore record's line ids and amounts
+-- (2026-11-16), so a reload doesn't re-read every marked commitment or
+-- partly-billed DC. Used only while the record's header stamp (updated_at +
+-- total) matches, for at most 6 hours. Billing and marking never read it.
+-- Created by the worker on first use (worker/src/schema.js ensureLineCacheSchema,
+-- worker/src/linecache.js).
+create table if not exists procore_line_cache (
+  tenant_id text not null,
+  project_id text not null,
+  record_kind text not null,       -- direct_cost | commitment | commitment_change_order | prime_change_order
+  record_id text not null,
+  stamp text not null,             -- "<updated_at>|<total>"; for prime_change_order, the CO's status
+  lines jsonb not null,            -- [{id, amount}]; [] for prime_change_order
+  fetched_at timestamptz not null default now(),
+  primary key (tenant_id, project_id, record_kind, record_id)
+);

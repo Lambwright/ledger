@@ -6,6 +6,7 @@ import { procoreRequest } from './procore.js';
 import { dbQuery } from './db.js';
 import { ensureBulkSchema, ensureMaterialSchema } from './schema.js';
 import { attachTicketBackup, attachChosenBackup } from './ticketbackup.js';
+import { headerStamp, loadLineCache, cachedLines, saveLineCache } from './linecache.js';
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -357,11 +358,21 @@ async function reconcileStaleDraftCOs(env, tenantId, projectId) {
   // above) — the likely way KPS tickets #1–26 lost their records (2026-09-25).
   // Only a clear 404 counts as deleted; 200 (still there, e.g. approved) or
   // anything else (429, 5xx: can't tell) leaves the rows alone.
+  // A CO confirmed still there (200) isn't asked about again for an hour
+  // (2026-11-16): an approved one stays off the list for good, so this used to
+  // cost a call per such CO on every sidebar load. A draft deleted in Procore
+  // was on the list until then, so it's never in this cache and heals at once.
+  // Only an approved CO taken back to draft and deleted can heal up to an hour late.
+  const confirmed = await loadLineCache(env, tenantId, projectId, 'prime_change_order', 1);
   const staleCoIds = [];
+  const stillThere = [];
   for (const id of missing) {
+    if (confirmed.has(String(id))) continue;
     const res = await procoreRequest(env, 'GET', `/rest/v1.0/projects/${projectId}/prime_change_orders/${id}`);
     if (res.status === 404) staleCoIds.push(id);
+    else if (res.status === 200) stillThere.push({ recordId: id, stamp: String(res.data?.status || 'exists'), lines: [] });
   }
+  await saveLineCache(env, tenantId, projectId, 'prime_change_order', stillThere);
   if (staleCoIds.length === 0) return 0;
   console.log('[self-heal] draft COs deleted in Procore, clearing their billing records:', projectId, staleCoIds.join(','));
 
@@ -2328,15 +2339,24 @@ export async function listPendingDirectCosts(env, { tenantId, projectId, me = nu
       // Per-line billing activity, no legacy row — needs a real line-item
       // fetch to know how much (if anything) is left. Bounded to just DCs
       // actively mid-partial-billing, never the whole project's DC list.
-      needsLineFetch.push({ record, lineRows: lineRowsByDc.get(key) });
+      needsLineFetch.push({ record, lineRows: lineRowsByDc.get(key), header: dc });
     } else {
       unbilled.push(record);
     }
   }
 
-  for (const { record, lineRows } of needsLineFetch) {
-    const liRes = await procoreRequest(env, 'GET', `/rest/v1.0/projects/${projectId}/direct_costs/${record.id}/line_items`);
-    const rawLines = liRes.status === 200 ? (liRes.data || []) : [];
+  // Lines come from linecache.js while the DC's header is unchanged, so a
+  // reload doesn't re-read every partly-billed DC (2026-11-16).
+  const lineCache = needsLineFetch.length > 0 ? await loadLineCache(env, tenantId, projectId, 'direct_cost') : new Map();
+  const fetchedLines = [];
+  for (const { record, lineRows, header } of needsLineFetch) {
+    const stamp = headerStamp(header);
+    let rawLines = cachedLines(lineCache, record.id, stamp);
+    if (!rawLines) {
+      const liRes = await procoreRequest(env, 'GET', `/rest/v1.0/projects/${projectId}/direct_costs/${record.id}/line_items`);
+      rawLines = liRes.status === 200 ? (liRes.data || []) : [];
+      if (liRes.status === 200) fetchedLines.push({ recordId: record.id, stamp, lines: rawLines });
+    }
     const remaining = rawLines.filter(li => !lineRows.some(r => r.lineItemId === li.id));
 
     // Per-line write-off/budgeted (2026-09-23) means a DC's covering rows can
@@ -2396,6 +2416,7 @@ export async function listPendingDirectCosts(env, { tenantId, projectId, me = nu
       });
     }
   }
+  await saveLineCache(env, tenantId, projectId, 'direct_cost', fetchedLines);
 
   return { unbilled, billed, writtenOff, budgeted };
 }
@@ -3420,6 +3441,7 @@ async function fetchCommitmentHeaders(env, projectId) {
     status: 'Approved',
     executed: co.executed === true,
     grand_total: co.grand_total,
+    updated_at: co.updated_at || null, // with grand_total, the line-cache stamp (linecache.js)
     vendor: parent?.vendor || null,
     vendor_name: parent?.vendor_name || null,
     change_order_of: String(co.contract_id),
@@ -3920,6 +3942,16 @@ export async function listCommitments(env, { tenantId, projectId, me = null }) {
   const writtenOff = [];
   const budgeted = [];
 
+  // Lines come from linecache.js while a commitment's header is unchanged
+  // (2026-11-16: reloading a project with 34 marked commitments cost ~38 calls
+  // a time). Commitments and their Change Orders are cached separately.
+  const cacheKind = (c) => (c.type === 'CommitmentChangeOrder' ? 'commitment_change_order' : 'commitment');
+  const anyMarked = headers.some(c => lineRowsByCommitment.has(String(c.id)));
+  const [cmCache, coCache] = anyMarked
+    ? await Promise.all([loadLineCache(env, tenantId, projectId, 'commitment'), loadLineCache(env, tenantId, projectId, 'commitment_change_order')])
+    : [new Map(), new Map()];
+  const fetchedLines = { commitment: [], commitment_change_order: [] };
+
   for (const c of headers) {
     const record = {
       id: c.id,
@@ -3940,7 +3972,13 @@ export async function listCommitments(env, { tenantId, projectId, me = null }) {
       continue;
     }
 
-    const rawLines = await fetchCommitmentLines(env, projectId, c.id, () => {}, c);
+    const kind = cacheKind(c);
+    const stamp = headerStamp(c);
+    let rawLines = cachedLines(kind === 'commitment' ? cmCache : coCache, c.id, stamp);
+    if (!rawLines) {
+      rawLines = await fetchCommitmentLines(env, projectId, c.id, () => {}, c);
+      fetchedLines[kind].push({ recordId: c.id, stamp, lines: rawLines });
+    }
     const remaining = rawLines.filter(li => !lineRows.some(r => r.lineItemId === String(li.id)));
     const billedRows = lineRows.filter(r => r.status === 'billed' || r.status === 'draft_co');
     const writtenOffRows = lineRows.filter(r => r.status === 'written_off');
@@ -3987,6 +4025,10 @@ export async function listCommitments(env, { tenantId, projectId, me = null }) {
       unbilled.push({ ...record, ...breakdown, ...partialDispositionFields(billedRows, writtenOffRows, budgetedRows), partialBilled: true, remainingAmount });
     }
   }
+  await Promise.all([
+    saveLineCache(env, tenantId, projectId, 'commitment', fetchedLines.commitment),
+    saveLineCache(env, tenantId, projectId, 'commitment_change_order', fetchedLines.commitment_change_order)
+  ]);
 
   return { unbilled, billed, writtenOff, budgeted, ...legacy };
 }
