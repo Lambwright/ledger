@@ -161,6 +161,10 @@ each with CREATE/UPDATE/DELETE. To revive it, point the URL back to
 `https://qbo-dashboard.smoothlink.net/webhook/procore/` and get a fresh Authorization
 value from smoothlink. The original value was lost on 2026-10-07.
 
+## T&M ticket Reference field (2026-11-17)
+
+The ticket's "Reference" in Procore is `reference_number` on the entry. It is a string, or `null` when blank, and it is on the LIST response (`GET /rest/v1.0/projects/{pid}/time_and_material_entries`), so no per-ticket show call is needed. Checked live: on the Test Project all 8 tickets had `null`; on 562949955461743, all 9 tickets had values of 16–19 characters. The sidebar shows it as `referenceNumber` on an expanded ticket card.
+
 ## Attachments: T&M ticket → change event → invoice (2026-10-28)
 
 - **Ticket files:** a T&M entry's own uploaded files are `time_and_material_entry_attachments[]` on the entry (list or show): `{id, attachment_id, filename, content_type, url / presentation_url (signed storage URL, downloadable directly)}`.
