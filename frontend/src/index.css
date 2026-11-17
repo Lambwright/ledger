@@ -409,7 +409,7 @@ body {
 .ticket-reference {
   color: var(--ink-soft);
   font-size: 12px;
-  margin-top: 2px;
+  margin-top: 8px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
