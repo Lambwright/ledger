@@ -57,6 +57,7 @@ export default function TicketDetailPopout() {
           <div className="modal-meta">
             {detail.status && <span className="chip">{String(detail.status).replace(/_/g, ' ')}</span>}
             {detail.workPerformedOnDate && <span>{detail.workPerformedOnDate}</span>}
+            {detail.referenceNumber && <span>Ref {detail.referenceNumber}</span>}
             {detail.changeEventId && <span>CE #{detail.changeEventId}</span>}
           </div>
 

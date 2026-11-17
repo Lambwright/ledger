@@ -405,6 +405,25 @@ body {
   white-space: nowrap;
 }
 
+/* A T&M ticket's Procore Reference, on the expanded card only (2026-11-17). */
+.ticket-reference {
+  color: var(--ink-soft);
+  font-size: 12px;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ticket-reference.is-empty { color: var(--ink-muted); }
+.ticket-reference-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-right: 6px;
+}
+
 .ticket-meta {
   font-family: var(--font-mono);
   font-size: 10px;

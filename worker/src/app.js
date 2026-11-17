@@ -970,6 +970,8 @@ export async function listPendingTickets(env, { tenantId, projectId, selfHeal = 
       id: entry.id,
       number: entry.number,
       description: entry.description,
+      // The ticket's Reference field in Procore (team ask 2026-11-17).
+      referenceNumber: entry.reference_number || '',
       status: entry.status,
       workPerformedOnDate: entry.work_performed_on_date,
       totalTimecards: allTimecards.length,
@@ -1065,6 +1067,7 @@ export async function ticketDetail(env, { tenantId, projectId, entryId }) {
     id: entry.id,
     number: entry.number,
     description: entry.description || '',
+    referenceNumber: entry.reference_number || '',
     status: entry.status || null,
     workPerformedOnDate: entry.work_performed_on_date || null,
     createdAt: entry.created_at || null,

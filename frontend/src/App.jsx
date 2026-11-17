@@ -100,6 +100,17 @@ function money(n) {
   return (n ?? 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
+// A T&M ticket's Reference field from Procore (team ask 2026-11-17). Shown
+// only on an expanded card, to keep the narrow sidebar list uncrowded; the
+// full text is in the hover tooltip when it's cut off.
+function TicketReference({ value }) {
+  return (
+    <div className={`ticket-reference ${value ? '' : 'is-empty'}`} title={value || undefined}>
+      <span className="ticket-reference-label">Ref</span>{value || 'none'}
+    </div>
+  );
+}
+
 // markup% -> margin% and back, both as plain percentages (20 means 20%, not
 // 0.2) — Ben's ask 2026-09-15: a Procore-estimating-tool-style toggle where
 // either field can be typed and the other recomputes. markupPercent is kept
@@ -2023,10 +2034,11 @@ export default function App({ user, onSignOut }) {
                     onClick={() => setExpandedTmId(expandedTmId === t.id ? null : t.id)}
                   >
                     <div className="ticket-card-header">
-                      <span className="ticket-number">T&amp;M #{t.number}</span>
+                      <span className="ticket-number" title={`T&M #${t.number}`}>T&amp;M #{t.number}</span>
                       <span className="ticket-amount">{money(t.billedAmount)}</span>
                     </div>
-                    <div className="ticket-description">{t.description || '(no description)'}</div>
+                    <div className="ticket-description" title={t.description || undefined}>{t.description || '(no description)'}</div>
+                    {expandedTmId === t.id && <TicketReference value={t.referenceNumber} />}
                     <div className="ticket-meta">
                       {t.hasDraftCO && <span className="tag tag-draft">In draft CO</span>}
                       {t.invoiceNumbers.map(n => <span className="tag tag-billed" key={n}>{n}</span>)}
@@ -2179,10 +2191,10 @@ export default function App({ user, onSignOut }) {
                 {writtenOffTickets.map(t => (
                   <div key={t.id} className="ticket-card readonly">
                     <div className="ticket-card-header">
-                      <span className="ticket-number">T&amp;M #{t.number}</span>
+                      <span className="ticket-number" title={`T&M #${t.number}`}>T&amp;M #{t.number}</span>
                       <span className="ticket-amount">{money(t.writtenOffAmount)}</span>
                     </div>
-                    <div className="ticket-description">{t.description || '(no description)'}</div>
+                    <div className="ticket-description" title={t.description || undefined}>{t.description || '(no description)'}</div>
                     <div className="ticket-meta">
                       {[...new Set(t.writtenOffLines.map(l => WRITE_OFF_REASON_OPTIONS.find(o => o.value === l.reasonCategory)?.label || l.reasonCategory))].join(', ')}
                       {[...new Set(t.writtenOffLines.map(l => l.invoiceNumber).filter(Boolean))].map(n => ` · Invoiced on #${n}`).join('')}
@@ -2249,10 +2261,10 @@ export default function App({ user, onSignOut }) {
                 {budgetedTickets.map(t => (
                   <div key={t.id} className="ticket-card readonly">
                     <div className="ticket-card-header">
-                      <span className="ticket-number">T&amp;M #{t.number}</span>
+                      <span className="ticket-number" title={`T&M #${t.number}`}>T&amp;M #{t.number}</span>
                       <span className="ticket-amount">{money(t.budgetedAmount)}</span>
                     </div>
-                    <div className="ticket-description">{t.description || '(no description)'}</div>
+                    <div className="ticket-description" title={t.description || undefined}>{t.description || '(no description)'}</div>
                     {t.budgetedLines.some(l => l.reasonNotes) && (
                       <div className="ticket-meta">
                         {[...new Set(t.budgetedLines.map(l => l.reasonNotes).filter(Boolean))].join(', ')}
@@ -2628,10 +2640,11 @@ export default function App({ user, onSignOut }) {
                               />
                             )}
                           </label>
-                          <span className="ticket-number">T&amp;M #{t.number}</span>
+                          <span className="ticket-number" title={`T&M #${t.number}`}>T&amp;M #{t.number}</span>
                           <span className="ticket-amount">{money(t.estimatedTotal)}</span>
                         </div>
-                        <div className="ticket-description">{t.description || '(no description)'}</div>
+                        <div className="ticket-description" title={t.description || undefined}>{t.description || '(no description)'}</div>
+                        {expandedTmId === t.id && <TicketReference value={t.referenceNumber} />}
                         <div className="ticket-meta">
                           {t.unbilledCount} unbilled hour line{t.unbilledCount === 1 ? '' : 's'}
                           {t.billedCount > 0 && ` (${t.billedCount} already billed)`}
