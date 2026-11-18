@@ -100,14 +100,39 @@ function money(n) {
   return (n ?? 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
-// A T&M ticket's Reference field from Procore (team ask 2026-11-17). Shown
-// only on an expanded card, to keep the narrow sidebar list uncrowded; the
-// full text is in the hover tooltip when it's cut off.
-function TicketReference({ value }) {
+// A T&M ticket's Reference and Performed On date from Procore (team ask
+// 2026-11-17/18). Shown only on an expanded card, to keep the narrow sidebar
+// list uncrowded; the full text is in the hover tooltip when it's cut off.
+function TicketExtras({ ticket }) {
+  const rows = [['Ref', ticket.referenceNumber], ['Performed', ticket.workPerformedOnDate]];
   return (
-    <div className={`ticket-reference ${value ? '' : 'is-empty'}`} title={value || undefined}>
-      <span className="ticket-reference-label">Ref</span>{value || 'none'}
+    <div className="ticket-extras">
+      {rows.map(([label, value]) => (
+        <div key={label} className={`ticket-extra ${value ? '' : 'is-empty'}`} title={value || undefined}>
+          <span className="ticket-extra-label">{label}</span>{value || 'none'}
+        </div>
+      ))}
     </div>
+  );
+}
+
+// Procore's T&M ticket statuses. Seen live 2026-11-18: in_progress,
+// ready_for_review, field_verified. Anything else shows in neutral grey.
+const TICKET_STATUS = {
+  in_progress: { label: 'In Progress', cls: 'tm-status-progress' },
+  ready_for_review: { label: 'Ready for Review', cls: 'tm-status-review' },
+  field_verified: { label: 'Field Verified', cls: 'tm-status-verified' }
+};
+
+// The amount on a T&M card's header, with the ticket's status badge under it
+// when the card is expanded.
+function TicketAmount({ amount, status, expanded }) {
+  const s = status && (TICKET_STATUS[status] || { label: String(status).replace(/_/g, ' '), cls: '' });
+  return (
+    <span className="ticket-amount-col">
+      <span className="ticket-amount">{money(amount)}</span>
+      {expanded && s && <span className={`tm-status ${s.cls}`}>{s.label}</span>}
+    </span>
   );
 }
 
@@ -2035,10 +2060,10 @@ export default function App({ user, onSignOut }) {
                   >
                     <div className="ticket-card-header">
                       <span className="ticket-number" title={`T&M #${t.number}`}>T&amp;M #{t.number}</span>
-                      <span className="ticket-amount">{money(t.billedAmount)}</span>
+                      <TicketAmount amount={t.billedAmount} status={t.status} expanded={expandedTmId === t.id} />
                     </div>
                     <div className="ticket-description" title={t.description || undefined}>{t.description || '(no description)'}</div>
-                    {expandedTmId === t.id && <TicketReference value={t.referenceNumber} />}
+                    {expandedTmId === t.id && <TicketExtras ticket={t} />}
                     <div className="ticket-meta">
                       {t.hasDraftCO && <span className="tag tag-draft">In draft CO</span>}
                       {t.invoiceNumbers.map(n => <span className="tag tag-billed" key={n}>{n}</span>)}
@@ -2641,10 +2666,10 @@ export default function App({ user, onSignOut }) {
                             )}
                           </label>
                           <span className="ticket-number" title={`T&M #${t.number}`}>T&amp;M #{t.number}</span>
-                          <span className="ticket-amount">{money(t.estimatedTotal)}</span>
+                          <TicketAmount amount={t.estimatedTotal} status={t.status} expanded={expandedTmId === t.id} />
                         </div>
                         <div className="ticket-description" title={t.description || undefined}>{t.description || '(no description)'}</div>
-                        {expandedTmId === t.id && <TicketReference value={t.referenceNumber} />}
+                        {expandedTmId === t.id && <TicketExtras ticket={t} />}
                         <div className="ticket-meta">
                           {t.unbilledCount} unbilled hour line{t.unbilledCount === 1 ? '' : 's'}
                           {t.billedCount > 0 && ` (${t.billedCount} already billed)`}
