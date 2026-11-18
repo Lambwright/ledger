@@ -119,7 +119,7 @@ const COLUMN_CATALOG = [
       <td className="cell-name">
         <div>{p.name}</div>
         <div className="cell-sub">
-          {[p.project_number, p.region, p.departments].filter(Boolean).join(" · ")}
+          {[p.region, p.departments].filter(Boolean).join(" · ")}
           {flagNoBudget(p) && (
             <span className="badge badge-warn" title="This fixed-price project's budget is $0 in Procore, so there's no budgeted margin to compare against. Enter the budget in Procore.">
               No budget
@@ -149,6 +149,8 @@ const COLUMN_CATALOG = [
       </td>
     ),
   },
+  // Its own column since 2026-11-18 (Ben); it used to be in the Project cell's small text.
+  { key: "project_number", label: "Project #", sort: (p) => p.project_number || "", cell: (p) => <td>{p.project_number || "—"}</td> },
   {
     key: "billing_staleness", label: "Staleness", num: true,
     sort: (p) => n(p.billing_staleness) ?? -1,
@@ -243,13 +245,10 @@ const EXPORT_AS = {
   commitments_left: { fmt: "money", value: commitmentsLeft },
   refreshed_at: { value: (p) => (p.refreshed_at ? new Date(p.refreshed_at).toLocaleString("en-CA", { dateStyle: "short", timeStyle: "short" }) : null) },
 };
-// Table columns → export columns. "Project" also gets its number as a column.
+// Table columns → export columns.
 function exportColumns(columns) {
   return columns.flatMap((c) => {
-    if (c.key === "name") return [
-      { label: "Project", value: (p) => p.name || null },
-      { label: "Project #", value: (p) => p.project_number || null },
-    ];
+    if (c.key === "name") return [{ label: "Project", value: (p) => p.name || null }];
     const spec = EXPORT_AS[c.key] || {};
     const fmt = spec.fmt ?? (c.num ? "money" : undefined);
     const value = spec.value || ((p) => (c.num ? n(p[c.key]) : p[c.key] ?? null));
@@ -259,6 +258,7 @@ function exportColumns(columns) {
 
 // Header tooltips: what each figure is and where it comes from.
 const COLUMN_TIPS = {
+  project_number: "The project's number in Procore",
   billing_staleness: "Billing Staleness (Days), calculated in Procore by Power Automate. Only calculated for projects in active stages, and resets when there's invoicing activity. Amber over 10 days, red over 21",
   stage: "The project's stage in Procore",
   project_type: "The project's type in Procore (e.g. Service Call, Time and Material)",

@@ -117,11 +117,14 @@ function TicketExtras({ ticket }) {
 }
 
 // Procore's T&M ticket statuses. Seen live 2026-11-18: in_progress,
-// ready_for_review, field_verified. Anything else shows in neutral grey.
+// ready_for_review, field_verified. Colours follow Procore's list (Ben's
+// screenshots 2026-11-18): Field Verified green, In Progress blue, Closed grey.
+// Ready for Review's Procore colour isn't confirmed yet. Anything else is grey.
 const TICKET_STATUS = {
   in_progress: { label: 'In Progress', cls: 'tm-status-progress' },
   ready_for_review: { label: 'Ready for Review', cls: 'tm-status-review' },
-  field_verified: { label: 'Field Verified', cls: 'tm-status-verified' }
+  field_verified: { label: 'Field Verified', cls: 'tm-status-verified' },
+  closed: { label: 'Closed', cls: '' }
 };
 
 // The amount on a T&M card's header, with the ticket's status badge under it
