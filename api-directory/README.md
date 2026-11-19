@@ -161,6 +161,13 @@ each with CREATE/UPDATE/DELETE. To revive it, point the URL back to
 `https://qbo-dashboard.smoothlink.net/webhook/procore/` and get a fresh Authorization
 value from smoothlink. The original value was lost on 2026-10-07.
 
+## One timesheet entry can be linked to two T&M tickets (2026-11-19)
+
+Procore lets two tickets' timecards point at the same timesheet entry (`timecard_entry_id`). Seen live on 562949955500463: ticket #12 (Fri Nov 13) had its four timecards linked to Thursday's timesheet entries, the same ones ticket #15 (Thu Nov 12) used. Friday's real entries were left unlinked.
+- A T&M timecard has no date of its own. To find a timesheet entry's real date and hours, read `GET /rest/v1.0/companies/{c}/timecard_entries?start_date=D&end_date=D&per_page=100`. Each entry has `id`, `date` and `hours`. One day across the whole company was 112 entries (2 pages).
+- After the re-link, the rebuilt invoice came to $20 more than ticket #12's old hours give, which matches Marcin's Friday timesheet (8.25 h, where #12 had 8). So re-linking probably takes on the new entry's hours. That's inferred from the invoice total; I didn't read the timecard itself.
+- LEDGER now flags tickets that share entries; see `sharedTimesheetEntries` in worker/src/app.js.
+
 ## T&M ticket Reference field (2026-11-17)
 
 The ticket's "Reference" in Procore is `reference_number` on the entry. It is a string, or `null` when blank, and it is on the LIST response (`GET /rest/v1.0/projects/{pid}/time_and_material_entries`), so no per-ticket show call is needed. Checked live: on the Test Project all 8 tickets had `null`; on 562949955461743, all 9 tickets had values of 16–19 characters. The sidebar shows it as `referenceNumber` on an expanded ticket card.
