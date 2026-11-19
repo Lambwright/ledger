@@ -69,11 +69,12 @@ export const READ_ACTIONS = new Set([
   'preview_billing', 'preview_combined_billing', 'preview_commitment_billing', 'preview_direct_cost_billing',
   'list_prime_contracts', 'list_billing_periods', 'next_invoice_number',
   'get_project_settings', 'search_projects', 'project_reconciliation', 'list_budget_codes', 'billing_context',
-  'invoice_detail', 'list_backup_files', 'list_ledger_runs',
+  'invoice_detail', 'list_backup_files', 'list_ledger_runs', 'reconcile_queue_state', 'rate_status',
   // Record-count upkeep for the dashboard (the sidebar posts counts it already
   // has) — no billing data changes.
   'save_portfolio_counts'
 ]);
 
 // Deleting a LEDGER invoice run counts as an undo: pm/accounting only their own, admins anyone's.
-export const UNDO_ACTIONS = new Set(['revert_to_unbilled', 'revert_direct_cost', 'revert_commitment', 'revert_material', 'plan_run_deletion', 'delete_ledger_run']);
+// Cancelling a queued reconcile (queue.js) follows the same rule.
+export const UNDO_ACTIONS = new Set(['revert_to_unbilled', 'revert_direct_cost', 'revert_commitment', 'revert_material', 'plan_run_deletion', 'delete_ledger_run', 'cancel_queued_reconcile']);

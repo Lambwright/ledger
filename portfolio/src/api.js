@@ -36,4 +36,7 @@ export const api = {
   // One month's crew hours and invoicing per project ("YYYY-MM").
   monthFigures: (month) => call("month_figures", { month }),
   deleteSharedView: (id) => call("delete_shared_view", { id }),
+  // Overnight reconciling digest — LEDGER admins only (checked by the worker).
+  reconcileDigest: () => call("reconcile_digest"),
+  reconcileDigestReviewed: (items) => call("reconcile_digest_reviewed", { items }),
 };

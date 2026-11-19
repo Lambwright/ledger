@@ -533,6 +533,35 @@ export function markAlreadyBilled({ tenantId, projectId, entryIds, directCostIds
   });
 }
 
+// Queued reconciling (Ben, 2026-11-19): Budgeted / Written off / Already Billed
+// are saved and done overnight, using no Procore calls now. action:
+// 'budgeted' | 'written_off' | 'already_billed'. items: [{ kind, key, label,
+// expected, amount? }] — see worker/src/queue.js. Returns { queued, total, state }.
+export function queueReconcile({ tenantId, projectId, action, items, reasonCategory, reasonNotes, notes, invoiceNumber }) {
+  return callAction('queue_reconcile', {
+    tenant_id: tenantId, project_id: projectId, reconcile_action: action, items,
+    ...(reasonCategory ? { reason_category: reasonCategory } : {}),
+    ...(reasonNotes ? { reason_notes: reasonNotes } : {}),
+    ...(notes ? { notes } : {}),
+    ...(invoiceNumber ? { invoice_number: invoiceNumber } : {})
+  });
+}
+
+// LEDGER's Procore calls this hour: { used, limit, resetAt, exhausted }. No Procore call.
+export function getRateStatus() {
+  return callAction('rate_status', {});
+}
+
+// What's queued for tonight on a project, plus overnight failures not yet dismissed.
+export function reconcileQueueState({ tenantId, projectId }) {
+  return callAction('reconcile_queue_state', { tenant_id: tenantId, project_id: projectId });
+}
+
+// Cancel a queued item, or dismiss its overnight failure.
+export function cancelQueuedReconcile({ tenantId, projectId, kind, key }) {
+  return callAction('cancel_queued_reconcile', { tenant_id: tenantId, project_id: projectId, kind, key });
+}
+
 export function markAsBudgeted({ tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, materials, userId, notes }) {
   return callAction('mark_as_budgeted', {
     ...materialMarks(materials),

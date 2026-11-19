@@ -139,6 +139,15 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .btn-ghost:hover:not(:disabled) { color: var(--text-primary); border-color: var(--text-tertiary); }
 .btn-sm { padding: 6px 12px; font-size: 11px; }
 
+/* Overnight reconciling digest (2026-11-19), LEDGER admins. */
+.digest { margin-bottom: 16px; padding: 14px 16px; }
+.digest-has-failed { border-color: rgba(193, 64, 28, 0.6); }
+.digest-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.digest-sub { font-size: 12px; color: var(--text-secondary); flex: 1; }
+.digest-note { font-size: 12px; color: var(--text-secondary); margin: 10px 0; line-height: 1.5; }
+.digest-table td.digest-why { white-space: normal; min-width: 260px; color: var(--text-primary); }
+.digest-banner { margin-bottom: 16px; }
+
 .badge {
   display: inline-flex; align-items: center; margin-left: 6px;
   font-family: 'JetBrains Mono', monospace; font-size: 9px; font-weight: 700;

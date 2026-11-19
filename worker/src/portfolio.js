@@ -16,6 +16,7 @@ import { refusalUser, einbauAppHeader, clientHeaders } from './security.js';
 import { saveInvoicedByMonth, runHoursSync } from './hours.js';
 import { ensureBulkSchema, ensurePortfolioActualsColumns } from './schema.js';
 import { hasQueuedBulkReconciliation, processNextBulkReconciliation } from './bulk.js';
+import { hasQueuedReconciles, processNextQueuedReconcile } from './queue.js';
 import { listPendingTickets, listPendingDirectCosts, listCommitments, tmValueAtRates, commitmentCostTypes } from './app.js';
 
 // Company-level budget view; resolved by name if a project doesn't have it.
@@ -139,8 +140,9 @@ const QUIET_TZ = 'America/Toronto';
 // Daytime gets far less (2026-10-22): webhooks flag many changed projects on a
 // busy morning, and 360/hour of background left too little of the 600 for
 // people — Ben's invoice was refused at 10:40.
+// 2026-11-19: daytime background work stopped entirely (runScheduledPass).
 const BACKGROUND_CALLS_PER_HOUR = 360;
-const BACKGROUND_CALLS_PER_HOUR_DAYTIME = 150;
+const BACKGROUND_CALLS_PER_HOUR_DAYTIME = 0;
 const backgroundBudget = () => (isQuietHours() ? BACKGROUND_CALLS_PER_HOUR : BACKGROUND_CALLS_PER_HOUR_DAYTIME);
 const RECENT_CHANGE_HOURS = 2; // daytime: only changes newer than this
 
@@ -578,7 +580,10 @@ export async function projectSourceRecords(env, tenantId, projectId) {
 }
 
 // Sidebar use keeps busy projects current: refresh at most every 10 minutes.
+// Overnight only since 2026-11-19 (Ben): opening projects one after another in
+// the day refreshed each one and helped run the 600/hour out in 7 minutes.
 export async function refreshIfStale(env, tenantId, projectId) {
+  if (!isQuietHours()) return;
   const rows = await dbQuery(
     env,
     `select refreshed_at from portfolio_projects where tenant_id = $1 and project_id = $2`,
@@ -737,6 +742,7 @@ export function keepUserActive(env) {
 // Steps 3 and 4 (and older dirty marks) wait for quiet hours; see isQuietHours.
 export async function runScheduled(env) {
   const tenantId = String(env.PROCORE_COMPANY_ID);
+  if (!isQuietHours()) return ['daytime — background work waits for 9 pm'];
   await ensureBudgetColumns(env);
   const budget = await dbQuery(
     env,
@@ -781,7 +787,12 @@ async function runScheduledPass(env, tenantId) {
   const log = [];
   let lastRemaining = null;
   const night = isQuietHours();
-  const maxRefreshes = night ? 4 : 1;
+  // No background Procore work during the day at all (Ben, 2026-11-19): the
+  // 600/hour is for people invoicing. Webhook-flagged projects, bulk
+  // reconciliations and queued reconciling all wait for 9 pm; the overnight
+  // run picks up every flagged project, however old the flag.
+  if (!night) return ['daytime — background work waits for 9 pm'];
+  const maxRefreshes = 4;
   try {
     await ensureActivityColumn(env);
     const state = await dbQuery(env, `select projects_listed_at, user_active_at from portfolio_sync_state where tenant_id = $1`, [tenantId]);
@@ -795,6 +806,24 @@ async function runScheduledPass(env, tenantId) {
       const remaining = await syncProjectList(env, tenantId);
       log.push('project list synced');
       if (remaining != null && remaining < RESERVED_REQUESTS) throw new RateBudgetExhausted();
+    }
+
+    // 1. Reconciling people queued in the day (queue.js) — first, so it's done
+    //    by morning. A few requests per run, then the rest next minute.
+    if (await hasQueuedReconciles(env, tenantId)) {
+      const before = procoreCallCount();
+      for (let n = 0; n < 5 && procoreCallCount() - before < 40; n++) {
+        let line;
+        try {
+          line = await processNextQueuedReconcile(env, tenantId);
+        } catch (e) {
+          if (/\b429\b|rate limit/i.test(e.message)) throw new RateBudgetExhausted('Procore rate limit reached during queued reconciling');
+          throw e;
+        }
+        if (!line) break;
+        log.push(line);
+      }
+      if (await hasQueuedReconciles(env, tenantId)) return log; // more next minute
     }
 
     // Crew timesheet hours by project and month (hours.js) — overnight only.

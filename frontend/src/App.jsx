@@ -4,7 +4,7 @@ import {
   listPendingTickets, listPendingDirectCosts, listPrimeContracts, listBillingPeriods, nextInvoiceNumber,
   previewCombinedBilling, generateCombinedInvoice, pushCombinedToDraftCO, getProjectSettings, saveProjectSettings, revertToUnbilled,
   revertMaterial, listBudgetCodes, getBillingContext, listBackupFiles,
-  revertDirectCost, writeOffRecords, markAsBudgeted, markAlreadyBilled, directCostLineDetail, listCommitments, commitmentLineDetail, revertCommitment, saveProjectCounts,
+  revertDirectCost, queueReconcile, reconcileQueueState, cancelQueuedReconcile, directCostLineDetail, listCommitments, commitmentLineDetail, revertCommitment, saveProjectCounts,
   getProjectReconciliation, listLedgerRuns
 } from './api';
 import { connectProcoreSidePanel, isEmbedded } from './procore';
@@ -81,6 +81,10 @@ const WRITE_OFF_REASON_OPTIONS = [
   { value: 'pm_decision', label: 'PM Decision' },
   { value: 'other', label: 'Other' }
 ];
+
+// Queued reconciling (2026-11-19): the queue's actions, as "To be …" and "Cancel …" read.
+const QUEUE_DONE = { budgeted: 'budgeted', written_off: 'written off', already_billed: 'marked already billed' };
+const QUEUE_VERB = { budgeted: 'Mark as budgeted', written_off: 'Write off', already_billed: 'Already billed' };
 
 const TENANT_ID = import.meta.env.VITE_TENANT_ID;
 const DEFAULT_PROJECT_ID = import.meta.env.VITE_DEFAULT_PROJECT_ID;
@@ -317,6 +321,17 @@ export default function App({ user, onSignOut }) {
   const [commitments, setCommitments] = useState(null);
   const [expandedCmId, setExpandedCmId] = useState(null);
   const [checkedCmLineIds, setCheckedCmLineIds] = useState(() => new Set()); // "cmId:lineId"
+  // Queued reconciling (Ben, 2026-11-19): items queued to be budgeted / written
+  // off / marked already billed tonight, and overnight failures not yet
+  // dismissed. [{ kind, key, action, status, error, requested_by, ... }]
+  const [queueItems, setQueueItems] = useState([]);
+  const queueMap = new Map(queueItems.map(q => [`${q.kind}|${q.key}`, q]));
+  // A queued (not failed) item can't be selected for anything else until it's done or cancelled.
+  const queueFor = (kind, key) => queueMap.get(`${kind}|${key}`) || null;
+  const isQueued = (kind, key) => queueFor(kind, key)?.status === 'queued';
+  // A direct cost with the whole thing, or any of its lines, queued.
+  const dcQueued = (dcId) => isQueued('dc', dcId) ||
+    queueItems.some(q => q.kind === 'dcl' && q.status === 'queued' && q.key.startsWith(`${dcId}:`));
   // T&M materials (2026-10-23): picked material ids, each one's lump sum and
   // budget code, and the project's budgeted codes (loaded on first pick).
   const [checkedMaterialIds, setCheckedMaterialIds] = useState(() => new Set());
@@ -499,6 +514,10 @@ export default function App({ user, onSignOut }) {
     setMaterialInputs({});
     setCmLineDetailCache(new Map());
     try {
+      // What's queued for tonight (DB only) — shown as badges on the items.
+      reconcileQueueState({ tenantId: TENANT_ID, projectId: pid })
+        .then(r => setQueueItems(r.items || []))
+        .catch(() => setQueueItems([]));
       const [data, dcData, cmData, contractList, periodList, settings] = await Promise.all([
         listPendingTickets({ tenantId: TENANT_ID, projectId: pid }),
         listPendingDirectCosts({ tenantId: TENANT_ID, projectId: pid }).catch(() => ({ unbilled: [], billed: [], failed: true })),
@@ -816,6 +835,8 @@ export default function App({ user, onSignOut }) {
   // an invoice/CO — the backend refuses them — but can still be budgeted or
   // written off.
   const cmLineSelectable = (l) => !l.billedStatus && (!isBillingAction || (l.hasBudgetCode && !l.tmBilled));
+  // …and not queued for tonight (2026-11-19).
+  const cmLineSelectableIn = (cmId) => (l) => cmLineSelectable(l) && !isQueued('cml', `${cmId}:${l.id}`);
   // Distinct DCs with ANY selection (whole or per-line) — for the picker
   // tab's "N/M direct costs" count, which is about DCs touched, not raw
   // line-selection count.
@@ -935,9 +956,13 @@ export default function App({ user, onSignOut }) {
             <div className={`material-row${checked ? ' checked' : ''}`} key={m.id}>
               <div className="material-main">
                 {pickable && !viewOnly && (
-                  <input type="checkbox" checked={checked} onChange={() => toggleMaterial(m)} aria-label={`Select ${m.label}`} />
+                  <input
+                    type="checkbox" checked={checked} onChange={() => toggleMaterial(m)} aria-label={`Select ${m.label}`}
+                    disabled={isQueued('mat', m.id) && !checked}
+                  />
                 )}
                 <span className="material-label">{m.label}</span>
+                {pickable && queueBadge('mat', m.id)}
                 {!pickable && (
                   <span className="material-status">
                     {MATERIAL_STATUS_LABEL[m.status]}
@@ -1217,7 +1242,7 @@ export default function App({ user, onSignOut }) {
   async function toggleCommitment(c) {
     const cmId = String(c.id);
     const detail = await loadCmLineDetail(cmId);
-    const selectable = (detail.lines || []).filter(cmLineSelectable);
+    const selectable = (detail.lines || []).filter(cmLineSelectableIn(cmId));
     const keys = selectable.map(l => `${cmId}:${l.id}`);
     if (keys.length === 0) {
       setError(detail.error || 'Nothing on this commitment can be added — every line is already billed, or has no budget code in Procore.');
@@ -1527,6 +1552,88 @@ export default function App({ user, onSignOut }) {
     );
   }
 
+  // ---- Queued reconciling (Ben, 2026-11-19) ----
+  // Budgeted / Written off / Already Billed are queued and done overnight, so
+  // a day of reconciling doesn't use the Procore calls people need to invoice.
+  // Each item carries the amount the person saw, so the overnight run can tell
+  // if it changed (worker/src/queue.js). A whole direct cost's header total
+  // can differ from its lines (tax, or a header Procore never filled in), so
+  // it's only checked when the figure came from its lines (partly billed).
+  function queueItemsForSelection(scoped) {
+    const items = [];
+    if (!scoped) {
+      for (const t of checkedTickets) items.push({ kind: 'tm', key: String(t.id), label: `T&M #${t.number}`, expected: t.estimatedTotal });
+      for (const d of checkedDcItems) {
+        items.push({ kind: 'dc', key: String(d.id), label: d.vendor || d.description || 'Direct cost', expected: d.partialBilled ? d.remainingAmount : null });
+      }
+      for (const key of checkedDcLineIds) {
+        const [dcId, lineId] = key.split(':');
+        const dc = unbilledDc.find(x => String(x.id) === dcId);
+        const line = dcLineDetailCache.get(Number(dcId))?.lines?.find(l => String(l.id) === lineId);
+        items.push({ kind: 'dcl', key, label: `${dc?.vendor || dc?.description || 'Direct cost'} · ${line?.description || 'line'}`, expected: line?.amount ?? null });
+      }
+      for (const m of checkedMaterials) {
+        const amount = Number(materialInputs[m.id]?.amount) || 0;
+        items.push({ kind: 'mat', key: String(m.id), label: `T&M #${m.ticketNumber} · ${m.label}`, expected: amount, amount });
+      }
+    }
+    for (const key of (scoped ? scoped.commitmentLineIds : [...checkedCmLineIds])) {
+      const line = cmLineFor(key);
+      const cm = unbilledCm.find(c => String(c.id) === key.slice(0, key.indexOf(':')));
+      items.push({ kind: 'cml', key, label: `${cm?.number || cm?.title || 'Commitment'} · ${line?.description || 'line'}`, expected: line?.amount ?? null });
+    }
+    return items;
+  }
+
+  // Queued: show the badges straight away from the reply — no reload, so no
+  // Procore calls.
+  function afterQueued(reconcileAction, res) {
+    setQueueItems(res.state || []);
+    setResult({ kind: 'queued', reconcileAction, queued: res.queued, total: res.total });
+    setCheckedIds(new Set());
+    setCheckedDcIds(new Set());
+    setCheckedDcLineIds(new Set());
+    setCheckedCmLineIds(new Set());
+    setCheckedMaterialIds(new Set());
+    setMaterialInputs({});
+    finishDisposition();
+  }
+
+  async function handleCancelQueued(q) {
+    const verb = q.status === 'failed' ? 'Dismiss this overnight failure' : `Cancel "${QUEUE_VERB[q.action]}" for ${q.label || 'this item'}`;
+    if (!window.confirm(`${verb}? It stays in Unbilled.`)) return;
+    setError(null);
+    try {
+      const res = await cancelQueuedReconcile({ tenantId: TENANT_ID, projectId, kind: q.kind, key: q.key });
+      setQueueItems(res.state || []);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  // The badge on a queued (or failed-overnight) item, with its cancel/dismiss link.
+  function queueBadge(kind, itemKey) {
+    const q = queueFor(kind, itemKey);
+    if (!q) return null;
+    const failed = q.status === 'failed';
+    return (
+      <div className={`queue-badge ${failed ? 'is-failed' : ''}`} onClick={e => e.stopPropagation()}>
+        <span
+          className={`tag ${failed ? 'tag-written-off' : 'tag-draft'}`}
+          title={failed ? q.error || '' : `Queued by ${q.requested_by} — done overnight (after 9 pm)`}
+        >
+          {failed ? `Not ${QUEUE_DONE[q.action]} overnight` : `To be ${QUEUE_DONE[q.action]}`}
+        </span>
+        {failed && <span className="queue-error">{q.error}</span>}
+        {!viewOnly && (canUndoAnyone || q.requested_by === user?.username) && (
+          <button type="button" className="undo-link" onClick={() => handleCancelQueued(q)}>
+            {failed ? 'Dismiss' : 'Cancel'}
+          </button>
+        )}
+      </div>
+    );
+  }
+
   // Write-off (Ben's ask 2026-09-17) — pure LEDGER bookkeeping, no Procore
   // writes, so no progress log/unlinked-timecard gate the way billing needs.
   async function runWriteOff() {
@@ -1545,15 +1652,13 @@ export default function App({ user, onSignOut }) {
     setGenerating(true);
     setError(null);
     try {
-      const res = await writeOffRecords({
-        tenantId: TENANT_ID, projectId, entryIds, directCostIds, directCostLineIds, commitmentLineIds, materials, userId,
+      const res = await queueReconcile({
+        tenantId: TENANT_ID, projectId, action: 'written_off', items: queueItemsForSelection(scoped),
         reasonCategory: writeOffReason, reasonNotes: writeOffNotes,
       });
-      setResult({ kind: 'writeoff', ...res });
-      finishDisposition();
+      afterQueued('written_off', res);
       setWriteOffReason('');
       setWriteOffNotes('');
-      await load(projectId, { preserveResult: true });
     } catch (e) {
       setError(e.message);
     } finally {
@@ -1648,11 +1753,11 @@ export default function App({ user, onSignOut }) {
     setGenerating(true);
     setError(null);
     try {
-      const res = await markAsBudgeted({ tenantId: TENANT_ID, projectId, entryIds, directCostIds, directCostLineIds, commitmentLineIds, materials, userId, notes: budgetedNotes });
-      setResult({ kind: 'budgeted', ...res });
-      finishDisposition();
+      const res = await queueReconcile({
+        tenantId: TENANT_ID, projectId, action: 'budgeted', items: queueItemsForSelection(scoped), notes: budgetedNotes
+      });
+      afterQueued('budgeted', res);
       setBudgetedNotes('');
-      await load(projectId, { preserveResult: true });
     } catch (e) {
       setError(e.message);
     } finally {
@@ -1672,15 +1777,13 @@ export default function App({ user, onSignOut }) {
     setGenerating(true);
     setError(null);
     try {
-      const res = await markAlreadyBilled({
-        tenantId: TENANT_ID, projectId, entryIds, directCostIds, directCostLineIds, commitmentLineIds, materials, userId,
+      const res = await queueReconcile({
+        tenantId: TENANT_ID, projectId, action: 'already_billed', items: queueItemsForSelection(scoped),
         invoiceNumber: alreadyBilledInvoice, notes: alreadyBilledNotes
       });
-      setResult({ kind: 'already_billed', ...res });
-      finishDisposition();
+      afterQueued('already_billed', res);
       setAlreadyBilledInvoice('');
       setAlreadyBilledNotes('');
-      await load(projectId, { preserveResult: true });
     } catch (e) {
       setError(e.message);
     } finally {
@@ -1991,6 +2094,15 @@ export default function App({ user, onSignOut }) {
           >
             Open draft Change Order in Procore →
           </a>
+        </div>
+      )}
+
+      {result && result.kind === 'queued' && (
+        <div className="banner banner-success">
+          {result.queued} item{result.queued === 1 ? '' : 's'} queued to be {QUEUE_DONE[result.reconcileAction]} tonight
+          {result.total ? ` — ${money(result.total)}` : ''}. {result.queued === 1 ? 'It shows' : 'They show'} as
+          "To be {QUEUE_DONE[result.reconcileAction]}" until then, and can be cancelled before 9 pm.
+          Nothing was sent to Procore.
         </div>
       )}
 
@@ -2662,8 +2774,8 @@ export default function App({ user, onSignOut }) {
                     <label className="select-all-label">
                       <input
                         type="checkbox"
-                        checked={unbilledTickets.filter(t => t.unbilledCount > 0 && !sharesTimesheet(t)).every(t => checkedIds.has(t.id))}
-                        onChange={() => toggleSelectAll(unbilledTickets.filter(t => t.unbilledCount > 0 && !sharesTimesheet(t)).map(t => t.id))}
+                        checked={unbilledTickets.filter(t => t.unbilledCount > 0 && !sharesTimesheet(t) && !isQueued('tm', t.id)).every(t => checkedIds.has(t.id))}
+                        onChange={() => toggleSelectAll(unbilledTickets.filter(t => t.unbilledCount > 0 && !sharesTimesheet(t) && !isQueued('tm', t.id)).map(t => t.id))}
                       />
                       Select all T&amp;M tickets
                     </label>
@@ -2683,8 +2795,9 @@ export default function App({ user, onSignOut }) {
                                 checked={checkedIds.has(t.id)}
                                 // Red cards can't be selected (Ben, 2026-11-19) — only
                                 // unticked, in case one was ticked before it turned red.
-                                disabled={sharesTimesheet(t) && !checkedIds.has(t.id)}
-                                title={sharesTimesheet(t) ? "Can't be billed until its timesheet entries are fixed in Procore — see Full details" : undefined}
+                                disabled={(sharesTimesheet(t) || isQueued('tm', t.id)) && !checkedIds.has(t.id)}
+                                title={sharesTimesheet(t) ? "Can't be billed until its timesheet entries are fixed in Procore — see Full details"
+                                  : isQueued('tm', t.id) ? 'Queued for tonight — cancel that to select it' : undefined}
                                 onChange={() => toggleChecked(t.id)}
                                 aria-label={`Select T&M #${t.number} hours`}
                               />
@@ -2696,6 +2809,7 @@ export default function App({ user, onSignOut }) {
                         <div className="ticket-description" title={t.description || undefined}>{t.description || '(no description)'}</div>
                         {expandedTmId === t.id && <TicketExtras ticket={t} />}
                         <SharedTimesheetFlag ticket={t} />
+                        {queueBadge('tm', t.id)}
                         <div className="ticket-meta">
                           {t.unbilledCount} unbilled hour line{t.unbilledCount === 1 ? '' : 's'}
                           {t.billedCount > 0 && ` (${t.billedCount} already billed)`}
@@ -2750,8 +2864,8 @@ export default function App({ user, onSignOut }) {
                     <label className="select-all-label">
                       <input
                         type="checkbox"
-                        checked={unbilledDc.every(d => checkedDcIds.has(d.id))}
-                        onChange={() => toggleSelectAllDc(unbilledDc.map(d => d.id))}
+                        checked={unbilledDc.filter(d => !dcQueued(d.id)).every(d => checkedDcIds.has(d.id))}
+                        onChange={() => toggleSelectAllDc(unbilledDc.filter(d => !dcQueued(d.id)).map(d => d.id))}
                       />
                       Select all direct costs
                     </label>
@@ -2777,6 +2891,8 @@ export default function App({ user, onSignOut }) {
                               type="checkbox"
                               checked={checkedDcIds.has(d.id)}
                               ref={el => { if (el) el.indeterminate = someLinesChecked; }}
+                              disabled={dcQueued(d.id) && !checkedDcIds.has(d.id)}
+                              title={dcQueued(d.id) ? 'Queued for tonight — cancel that to select it' : undefined}
                               onChange={() => toggleCheckedDc(d.id)}
                             />
                           </label>
@@ -2788,6 +2904,19 @@ export default function App({ user, onSignOut }) {
                           {d.type}
                           {d.partialBilled && ` · ${d.billedLineCount} of ${d.totalLineCount} line items already billed`}
                         </div>
+                        {queueBadge('dc', d.id)}
+                        {(() => {
+                          const lines = queueItems.filter(q => q.kind === 'dcl' && q.key.startsWith(`${d.id}:`));
+                          if (lines.length === 0) return null;
+                          const failed = lines.filter(q => q.status === 'failed').length;
+                          const queued = lines.length - failed;
+                          return (
+                            <div className="queue-summary">
+                              {queued > 0 && <span className="tag tag-draft">{queued} line{queued === 1 ? '' : 's'} queued for tonight</span>}
+                              {failed > 0 && <span className="tag tag-written-off">{failed} line{failed === 1 ? '' : 's'} failed overnight — open to see why</span>}
+                            </div>
+                          );
+                        })()}
 
                         {expandedDcId === d.id && (
                           <div className="line-items">
@@ -2802,13 +2931,14 @@ export default function App({ user, onSignOut }) {
                                 <label className="ticket-check" onClick={e => e.stopPropagation()}>
                                   <input
                                     type="checkbox"
-                                    disabled={!!l.billedStatus}
+                                    disabled={!!l.billedStatus || ((isQueued('dcl', `${d.id}:${l.id}`) || isQueued('dc', d.id)) && !checkedDcLineIds.has(`${d.id}:${l.id}`))}
                                     checked={checkedDcIds.has(d.id) || checkedDcLineIds.has(`${d.id}:${l.id}`)}
                                     onChange={() => toggleCheckedDcLine(d.id, l.id)}
                                   />
                                 </label>
                                 <span>
                                   {l.description || l.costCode || 'Line item'}
+                                  {queueBadge('dcl', `${d.id}:${l.id}`)}
                                   {l.billedStatus === 'billed' && <span className="tag tag-billed"> {l.invoiceNumber || 'Billed'}</span>}
                                   {l.billedStatus === 'draft_co' && <span className="tag tag-draft"> In draft CO</span>}
                                   {l.billedStatus === 'written_off' && <span className="tag tag-written-off"> Written off</span>}
@@ -2852,12 +2982,13 @@ export default function App({ user, onSignOut }) {
                   {unbilledCm.map(c => {
                     const cmId = String(c.id);
                     const detail = cmLineDetailCache.get(cmId);
-                    const selectable = (detail?.lines || []).filter(cmLineSelectable);
+                    const selectable = (detail?.lines || []).filter(cmLineSelectableIn(cmId));
+                    const queuedHere = queueItems.filter(q => q.kind === 'cml' && q.key.startsWith(`${cmId}:`));
                     const checkedHere = [...checkedCmLineIds].filter(k => k.startsWith(`${cmId}:`)).length;
                     const allChecked = selectable.length > 0 && checkedHere === selectable.length;
                     const labourCount = (detail?.lines || []).filter(l => l.isLabour && !l.billedStatus).length;
                     const tmBilledCount = (detail?.lines || []).filter(l => l.tmBilled && !l.billedStatus).length;
-                    const openLines = (detail?.lines || []).filter(l => !l.billedStatus);
+                    const openLines = (detail?.lines || []).filter(l => !l.billedStatus && !isQueued('cml', `${cmId}:${l.id}`));
                     // Card buttons act on the lines ticked here, or on every open
                     // line when none are (Ben hit this 2026-09-25: one ticked line,
                     // the whole commitment got budgeted).
@@ -2895,6 +3026,22 @@ export default function App({ user, onSignOut }) {
                           {c.status && ` · ${c.status}`}
                           {c.partialBilled && ` · ${c.billedLineCount} of ${c.totalLineCount} line items already accounted for`}
                         </div>
+                        {queuedHere.length > 0 && (
+                          <div className="queue-summary">
+                            {['queued', 'failed'].map(st => {
+                              const n = queuedHere.filter(q => q.status === st);
+                              if (n.length === 0) return null;
+                              const acts = [...new Set(n.map(q => QUEUE_DONE[q.action]))].join(' / ');
+                              return (
+                                <span key={st} className={`tag ${st === 'failed' ? 'tag-written-off' : 'tag-draft'}`}>
+                                  {st === 'failed'
+                                    ? `${n.length} line${n.length === 1 ? '' : 's'} not ${acts} overnight — open to see why`
+                                    : `${n.length} line${n.length === 1 ? '' : 's'} to be ${acts}`}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
 
                         {expandedCmId === cmId && (
                           <div className="line-items">
@@ -2941,13 +3088,14 @@ export default function App({ user, onSignOut }) {
                                 <label className="ticket-check" onClick={e => e.stopPropagation()}>
                                   <input
                                     type="checkbox"
-                                    disabled={!cmLineSelectable(l)}
+                                    disabled={!cmLineSelectableIn(cmId)(l) && !checkedCmLineIds.has(`${cmId}:${l.id}`)}
                                     checked={checkedCmLineIds.has(`${cmId}:${l.id}`)}
                                     onChange={() => toggleCmLine(cmId, l)}
                                   />
                                 </label>
                                 <span>
                                   {l.description || 'Line item'}
+                                  {queueBadge('cml', `${cmId}:${l.id}`)}
                                   {l.isLabour && !l.billedStatus && !l.tmBilled && <span className="no-timecard-tag"> LABOUR</span>}
                                   {l.billedStatus === 'billed' && <span className="tag tag-billed"> {l.invoiceNumber || 'Billed'}</span>}
                                   {l.billedStatus === 'draft_co' && <span className="tag tag-draft"> In draft CO</span>}

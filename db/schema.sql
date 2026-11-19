@@ -335,3 +335,52 @@ create table if not exists procore_line_cache (
   fetched_at timestamptz not null default now(),
   primary key (tenant_id, project_id, record_kind, record_id)
 );
+
+-- ============================================================
+-- Queued reconciling (2026-11-19, worker/src/queue.js): Budgeted / Written off /
+-- Already Billed clicked in the sidebar are saved here (no Procore calls) and
+-- done overnight. Each item keeps the amount the person saw; if it changed by
+-- the time it runs, nothing is recorded for it and it fails with the reason
+-- (shown on the item, and in the dashboard digest for LEDGER admins).
+-- Created by the worker itself (ensureQueueSchema).
+-- ============================================================
+create table if not exists reconcile_queue (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id text not null,
+  project_id text not null,
+  action text not null check (action in ('written_off', 'budgeted', 'already_billed')),
+  options jsonb not null default '{}'::jsonb,   -- reasonCategory, reasonNotes, notes, invoiceNumber
+  requested_by text not null,
+  requested_at timestamptz not null default now(),
+  status text not null default 'queued' check (status in ('queued', 'running', 'done', 'failed', 'partly_failed', 'cancelled')),
+  started_at timestamptz,
+  completed_at timestamptz,
+  attempts integer not null default 0
+);
+create table if not exists reconcile_queue_items (
+  queue_id uuid not null references reconcile_queue(id) on delete cascade,
+  tenant_id text not null,
+  project_id text not null,
+  item_kind text not null,          -- tm | mat | dc | dcl | cml
+  item_key text not null,           -- ticket id, material id, DC id, "dcId:lineId", "commitmentId:lineId"
+  label text,
+  expected_amount numeric,          -- what the person saw when they queued it (null = not checked)
+  material_amount numeric,          -- a T&M material's value
+  status text not null default 'queued' check (status in ('queued', 'done', 'failed', 'cancelled')),
+  error text,
+  actual_amount numeric,
+  tried_at timestamptz,
+  dismissed_at timestamptz,         -- the person dismissed the failure on the item
+  reviewed_by text,                 -- a LEDGER admin cleared it from the digest
+  reviewed_at timestamptz,
+  primary key (queue_id, item_kind, item_key)
+);
+
+-- LEDGER's Procore calls in Procore's current hourly window (2026-11-19,
+-- worker/src/procore.js), for the loading animation's rate meter. One row.
+create table if not exists procore_rate_window (
+  id text primary key,
+  window_start timestamptz,
+  calls integer not null default 0,
+  updated_at timestamptz not null default now()
+);

@@ -1664,6 +1664,7 @@ async function fetchUnbilledTmLines(env, {
 
     lineItems.push({
       timecardEntryId: key,
+      entryId: tc.time_and_material_entry?.id ?? null, // the ticket (queued reconciling checks per ticket)
       ticketNumber: num,
       ticketDescription,
       ticketDate,
@@ -4877,12 +4878,12 @@ export async function generateStandaloneInvoice(env, {
 // ============================================================
 
 // 'bulk_reconciliation' is only used by the admin bulk reconcile (bulk.js).
-const WRITE_OFF_REASONS = ['warranty', 'service_call', 'goodwill', 'pm_decision', 'other', 'bulk_reconciliation'];
+export const WRITE_OFF_REASONS = ['warranty', 'service_call', 'goodwill', 'pm_decision', 'other', 'bulk_reconciliation'];
 
 export async function writeOffRecords(env, {
   tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [],
   materialIds = [], materialAmounts = {},
-  userId, reasonCategory, reasonNotes, invoiceNumber, bulkReconciliationId = null
+  userId, reasonCategory, reasonNotes, invoiceNumber, bulkReconciliationId = null, beforeInsert = null
 }) {
   if (entryIds.length === 0 && directCostIds.length === 0 && directCostLineIds.length === 0 && commitmentIds.length === 0 && commitmentLineIds.length === 0 && materialIds.length === 0) {
     throw new Error('Nothing selected — pick at least one T&M ticket, material, direct cost, or commitment to write off.');
@@ -4911,7 +4912,7 @@ export async function writeOffRecords(env, {
     tmEntries = tm.entries;
     for (const line of tm.lineItems) {
       tmRows.push({
-        tenantId, projectId, recordType: 'timecard', procoreRecordId: line.timecardEntryId,
+        tenantId, projectId, recordType: 'timecard', procoreRecordId: line.timecardEntryId, entryId: line.entryId,
         amount: line.amount, status: 'written_off', writeOffReason: reasonNotes, reconciledBy: userId || 'ledger-system',
         invoiceNumber: trimmedInvoiceNumber, bulkReconciliationId
       });
@@ -4996,6 +4997,9 @@ export async function writeOffRecords(env, {
   }));
 
   const allRows = [...tmRows, ...dcRows, ...commitmentRows, ...materialRows];
+  // Queued reconciling (queue.js) checks the rows against what the person saw
+  // when they queued it, and throws before anything is written if it changed.
+  if (beforeInsert) await beforeInsert(allRows);
   const ids = await insertBillingRecordsBatch(env, allRows);
   await insertWriteOffsBatch(env, allRows.map((row, i) => ({
     billingRecordId: ids[i], tenantId, projectId, reasonCategory, reasonNotes,
@@ -5046,7 +5050,7 @@ export async function markAsAlreadyBilled(env, args) {
 async function recordDisposition(env, {
   tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [],
   materialIds = [], materialAmounts = {}, userId, notes,
-  invoiceNumber, status, verb, billedOutsideLedger = false, bulkReconciliationId = null
+  invoiceNumber, status, verb, billedOutsideLedger = false, bulkReconciliationId = null, beforeInsert = null
 }) {
   if (entryIds.length === 0 && directCostIds.length === 0 && directCostLineIds.length === 0 && commitmentIds.length === 0 && commitmentLineIds.length === 0 && materialIds.length === 0) {
     throw new Error(`Nothing selected — pick at least one T&M ticket, material, direct cost, or commitment to ${verb}.`);
@@ -5060,7 +5064,7 @@ async function recordDisposition(env, {
     tmEntries = tm.entries;
     for (const line of tm.lineItems) {
       tmRows.push({
-        tenantId, projectId, recordType: 'timecard', procoreRecordId: line.timecardEntryId,
+        tenantId, projectId, recordType: 'timecard', procoreRecordId: line.timecardEntryId, entryId: line.entryId,
         amount: line.amount, status, writeOffReason: notes, reconciledBy: userId || 'ledger-system', ...extra
       });
     }
@@ -5128,6 +5132,7 @@ async function recordDisposition(env, {
   }));
 
   const allRows = [...tmRows, ...dcRows, ...commitmentRows, ...materialRows];
+  if (beforeInsert) await beforeInsert(allRows); // see writeOffRecords
   await insertBillingRecordsBatch(env, allRows);
 
   const totalAmount = Math.round(allRows.reduce((s, r) => s + r.amount, 0) * 100) / 100;

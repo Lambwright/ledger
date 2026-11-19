@@ -10,6 +10,7 @@ import MultiSelect from "./components/MultiSelect.jsx";
 import ColumnPicker from "./components/ColumnPicker.jsx";
 import ViewBar from "./components/ViewBar.jsx";
 import { BulkBadge, BulkDetail, BulkDialog, hasActiveBatch, reopenMessage } from "./components/BulkReconcile.jsx";
+import ReconcileDigest from "./components/ReconcileDigest.jsx";
 import { downloadXlsx } from "./exportXlsx.js";
 
 const PROCORE_ORIGIN = "https://us02.procore.com";
@@ -873,6 +874,7 @@ export default function App() {
     <>
       <Header user={user} onLogout={handleLogout} />
       <div className="container container-wide">
+        {isLedgerAdmin && <ReconcileDigest onUnauthorized={handleLogout} />}
         <div className="hero-row">
           <div className="stat stat-hero">
             <span className="stat-label">Margin to date vs budgeted</span>

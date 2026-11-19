@@ -367,6 +367,24 @@ body {
   white-space: nowrap;
 }
 
+/* Queued reconciling (2026-11-19): "To be budgeted" etc. until tonight's run,
+   or why it failed overnight. */
+.queue-badge {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 11px;
+}
+.line-item-check .queue-badge { display: inline-flex; margin: 0 0 0 6px; }
+.queue-badge .tag { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.03em; }
+.queue-error { color: #e08a6f; font-size: 11px; line-height: 1.4; flex-basis: 100%; }
+.line-item-check .queue-error { flex-basis: auto; }
+.queue-badge .undo-link { font-size: 11px; }
+.queue-summary { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.queue-summary .tag { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.03em; }
+
 /* Full details: the shared-timesheet explanation and fix. */
 .dup-panel {
   border: 1px solid var(--danger);

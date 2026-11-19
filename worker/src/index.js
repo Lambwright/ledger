@@ -19,7 +19,7 @@
 // before that it used a "frontend key" baked into its public JS, which let
 // anyone with the sidebar's URL bill.
 
-import { procoreRequest } from './procore.js';
+import { procoreRequest, flushRateCount, rateStatus } from './procore.js';
 import { dbQuery } from './db.js';
 import {
   listPendingTickets, ticketDetail, generateInvoice, pushToDraftCO, previewBilling,
@@ -36,6 +36,7 @@ import {
   runScheduled, verifyEinbauUser, verifyEinbauSession, hasLedgerApp, listPortfolio, searchProjects, markUserActive, keepUserActive
 } from './portfolio.js';
 import { queueBulkReconciliation, reopenProject, projectReconciliation } from './bulk.js';
+import { queueReconcile, queueState, cancelQueued, queuedConflicts, reconcileDigest, markDigestReviewed } from './queue.js';
 import { can, READ_ACTIONS, UNDO_ACTIONS, NO_ACCESS_MESSAGE } from './roles.js';
 import { getPrefs, savePref } from './prefs.js';
 import { pushFinancialsToCrm, handleCrmRefresh } from './crm.js';
@@ -374,8 +375,35 @@ async function handleGenericDb(env, body) {
   return json(rows, 200);
 }
 
+const BILLING_ACTIONS = new Set([
+  'preview_billing', 'generate_invoice', 'push_to_draft_co',
+  'preview_direct_cost_billing', 'generate_direct_cost_invoice', 'push_direct_cost_to_draft_co',
+  'preview_commitment_billing', 'generate_commitment_invoice', 'push_commitment_to_draft_co',
+  'preview_combined_billing', 'generate_combined_invoice', 'push_combined_to_draft_co'
+]);
+
 async function handleAction(env, body, ctx) {
   const { action } = body;
+
+  // Anything queued to be budgeted / written off / marked already billed
+  // tonight can't be billed meanwhile (queue.js). DB only.
+  if (BILLING_ACTIONS.has(action) && body.project_id) {
+    const ids = (a) => (Array.isArray(a) ? a.map(String) : []);
+    const conflicts = await queuedConflicts(env, {
+      tenantId: String(body.tenant_id || env.PROCORE_COMPANY_ID), projectId: body.project_id,
+      entryIds: ids(body.entry_ids), directCostIds: ids(body.direct_cost_ids), directCostLineIds: ids(body.direct_cost_line_ids),
+      commitmentLineIds: ids(body.commitment_line_ids),
+      materialIds: [...ids((body.material_lines || []).map(m => m?.id)), ...ids((body.materials || []).map(m => m?.id))]
+    });
+    if (conflicts.length > 0) {
+      const what = { written_off: 'written off', budgeted: 'budgeted', already_billed: 'marked already billed' };
+      return json({
+        error: `${conflicts.map(c => `${c.label || c.item_key} (to be ${what[c.action]})`).slice(0, 5).join(', ')}` +
+          `${conflicts.length > 5 ? '…' : ''} ${conflicts.length === 1 ? 'is' : 'are'} queued for tonight, so can't be billed. Cancel the queued mark first, or deselect.`,
+        code: 'QUEUED_FOR_TONIGHT'
+      }, 400);
+    }
+  }
 
   // The sidebar already has every list loaded — it sends its record counts
   // here so the portfolio stays current at no extra Procore cost.
@@ -460,8 +488,49 @@ async function handleAction(env, body, ctx) {
     return json(result, 200);
   }
 
+  // LEDGER's Procore usage this hour, for the loading animation (procore.js).
+  // Reads LEDGER's own count — no Procore call.
+  if (action === 'rate_status') {
+    return json(await rateStatus(env), 200);
+  }
+
+  // Queued reconciling (queue.js, Ben 2026-11-19): Budgeted / Written off /
+  // Already Billed are saved here and done overnight. No Procore calls.
+  if (action === 'queue_reconcile') {
+    if (!body.project_id) return json({ error: 'project_id is required' }, 400);
+    try {
+      return json(await queueReconcile(env, {
+        tenantId: String(body.tenant_id || env.PROCORE_COMPANY_ID), projectId: body.project_id,
+        action: body.reconcile_action, items: body.items, userId: body.user_id,
+        options: {
+          reasonCategory: body.reason_category, reasonNotes: body.reason_notes,
+          notes: body.notes, invoiceNumber: body.invoice_number
+        }
+      }), 200);
+    } catch (e) {
+      return json({ error: e.message }, 400);
+    }
+  }
+  if (action === 'reconcile_queue_state') {
+    if (!body.project_id) return json({ error: 'project_id is required' }, 400);
+    return json({ items: await queueState(env, { tenantId: String(body.tenant_id || env.PROCORE_COMPANY_ID), projectId: body.project_id }) }, 200);
+  }
+  if (action === 'cancel_queued_reconcile') {
+    if (!body.project_id || !body.kind || body.key == null) return json({ error: 'project_id, kind and key are required' }, 400);
+    try {
+      return json(await cancelQueued(env, {
+        tenantId: String(body.tenant_id || env.PROCORE_COMPANY_ID), projectId: body.project_id,
+        kind: body.kind, key: body.key, onlyRequestedBy: body.only_reconciled_by || null
+      }), 200);
+    } catch (e) {
+      return json({ error: e.message }, 403);
+    }
+  }
+
   // Write-offs (Ben's ask 2026-09-17) — pure LEDGER bookkeeping, no Procore
   // writes, so this is a plain (non-streamed) action like revert_to_unbilled.
+  // Since 2026-11-19 the sidebar queues these instead (queue_reconcile); the
+  // three direct actions stay for service-key callers and overnight runs.
   if (action === 'write_off_records') {
     const {
       tenant_id, project_id, entry_ids, direct_cost_ids, direct_cost_line_ids, commitment_ids, commitment_line_ids,
@@ -854,6 +923,13 @@ async function handlePortfolio(request, env) {
       canSourceRecords: can.sourceRecords(level)
     }, 200);
   }
+  // Overnight reconciling digest (queue.js, Ben 2026-11-19): what failed to
+  // reconcile overnight and why. LEDGER admins only. DB only, no Procore calls.
+  if (body.action === 'reconcile_digest' || body.action === 'reconcile_digest_reviewed') {
+    if (level !== 'admin') return json({ error: 'Only LEDGER admins can see this.' }, 403);
+    if (body.action === 'reconcile_digest') return json(await reconcileDigest(env, { tenantId }), 200);
+    return json(await markDigestReviewed(env, { tenantId, items: body.items, userId: user.username }), 200);
+  }
   // Bulk reconciliation (bulk.js) — LEDGER admins only, checked here on every
   // call from LEDGER's own /auth/verify result, never from the page.
   if (body.action === 'bulk_reconcile' || body.action === 'reopen_project') {
@@ -929,7 +1005,9 @@ function whenBodyDone(res, done) {
 
 const worker = {
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runScheduled(env).then(log => console.log('[scheduled]', log.join('; ') || 'nothing due')));
+    ctx.waitUntil(runScheduled(env)
+      .then(log => console.log('[scheduled]', log.join('; ') || 'nothing due'))
+      .finally(() => flushRateCount(env, true)));
     // Project money to CRM every 15 minutes — no Procore calls (crm.js).
     if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() % 15 === 0) {
       ctx.waitUntil(pushFinancialsToCrm(env)
@@ -941,7 +1019,11 @@ const worker = {
   // Every response passes through watchRefusals, which reports the refused
   // ones to HELM's Security tab (security.js).
   async fetch(request, env, ctx) {
-    return watchRefusals(request, env, ctx, () => worker.route(request, env, ctx));
+    const res = await watchRefusals(request, env, ctx, () => worker.route(request, env, ctx));
+    // Save this request's last Procore calls for the rate meter (procore.js);
+    // a streamed invoice's later calls save as they go, every few seconds.
+    ctx?.waitUntil?.(flushRateCount(env, true).catch(() => {}));
+    return res;
   },
 
   async route(request, env, ctx) {

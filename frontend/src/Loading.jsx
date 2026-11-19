@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { subscribeRate, describeRate } from './rateMeter';
 
 // The suite's shared loading animation (Claude typing at a CRT, in costume for
 // the season, with rotating loading lines) from HELM's einbau-festive.js
@@ -6,6 +7,10 @@ import { useEffect, useRef, useState } from 'react';
 // The animation gets its own empty box — React never touches its insides — and
 // `text` updates go through setText, so a changing message (e.g. invoice
 // progress) can't trip React up. Plain text if the script didn't load.
+//
+// LEDGER's Procore usage this hour shows under it (Ben, 2026-11-19): he sweats
+// and types faster as the 600 calls run low, and keels over when they're gone,
+// with the time fresh ones arrive (rateMeter.js).
 export default function Loading({ text, size = 140, className = 'loading' }) {
   const ref = useRef(null);
   const loader = useRef(null);
@@ -14,7 +19,20 @@ export default function Loading({ text, size = 140, className = 'loading' }) {
   useEffect(() => {
     if (!festive || !ref.current) return undefined;
     loader.current = festive.loader(ref.current, { size, text });
+    const unsubscribe = subscribeRate((status) => {
+      const l = loader.current;
+      const d = describeRate(status);
+      if (!l || !d || typeof l.meter !== 'function') return; // an older copy of the script
+      if (d.dead) {
+        l.dead(d.text);
+      } else {
+        l.revive();
+        l.strain(d.strain);
+        l.meter(d.text);
+      }
+    });
     return () => {
+      unsubscribe();
       loader.current?.remove();
       loader.current = null;
     };

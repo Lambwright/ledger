@@ -37,6 +37,83 @@ async function getAccessToken(env) {
 let callCount = 0;
 export const procoreCallCount = () => callCount;
 
+// ---- LEDGER's hourly Procore usage, shared across worker instances ----
+// (Ben, 2026-11-19: show it in the loading animation.) Procore's headers only
+// describe the 25-per-minute bucket until the 600/hour one is nearly gone, so
+// LEDGER counts its own calls: each instance adds its calls to one row every
+// few seconds, using Procore's rule for the hour (it starts at the first call
+// after the last reset). Whenever a response does show the 600 bucket, its
+// remaining/reset replace the estimate. Never allowed to break a Procore call.
+let pendingCalls = 0;
+let pendingSince = null;
+let lastFlush = 0;
+let calibration = null; // { remaining, reset } from a response that showed the 600 bucket
+let rateTableReady = false;
+
+function noteCall(res) {
+  pendingCalls++;
+  if (!pendingSince) pendingSince = new Date();
+  const limit = res?.headers?.get?.('x-rate-limit-limit');
+  if (limit === '600') {
+    const remaining = Number(res.headers.get('x-rate-limit-remaining'));
+    const reset = Number(res.headers.get('x-rate-limit-reset'));
+    if (Number.isFinite(remaining) && Number.isFinite(reset)) calibration = { remaining, reset };
+  }
+}
+
+export async function flushRateCount(env, force = false) {
+  if (pendingCalls === 0 && !calibration) return;
+  if (!force && !calibration && Date.now() - lastFlush < 3000) return;
+  const n = pendingCalls;
+  const since = pendingSince || new Date();
+  const cal = calibration;
+  pendingCalls = 0;
+  pendingSince = null;
+  calibration = null;
+  lastFlush = Date.now();
+  try {
+    const { dbQuery } = await import('./db.js');
+    if (!rateTableReady) {
+      await dbQuery(env, `create table if not exists procore_rate_window (
+        id text primary key, window_start timestamptz, calls integer not null default 0, updated_at timestamptz not null default now()
+      )`, []);
+      rateTableReady = true;
+    }
+    if (n > 0) {
+      await dbQuery(env, `insert into procore_rate_window (id, window_start, calls, updated_at) values ('ledger', $1, $2, now())
+        on conflict (id) do update set
+          calls = case when procore_rate_window.window_start is null or $1 >= procore_rate_window.window_start + interval '1 hour'
+                       then $2 else procore_rate_window.calls + $2 end,
+          window_start = case when procore_rate_window.window_start is null or $1 >= procore_rate_window.window_start + interval '1 hour'
+                       then $1 else procore_rate_window.window_start end,
+          updated_at = now()`, [since.toISOString(), n]);
+    }
+    if (cal) {
+      await dbQuery(env, `update procore_rate_window set calls = $1, window_start = to_timestamp($2) - interval '1 hour', updated_at = now()
+        where id = 'ledger'`, [Math.max(0, 600 - cal.remaining), cal.reset]);
+    }
+  } catch (e) {
+    console.log('[rate] count not saved:', e.message);
+  }
+}
+
+// { used, limit, resetAt, exhausted } — read from the shared row, no Procore call.
+export async function rateStatus(env) {
+  await flushRateCount(env, true);
+  const { dbQuery } = await import('./db.js');
+  const rows = await dbQuery(env, `select window_start, calls,
+      (window_start is null or now() >= window_start + interval '1 hour') as expired
+    from procore_rate_window where id = 'ledger'`, []).catch(() => []);
+  const r = rows[0];
+  if (!r || r.expired) return { used: 0, limit: 600, resetAt: null, exhausted: false };
+  const used = Math.min(600, Number(r.calls) || 0);
+  return {
+    used, limit: 600,
+    resetAt: new Date(new Date(r.window_start).getTime() + 3600 * 1000).toISOString(),
+    exhausted: used >= 600
+  };
+}
+
 export async function procoreRequest(env, method, path, data) {
   callCount++;
   if (!path || !path.startsWith('/rest/')) {
@@ -57,7 +134,7 @@ export async function procoreRequest(env, method, path, data) {
       'Procore-Company-Id': env.PROCORE_COMPANY_ID
     },
     body: canHaveBody ? JSON.stringify(data) : undefined
-  });
+  }).then((res) => { noteCall(res); return res; });
 
   let pcResponse = await doRequest(accessToken);
 
@@ -106,6 +183,7 @@ export async function procoreRequest(env, method, path, data) {
     if (/rate.?limit|retry-after/i.test(key)) headers[key] = value;
   }
 
+  await flushRateCount(env);
   return { status: pcResponse.status, data: responseData, headers };
 }
 
@@ -121,6 +199,8 @@ export async function procoreUpload(env, method, path, form) {
     headers: { Authorization: `Bearer ${token}`, 'Procore-Company-Id': env.PROCORE_COMPANY_ID },
     body: form
   });
+  noteCall(res);
+  await flushRateCount(env);
   const text = await res.text();
   let data;
   try { data = text ? JSON.parse(text) : null; } catch { data = { bodyPreview: text.slice(0, 300) }; }
@@ -139,6 +219,8 @@ export async function procoreDownload(env, path) {
     redirect: 'manual',
     headers: { Authorization: `Bearer ${token}`, 'Procore-Company-Id': env.PROCORE_COMPANY_ID }
   });
+  noteCall(res);
+  await flushRateCount(env);
   const location = res.headers.get('location');
   if (res.status >= 300 && res.status < 400 && location) {
     const file = await fetch(location);
