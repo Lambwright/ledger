@@ -1326,7 +1326,7 @@ async function findOrCreateBillingPeriod(env, projectId, billingPeriodId, newPer
 // shared 25-req/60s account-wide bucket before throttleForRateLimit ever gets
 // a response to react to (it only paces BETWEEN sequential calls). Now
 // sequential, with the same requestWithRetry the CO line-item loops use.
-async function fetchEntriesAndTimecards(env, projectId, entryIds, onProgress = () => {}) {
+async function fetchEntriesAndTimecards(env, projectId, entryIds, onProgress = () => {}, allowSharedTimesheet = false) {
   const entries = [];
   for (const id of entryIds) {
     const res = await requestWithRetry(env, 'GET', `/rest/v1.0/projects/${projectId}/time_and_material_entries/${id}`, null, onProgress);
@@ -1343,6 +1343,38 @@ async function fetchEntriesAndTimecards(env, projectId, entryIds, onProgress = (
   }
   const wanted = new Set(entries.map(e => e.id));
   const timecards = tcRes.data.filter(tc => wanted.has(tc.time_and_material_entry?.id));
+
+  // A ticket sharing timesheet entries with another ticket can't be billed,
+  // written off or marked until that's fixed in Procore (Ben, 2026-11-19):
+  // LEDGER records the shared entry once, so one ticket's hours would be
+  // skipped while both show as done. The sidebar shows these cards red and
+  // won't let them be selected; this catches anything sent anyway. Nothing
+  // has been written to Procore at this point. A bulk reconciliation (admin
+  // closing out the whole project) is exempt: every ticket gets marked, so no
+  // hours are lost.
+  const shared = allowSharedTimesheet ? new Map() : sharedTimesheetEntries(tcRes.data);
+  const blocked = entries.filter(e => timecards.some(tc =>
+    tc.time_and_material_entry?.id === e.id && shared.has(String(tc.timecard_entry_id))));
+  if (blocked.length > 0) {
+    const all = await requestWithRetry(env, 'GET', `/rest/v1.0/projects/${projectId}/time_and_material_entries`, null, onProgress).catch(() => null);
+    const numberOf = new Map((all?.status === 200 ? all.data : entries).map(e => [e.id, e.number]));
+    const groups = blocked.map(e => {
+      const others = [...new Set(timecards
+        .filter(tc => tc.time_and_material_entry?.id === e.id && shared.has(String(tc.timecard_entry_id)))
+        .flatMap(tc => shared.get(String(tc.timecard_entry_id)).map(o => o.time_and_material_entry.id))
+        .filter(id => id !== e.id)
+        .map(id => numberOf.get(id))
+        .filter(n => n != null))].sort((a, b) => a - b);
+      return `T&M #${e.number}${others.length ? ` (shares with ${others.map(n => `#${n}`).join(', ')})` : ''}`;
+    });
+    const err = new Error(
+      `${groups.join('; ')}: ${blocked.length === 1 ? 'its' : 'their'} timecards are on another ticket's timesheet entries in Procore, ` +
+      `so LEDGER can't bill ${blocked.length === 1 ? 'it' : 'them'} until that's fixed in Procore. ` +
+      `Open Full details on the red card for how. Deselect ${blocked.length === 1 ? 'it' : 'them'} to bill the rest. Nothing was created.`
+    );
+    err.code = 'SHARED_TIMESHEET';
+    throw err;
+  }
   return { entries, timecards };
 }
 
@@ -1566,7 +1598,7 @@ function applyLineEdit(coLine, edit) {
 // the way billing does (that check, plus grouping into CO lines, lives in
 // computeCOLines below this — this helper stops one step before that).
 async function fetchUnbilledTmLines(env, {
-  tenantId, projectId, entryIds, rateOverrides, confirmUnlinked, onProgress = () => {}
+  tenantId, projectId, entryIds, rateOverrides, confirmUnlinked, onProgress = () => {}, allowSharedTimesheet = false
 }) {
   const { mode, projectTypeName } = await resolveBillingMode(env, { tenantId, projectId });
   if (mode === 'non_billable') {
@@ -1578,7 +1610,7 @@ async function fetchUnbilledTmLines(env, {
     throw err;
   }
 
-  const { entries, timecards } = await fetchEntriesAndTimecards(env, projectId, entryIds, onProgress);
+  const { entries, timecards } = await fetchEntriesAndTimecards(env, projectId, entryIds, onProgress, allowSharedTimesheet);
   const multi = entries.length > 1;
   const numbers = entries.map(e => e.number);
   const label = ticketLabel(numbers);
@@ -4875,7 +4907,7 @@ export async function writeOffRecords(env, {
   let tmEntries = [];
   const tmRows = [];
   if (entryIds.length > 0) {
-    const tm = await fetchUnbilledTmLines(env, { tenantId, projectId, entryIds, confirmUnlinked: true });
+    const tm = await fetchUnbilledTmLines(env, { tenantId, projectId, entryIds, confirmUnlinked: true, allowSharedTimesheet: bulkReconciliationId != null });
     tmEntries = tm.entries;
     for (const line of tm.lineItems) {
       tmRows.push({
@@ -5024,7 +5056,7 @@ async function recordDisposition(env, {
   let tmEntries = [];
   const tmRows = [];
   if (entryIds.length > 0) {
-    const tm = await fetchUnbilledTmLines(env, { tenantId, projectId, entryIds, confirmUnlinked: true });
+    const tm = await fetchUnbilledTmLines(env, { tenantId, projectId, entryIds, confirmUnlinked: true, allowSharedTimesheet: bulkReconciliationId != null });
     tmEntries = tm.entries;
     for (const line of tm.lineItems) {
       tmRows.push({

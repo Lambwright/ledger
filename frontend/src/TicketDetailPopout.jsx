@@ -33,6 +33,7 @@ function SharedTimesheetPanel({ shared, thisNumber }) {
         Each timesheet entry in Procore should be on one T&amp;M ticket. T&amp;M #{thisNumber} and {otherList} are
         linked to the same {shared.entries.length} entr{shared.entries.length === 1 ? 'y' : 'ies'}, so LEDGER can
         only bill those hours once: one ticket's hours go out and the other's are skipped, but both tickets show as billed.
+        Until it's fixed, LEDGER won't let either ticket be billed, written off or marked.
       </p>
 
       <table className="dup-table">

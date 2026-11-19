@@ -125,8 +125,8 @@ function SharedTimesheetFlag({ ticket }) {
   if (!sharesTimesheet(ticket)) return null;
   const list = ticket.sharesTimesheetWith.map(n => `#${n}`).join(', ');
   return (
-    <div className="dup-flag" title="These tickets are linked to the same timesheet entries in Procore, so LEDGER can only bill those hours once. Open Full details for the fix.">
-      ⚠ Same timesheet entries as T&amp;M {list}
+    <div className="dup-flag" title="These tickets are linked to the same timesheet entries in Procore, so LEDGER won't bill either until that's fixed. Open Full details for the fix.">
+      ⚠ Can't bill: same timesheet entries as T&amp;M {list}
     </div>
   );
 }
@@ -2662,8 +2662,8 @@ export default function App({ user, onSignOut }) {
                     <label className="select-all-label">
                       <input
                         type="checkbox"
-                        checked={unbilledTickets.filter(t => t.unbilledCount > 0).every(t => checkedIds.has(t.id))}
-                        onChange={() => toggleSelectAll(unbilledTickets.filter(t => t.unbilledCount > 0).map(t => t.id))}
+                        checked={unbilledTickets.filter(t => t.unbilledCount > 0 && !sharesTimesheet(t)).every(t => checkedIds.has(t.id))}
+                        onChange={() => toggleSelectAll(unbilledTickets.filter(t => t.unbilledCount > 0 && !sharesTimesheet(t)).map(t => t.id))}
                       />
                       Select all T&amp;M tickets
                     </label>
@@ -2681,6 +2681,10 @@ export default function App({ user, onSignOut }) {
                               <input
                                 type="checkbox"
                                 checked={checkedIds.has(t.id)}
+                                // Red cards can't be selected (Ben, 2026-11-19) — only
+                                // unticked, in case one was ticked before it turned red.
+                                disabled={sharesTimesheet(t) && !checkedIds.has(t.id)}
+                                title={sharesTimesheet(t) ? "Can't be billed until its timesheet entries are fixed in Procore — see Full details" : undefined}
                                 onChange={() => toggleChecked(t.id)}
                                 aria-label={`Select T&M #${t.number} hours`}
                               />
