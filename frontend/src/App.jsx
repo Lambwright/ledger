@@ -116,6 +116,21 @@ function TicketExtras({ ticket }) {
   );
 }
 
+// Red flag for a ticket whose timecards are linked to the same Procore
+// timesheet entries as another ticket's (Ben's ask 2026-11-19). LEDGER bills
+// each timesheet entry once, so one of the tickets' hours would be skipped.
+// Full details explains which ticket is wrongly linked and how to fix it.
+const sharesTimesheet = (t) => (t.sharesTimesheetWith?.length || 0) > 0;
+function SharedTimesheetFlag({ ticket }) {
+  if (!sharesTimesheet(ticket)) return null;
+  const list = ticket.sharesTimesheetWith.map(n => `#${n}`).join(', ');
+  return (
+    <div className="dup-flag" title="These tickets are linked to the same timesheet entries in Procore, so LEDGER can only bill those hours once. Open Full details for the fix.">
+      ⚠ Same timesheet entries as T&amp;M {list}
+    </div>
+  );
+}
+
 // Procore's T&M ticket statuses. Seen live 2026-11-18: in_progress,
 // ready_for_review, field_verified. Colours follow Procore's list (Ben's
 // screenshots 2026-11-18): Field Verified green, In Progress blue, Closed grey.
@@ -2058,7 +2073,7 @@ export default function App({ user, onSignOut }) {
                 {billedTickets.map(t => (
                   <div
                     key={t.id}
-                    className="ticket-card readonly"
+                    className={`ticket-card readonly ${sharesTimesheet(t) ? 'shares-timesheet' : ''}`}
                     onClick={() => setExpandedTmId(expandedTmId === t.id ? null : t.id)}
                   >
                     <div className="ticket-card-header">
@@ -2067,6 +2082,7 @@ export default function App({ user, onSignOut }) {
                     </div>
                     <div className="ticket-description" title={t.description || undefined}>{t.description || '(no description)'}</div>
                     {expandedTmId === t.id && <TicketExtras ticket={t} />}
+                    <SharedTimesheetFlag ticket={t} />
                     <div className="ticket-meta">
                       {t.hasDraftCO && <span className="tag tag-draft">In draft CO</span>}
                       {t.invoiceNumbers.map(n => <span className="tag tag-billed" key={n}>{n}</span>)}
@@ -2217,12 +2233,13 @@ export default function App({ user, onSignOut }) {
               <div className="list-hint">T&amp;M Tickets</div>
               <div className="ticket-list">
                 {writtenOffTickets.map(t => (
-                  <div key={t.id} className="ticket-card readonly">
+                  <div key={t.id} className={`ticket-card readonly ${sharesTimesheet(t) ? 'shares-timesheet' : ''}`}>
                     <div className="ticket-card-header">
                       <span className="ticket-number" title={`T&M #${t.number}`}>T&amp;M #{t.number}</span>
                       <span className="ticket-amount">{money(t.writtenOffAmount)}</span>
                     </div>
                     <div className="ticket-description" title={t.description || undefined}>{t.description || '(no description)'}</div>
+                    <SharedTimesheetFlag ticket={t} />
                     <div className="ticket-meta">
                       {[...new Set(t.writtenOffLines.map(l => WRITE_OFF_REASON_OPTIONS.find(o => o.value === l.reasonCategory)?.label || l.reasonCategory))].join(', ')}
                       {[...new Set(t.writtenOffLines.map(l => l.invoiceNumber).filter(Boolean))].map(n => ` · Invoiced on #${n}`).join('')}
@@ -2287,12 +2304,13 @@ export default function App({ user, onSignOut }) {
               <div className="list-hint">T&amp;M Tickets</div>
               <div className="ticket-list">
                 {budgetedTickets.map(t => (
-                  <div key={t.id} className="ticket-card readonly">
+                  <div key={t.id} className={`ticket-card readonly ${sharesTimesheet(t) ? 'shares-timesheet' : ''}`}>
                     <div className="ticket-card-header">
                       <span className="ticket-number" title={`T&M #${t.number}`}>T&amp;M #{t.number}</span>
                       <span className="ticket-amount">{money(t.budgetedAmount)}</span>
                     </div>
                     <div className="ticket-description" title={t.description || undefined}>{t.description || '(no description)'}</div>
+                    <SharedTimesheetFlag ticket={t} />
                     {t.budgetedLines.some(l => l.reasonNotes) && (
                       <div className="ticket-meta">
                         {[...new Set(t.budgetedLines.map(l => l.reasonNotes).filter(Boolean))].join(', ')}
@@ -2654,7 +2672,7 @@ export default function App({ user, onSignOut }) {
                     {unbilledTickets.map(t => (
                       <div
                         key={t.id}
-                        className={`ticket-card ${checkedIds.has(t.id) ? 'checked' : ''}`}
+                        className={`ticket-card ${checkedIds.has(t.id) ? 'checked' : ''} ${sharesTimesheet(t) ? 'shares-timesheet' : ''}`}
                         onClick={() => setExpandedTmId(expandedTmId === t.id ? null : t.id)}
                       >
                         <div className="ticket-card-header">
@@ -2673,6 +2691,7 @@ export default function App({ user, onSignOut }) {
                         </div>
                         <div className="ticket-description" title={t.description || undefined}>{t.description || '(no description)'}</div>
                         {expandedTmId === t.id && <TicketExtras ticket={t} />}
+                        <SharedTimesheetFlag ticket={t} />
                         <div className="ticket-meta">
                           {t.unbilledCount} unbilled hour line{t.unbilledCount === 1 ? '' : 's'}
                           {t.billedCount > 0 && ` (${t.billedCount} already billed)`}

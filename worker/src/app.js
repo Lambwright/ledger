@@ -99,6 +99,28 @@ function reconciliationKey(tc) {
   return String(tc.timecard_entry_id ?? tc.id);
 }
 
+// Timesheet entries linked to MORE THAN ONE T&M ticket (Ben's ask 2026-11-19).
+// Found live on 562949955500463: ticket #12 (Fri Nov 13) had its timecards
+// applied to Thursday's timesheet entries, the same ones #15 (Thu Nov 12) used.
+// Billing is keyed on the timesheet entry, so invoice #3 billed #12's hours
+// once and #15's hours silently never — while #15 showed as billed. One
+// timesheet entry belongs on one ticket, so any sharing is a Procore-side
+// linking mistake. Returns timesheet entry id -> [timecard, ...] for the
+// shared ones only (deleted timecards ignored).
+function sharedTimesheetEntries(timecards) {
+  const byEntry = new Map();
+  for (const tc of timecards) {
+    if (tc.timecard_entry_id == null || tc.deleted_at || !tc.time_and_material_entry?.id) continue;
+    const k = String(tc.timecard_entry_id);
+    if (!byEntry.has(k)) byEntry.set(k, []);
+    byEntry.get(k).push(tc);
+  }
+  for (const [k, tcs] of byEntry) {
+    if (new Set(tcs.map(tc => tc.time_and_material_entry.id)).size < 2) byEntry.delete(k);
+  }
+  return byEntry;
+}
+
 // procore_record_id -> { status, invoiceNumber } for every timecard LEDGER has
 // already touched on this project. A 'billed' row always wins over a 'draft_co'
 // row for the same key (a draft later invoiced for real).
@@ -898,11 +920,21 @@ export async function listPendingTickets(env, { tenantId, projectId, selfHeal = 
     if (!entryId) continue;
     (timecardsByEntry[entryId] ||= []).push(tc);
   }
+  const shared = sharedTimesheetEntries(timecardsRes.data);
+  const numberOfEntry = new Map(entriesRes.data.map(e => [e.id, e.number]));
 
   const round2 = (n) => Math.round(n * 100) / 100;
 
   const tickets = entriesRes.data.map(entry => {
     const allTimecards = timecardsByEntry[entry.id] || [];
+    // The other tickets this one shares timesheet entries with (flagged red in
+    // the sidebar; Full details explains it).
+    const sharesWith = [...new Set(allTimecards
+      .filter(tc => shared.has(String(tc.timecard_entry_id)))
+      .flatMap(tc => shared.get(String(tc.timecard_entry_id)).map(o => o.time_and_material_entry.id))
+      .filter(id => id !== entry.id)
+      .map(id => numberOfEntry.get(id))
+      .filter(n => n != null))].sort((a, b) => a - b);
 
     const unbilledLines = [];
     const billedLines = [];
@@ -993,6 +1025,7 @@ export async function listPendingTickets(env, { tenantId, projectId, selfHeal = 
       budgetedAmount,
       materials: (materialsByEntry.get(String(entry.id)) || []).map(materialOf),
       unbilledMaterialCount: (materialsByEntry.get(String(entry.id)) || []).filter(m => !materialMap.has(String(m.id))).length,
+      sharesTimesheetWith: sharesWith,
       myMarks: marksOf(allTimecards.map(tc => billedMap.get(reconciliationKey(tc))), me)
     };
   });
@@ -1063,6 +1096,9 @@ export async function ticketDetail(env, { tenantId, projectId, entryId }) {
     }))
     .filter(a => a.url);
 
+  const sharedTimesheet = await describeSharedTimesheet(env, { projectId, entry, allTimecards: tcRes.data, billedMap })
+    .catch(() => null);
+
   return {
     id: entry.id,
     number: entry.number,
@@ -1074,6 +1110,7 @@ export async function ticketDetail(env, { tenantId, projectId, entryId }) {
     changeEventId: entry.change_event?.id || null,
     lines,
     attachments,
+    sharedTimesheet,
     totals: {
       total: sumWhere(() => true),
       billed: sumWhere(l => l.billedStatus === 'billed'),
@@ -1307,6 +1344,80 @@ async function fetchEntriesAndTimecards(env, projectId, entryIds, onProgress = (
   const wanted = new Set(entries.map(e => e.id));
   const timecards = tcRes.data.filter(tc => wanted.has(tc.time_and_material_entry?.id));
   return { entries, timecards };
+}
+
+// Full details for a ticket that shares timesheet entries with other tickets
+// (see sharedTimesheetEntries): which tickets, each shared entry's real
+// timesheet date and hours, which ticket(s) look wrongly linked (work date
+// doesn't match the timesheet date), and how it was billed. null when the
+// ticket shares nothing. Costs Procore calls only for a flagged ticket: the
+// ticket list (1) and that day's company timesheets (1–3 pages per date).
+async function describeSharedTimesheet(env, { projectId, entry, allTimecards, billedMap }) {
+  const shared = sharedTimesheetEntries(allTimecards);
+  const mine = allTimecards.filter(tc => tc.time_and_material_entry?.id === entry.id && shared.has(String(tc.timecard_entry_id)));
+  if (mine.length === 0) return null;
+
+  const keys = [...new Set(mine.map(tc => String(tc.timecard_entry_id)))];
+  const ticketIds = new Set(keys.flatMap(k => shared.get(k).map(tc => tc.time_and_material_entry.id)));
+  const listRes = await requestWithRetry(env, 'GET', `/rest/v1.0/projects/${projectId}/time_and_material_entries`, null);
+  const others = listRes.status === 200 ? listRes.data : [];
+  const ticketOf = new Map(others.map(e => [e.id, e]));
+  ticketOf.set(entry.id, entry);
+  const tickets = [...ticketIds].map(id => ticketOf.get(id)).filter(Boolean)
+    .map(e => ({ id: e.id, number: e.number, date: e.work_performed_on_date || null, description: e.description || '', isThis: e.id === entry.id }))
+    .sort((a, b) => a.number - b.number);
+  const numberOf = new Map(tickets.map(t => [t.id, t.number]));
+
+  // Each shared entry's own timesheet date, read from the days the tickets
+  // say the work was done (Procore's T&M timecard has no date of its own).
+  const timesheet = new Map();
+  const dates = [...new Set(tickets.map(t => t.date).filter(Boolean))].slice(0, 4);
+  for (const d of dates) {
+    for (let page = 1; page <= 3; page++) {
+      const res = await requestWithRetry(env, 'GET',
+        `/rest/v1.0/companies/${env.PROCORE_COMPANY_ID}/timecard_entries?start_date=${d}&end_date=${d}&page=${page}&per_page=100`, null);
+      if (res.status !== 200 || !Array.isArray(res.data)) break;
+      for (const e of res.data) if (keys.includes(String(e.id))) timesheet.set(String(e.id), e);
+      if (res.data.length < 100 || keys.every(k => timesheet.has(k))) break;
+    }
+    if (keys.every(k => timesheet.has(k))) break;
+  }
+
+  const wrong = new Set();
+  const right = new Set();
+  const entries = keys.map(k => {
+    const tcs = shared.get(k);
+    const ts = timesheet.get(k);
+    const billed = billedMap.get(k) || null;
+    const onTickets = tcs.map(tc => ({ number: numberOf.get(tc.time_and_material_entry.id), hours: Number(tc.hours_worked) }))
+      .filter(t => t.number != null).sort((a, b) => a.number - b.number);
+    if (ts?.date) {
+      const matching = tickets.filter(t => t.date === ts.date && onTickets.some(o => o.number === t.number));
+      if (matching.length > 0) {
+        matching.forEach(t => right.add(t.number));
+        onTickets.filter(o => !matching.some(t => t.number === o.number)).forEach(o => wrong.add(o.number));
+      }
+    }
+    return {
+      timesheetEntryId: k,
+      workerName: tcs[0].party?.name || 'Unknown',
+      timesheetDate: ts?.date || null,
+      timesheetHours: ts?.hours != null ? Number(ts.hours) : null,
+      onTickets,
+      billed: billed && (billed.status === 'billed' || billed.status === 'draft_co') ? {
+        status: billed.status, invoiceNumber: billed.invoiceNumber || null,
+        outside: billed.billedOutsideLedger === true, viaCommitment: billed.viaCommitment === true
+      } : billed ? { status: billed.status } : null
+    };
+  });
+
+  return {
+    tickets,
+    entries,
+    // A ticket counts as wrongly linked only where another ticket's work date
+    // matches the timesheet's date and its own doesn't.
+    likelyWrong: [...wrong].filter(n => !right.has(n)).sort((a, b) => a - b)
+  };
 }
 
 // Best-effort cleanup after ANYTHING fails partway through building a CE/CO

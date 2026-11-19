@@ -348,6 +348,69 @@ body {
 
 .ticket-card.readonly .ticket-amount { color: var(--ink-dim); }
 
+/* A ticket sharing Procore timesheet entries with another ticket (2026-11-19):
+   LEDGER can only bill those hours once. Red even when selected. */
+.ticket-card.shares-timesheet,
+.ticket-card.shares-timesheet.checked {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 1px var(--danger);
+  background: var(--danger-tint);
+}
+.dup-flag {
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  color: #e08a6f;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Full details: the shared-timesheet explanation and fix. */
+.dup-panel {
+  border: 1px solid var(--danger);
+  background: var(--danger-tint);
+  border-radius: 4px;
+  padding: 12px 14px;
+  margin: 12px 0;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+.dup-panel p { margin: 8px 0; line-height: 1.5; }
+.dup-panel strong { color: var(--ink); }
+.dup-panel-title {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #e08a6f;
+}
+.dup-panel-subtitle {
+  margin-top: 12px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+.dup-table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 12px; }
+.dup-table th {
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  padding: 4px 8px 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+.dup-table td { padding: 5px 8px 5px 0; border-bottom: 1px solid var(--border); color: var(--ink-soft); }
+.dup-steps { margin: 6px 0 0; padding-left: 20px; line-height: 1.5; }
+.dup-steps li { margin: 4px 0; }
+
 .ticket-card-header {
   display: flex;
   align-items: center;
