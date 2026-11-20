@@ -22,12 +22,17 @@ function money(n) {
 // those lines to its own preview state, which is what Confirm actually
 // submits.
 //
-// Carries BOTH tmLines and dcLines (Ben's ask 2026-09-16: aggregate T&M +
-// direct costs into one submission) rather than one merged array — keeps
-// each source's own editable fields (T&M: description + rate; direct cost:
-// description only) distinct, matching the sidebar's own preview overlay.
+// Carries all four line types in the sidebar's invoice order (2026-11-20 —
+// it used to carry only T&M and direct costs, so T&M materials and
+// commitments were missing here and from the total), each with the same
+// editable fields as the sidebar: T&M description + rate; direct cost and
+// commitment description + revenue code; material description, lump sum +
+// revenue code. Reordering stays in the sidebar.
+const SOURCE_LABEL = { tm: 'T&M', mt: 'T&M material', dc: 'Direct cost', cm: 'Commitment' };
+const LIST_KEY = { tm: 'tmLines', mt: 'mtLines', dc: 'dcLines', cm: 'cmLines' };
+
 export default function PreviewEditPopout() {
-  const [data, setData] = useState(null); // { tmLines, dcLines, meta, kind }
+  const [data, setData] = useState(null); // { tmLines, mtLines, dcLines, cmLines, order, codes, meta, kind }
   const [saved, setSaved] = useState(false);
   const originRef = useRef(window.location.origin);
 
@@ -35,12 +40,13 @@ export default function PreviewEditPopout() {
     function onMessage(event) {
       if (event.origin !== originRef.current) return;
       if (event.data?.type === 'ledger:init') {
-        setData({
-          tmLines: (event.data.tmLines || []).map(l => ({ ...l })),
-          dcLines: (event.data.dcLines || []).map(l => ({ ...l })),
-          meta: event.data.meta,
-          kind: event.data.kind
-        });
+        const d = event.data;
+        const copy = (list) => (list || []).map(l => ({ ...l }));
+        const lists = { tmLines: copy(d.tmLines), mtLines: copy(d.mtLines), dcLines: copy(d.dcLines), cmLines: copy(d.cmLines) };
+        // Older sidebars sent no order: fall back to source order.
+        const order = Array.isArray(d.order) && d.order.length > 0 ? d.order
+          : Object.entries(LIST_KEY).flatMap(([src, key]) => lists[key].map((_, i) => `${src}:${i}`));
+        setData({ ...lists, order, codes: d.codes || null, meta: d.meta, kind: d.kind });
       }
     }
     window.addEventListener('message', onMessage);
@@ -56,16 +62,17 @@ export default function PreviewEditPopout() {
     return () => window.removeEventListener('message', onMessage);
   }, []);
 
-  function updateTmLine(index, field, value) {
-    setData(prev => ({ ...prev, tmLines: prev.tmLines.map((l, i) => (i === index ? { ...l, [field]: value } : l)) }));
-  }
-  function updateDcLine(index, field, value) {
-    setData(prev => ({ ...prev, dcLines: prev.dcLines.map((l, i) => (i === index ? { ...l, [field]: value } : l)) }));
+  function updateLine(src, index, field, value) {
+    const key = LIST_KEY[src];
+    setData(prev => ({ ...prev, [key]: prev[key].map((l, i) => (i === index ? { ...l, [field]: value } : l)) }));
   }
 
   function saveAndClose() {
     if (!window.opener) return;
-    window.opener.postMessage({ type: 'ledger:result', tmLines: data.tmLines, dcLines: data.dcLines }, originRef.current);
+    window.opener.postMessage(
+      { type: 'ledger:result', tmLines: data.tmLines, mtLines: data.mtLines, dcLines: data.dcLines, cmLines: data.cmLines },
+      originRef.current
+    );
     setSaved(true);
     setTimeout(() => window.close(), 400);
   }
@@ -89,8 +96,28 @@ export default function PreviewEditPopout() {
     );
   }
 
-  const tmTotal = data.tmLines.reduce((s, l) => s + l.hours * (Number(l.rate) || 0), 0);
-  const dcTotal = data.dcLines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+  const tmTotal = data.tmLines.reduce((s, l) => s + (Number(l.hours) || 0) * (Number(l.rate) || 0), 0);
+  const otherTotal = [...data.mtLines, ...data.dcLines, ...data.cmLines].reduce((s, l) => s + (Number(l.amount) || 0), 0);
+  const codes = data.codes || [];
+
+  function codePicker(src, i, line) {
+    return (
+      <div className="preview-line-code">
+        <select
+          className={line.wbsCodeId ? '' : 'needs-code'}
+          value={line.wbsCodeId ?? ''}
+          aria-label={`Revenue cost code for ${line.description}`}
+          onChange={e => updateLine(src, i, 'wbsCodeId', e.target.value)}
+        >
+          <option value="" disabled>{data.codes == null ? 'Codes still loading — pick it in the sidebar' : 'Pick a revenue cost code…'}</option>
+          {line.wbsCodeId && !codes.some(c => c.id === String(line.wbsCodeId)) && (
+            <option value={line.wbsCodeId}>{line.code || line.budgetCode || 'Current code'}</option>
+          )}
+          {codes.map(c => <option key={c.id} value={c.id}>{c.code} — {c.name}</option>)}
+        </select>
+      </div>
+    );
+  }
 
   return (
     <div className="ledger ledger-wide">
@@ -113,58 +140,71 @@ export default function PreviewEditPopout() {
         <div className="banner banner-success">Saved — closing this window and returning to the sidebar…</div>
       ) : (
         <>
-          {data.tmLines.length > 0 && (
-            <>
-              <div className="rate-overrides-label">T&amp;M lines</div>
-              <div className="preview-lines preview-lines-popout">
-                {data.tmLines.map((line, i) => (
-                  <div className="preview-line" key={i}>
+          <div className="rate-overrides-label">Lines, in invoice order (reorder them in the sidebar)</div>
+          <div className="preview-lines preview-lines-popout">
+            {data.order.map((key, pos) => {
+              const [src, idx] = key.split(':');
+              const i = Number(idx);
+              const line = data[LIST_KEY[src]]?.[i];
+              if (!line) return null;
+              return (
+                <div className="preview-line preview-line-numbered" key={key}>
+                  <div className="preview-line-pos preview-line-pos-static">{pos + 1}</div>
+                  <div className="preview-line-body">
                     <input
                       className="preview-line-desc"
                       type="text"
                       value={line.description}
-                      onChange={e => updateTmLine(i, 'description', e.target.value)}
+                      onChange={e => updateLine(src, i, 'description', e.target.value)}
                     />
                     <div className="preview-line-nums">
-                      <span>{line.hours} hrs @</span>
-                      <input
-                        type="number" min="0" step="0.01"
-                        value={line.rate}
-                        onChange={e => updateTmLine(i, 'rate', e.target.value)}
-                      />
-                      <span className="preview-line-amount">{money(line.hours * (Number(line.rate) || 0))}</span>
+                      <span className="preview-line-source">{SOURCE_LABEL[src]}</span>
+                      {src === 'tm' && (
+                        <>
+                          <span>{line.hours} hrs @</span>
+                          <input
+                            type="number" min="0" step="0.01"
+                            value={line.rate}
+                            onChange={e => updateLine(src, i, 'rate', e.target.value)}
+                          />
+                          <span className="preview-line-amount">{money(line.hours * (Number(line.rate) || 0))}</span>
+                        </>
+                      )}
+                      {(src === 'dc' || src === 'cm') && (
+                        <>
+                          <span>cost {money(line.cost)} @ {line.markupPercent}% markup</span>
+                          <span className="preview-line-amount">{money(line.amount)}</span>
+                        </>
+                      )}
+                      {src === 'mt' && (
+                        <>
+                          <span>lump sum $</span>
+                          <input
+                            type="number" min="0" step="0.01" placeholder="0.00"
+                            className={Number(line.amount) > 0 ? '' : 'needs-code'}
+                            value={line.amount ?? ''}
+                            aria-label={`Amount for ${line.description}`}
+                            onChange={e => updateLine(src, i, 'amount', e.target.value)}
+                          />
+                          <span className="preview-line-amount">{money(Number(line.amount) || 0)}</span>
+                        </>
+                      )}
                     </div>
+                    {src !== 'tm' && codePicker(src, i, line)}
                   </div>
-                ))}
-              </div>
-            </>
-          )}
-
-          {data.dcLines.length > 0 && (
-            <>
-              <div className="rate-overrides-label">Direct cost lines</div>
-              <div className="preview-lines preview-lines-popout">
-                {data.dcLines.map((line, i) => (
-                  <div className="preview-line" key={i}>
-                    <input
-                      className="preview-line-desc"
-                      type="text"
-                      value={line.description}
-                      onChange={e => updateDcLine(i, 'description', e.target.value)}
-                    />
-                    <div className="preview-line-nums">
-                      <span>cost {money(line.cost)} @ {line.markupPercent}% markup</span>
-                      <span className="preview-line-amount">{money(line.amount)}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </>
+                </div>
+              );
+            })}
+          </div>
+          {data.mtLines.length > 0 && (
+            <div className="materials-warning">
+              ⚠ Check the T&amp;M materials aren't also on a direct cost or subcontractor invoice — LEDGER can't detect that.
+            </div>
           )}
 
           <div className="preview-total">
             <span>Total</span>
-            <strong>{money(tmTotal + dcTotal)}</strong>
+            <strong>{money(tmTotal + otherTotal)}</strong>
           </div>
           <div className="action-bar-buttons popout-actions">
             <button className="generate-btn" onClick={saveAndClose}>Save & return to sidebar</button>

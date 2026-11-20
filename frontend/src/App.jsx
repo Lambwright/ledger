@@ -892,21 +892,27 @@ export default function App({ user, onSignOut }) {
       if (next.has(m.id)) next.delete(m.id); else next.add(m.id);
       return next;
     });
-    if (budgetCodes == null && !budgetCodesLoading) loadBudgetCodes();
   }
   function setMaterialInput(id, field, value) {
     setMaterialInputs(prev => ({ ...prev, [id]: { ...prev[id], [field]: value } }));
   }
+  // Billing: a material is priced and coded in the preview, not the picker (Ben, 2026-11-20).
+  // The preview is asked with whatever was already typed there (kept in materialInputs, so
+  // "Back to settings" doesn't lose it); Confirm sends the preview's own material lines.
   function materialProblem() {
-    for (const m of checkedMaterials) {
-      const inp = materialInputs[m.id] || {};
-      if (!(Number(inp.amount) > 0)) return `Enter an amount for the material "${m.label}" (T&M #${m.ticketNumber}).`;
-      if (!inp.wbsCodeId) return `Pick a budget code for the material "${m.label}" (T&M #${m.ticketNumber}).`;
+    for (const l of previewMtLines || []) {
+      const name = `the material "${l.label || l.description}"${l.ticketNumber != null ? ` (T&M #${l.ticketNumber})` : ''}`;
+      if (!(Number(l.amount) > 0)) return `Enter an amount for ${name} in the preview.`;
+      if (!l.wbsCodeId) return `Pick a revenue cost code for ${name} in the preview.`;
     }
     return null;
   }
-  const materialBillingPayload = () => checkedMaterials.map(m => ({
-    id: m.id, amount: Number(materialInputs[m.id]?.amount), wbsCodeId: materialInputs[m.id]?.wbsCodeId
+  const materialPreviewRequest = () => checkedMaterials.map(m => ({
+    id: m.id, amount: Number(materialInputs[m.id]?.amount) || 0,
+    wbsCodeId: materialInputs[m.id]?.wbsCodeId || null, description: materialInputs[m.id]?.description
+  }));
+  const materialBillingPayload = () => (previewMtLines || []).map(l => ({
+    id: l.materialId, amount: Number(l.amount), wbsCodeId: l.wbsCodeId, description: l.description
   }));
   const materialDispositionPayload = () => checkedMaterials.map(m => ({ id: m.id, amount: Number(materialInputs[m.id]?.amount) || 0 }));
   const materialUndoKind = (m) => m.status === 'draft_co' ? 'draft'
@@ -980,24 +986,18 @@ export default function App({ user, onSignOut }) {
                   </button>
                 )}
               </div>
-              {pickable && checked && (
+              {pickable && checked && isBillingAction && (
+                <div className="material-hint">You'll price it and pick its code in the preview.</div>
+              )}
+              {pickable && checked && !isBillingAction && (
                 <div className="material-inputs">
                   <label>
-                    <span>{isBillingAction ? 'Bill' : 'Value (optional)'}</span>
+                    <span>Value (optional)</span>
                     <input
                       type="number" min="0" step="0.01" placeholder="$ lump sum"
                       value={inp.amount ?? ''} onChange={e => setMaterialInput(m.id, 'amount', e.target.value)}
                     />
                   </label>
-                  {isBillingAction && (
-                    <label>
-                      <span>Budget code</span>
-                      <select value={inp.wbsCodeId ?? ''} onChange={e => setMaterialInput(m.id, 'wbsCodeId', e.target.value)}>
-                        <option value="" disabled>{budgetCodes == null ? 'Loading codes…' : 'Choose a budgeted code…'}</option>
-                        {revenueCodes.map(c => <option key={c.id} value={c.id}>{c.code} — {c.name}</option>)}
-                      </select>
-                    </label>
-                  )}
                 </div>
               )}
             </div>
@@ -1418,14 +1418,12 @@ export default function App({ user, onSignOut }) {
     const directCostLineIds = [...checkedDcLineIds];
     const commitmentLineIds = [...checkedCmLineIds];
     if (entryIds.length === 0 && directCostIds.length === 0 && directCostLineIds.length === 0 && commitmentLineIds.length === 0 && checkedMaterials.length === 0) return;
-    const matProblem = materialProblem();
-    if (matProblem) { setError(matProblem); return; }
     setPreviewLoading(true);
     setError(null);
     try {
       const res = await previewCombinedBilling({
         tenantId: TENANT_ID, projectId, entryIds, directCostIds, directCostLineIds, commitmentLineIds,
-        materials: materialBillingPayload(),
+        materials: materialPreviewRequest(),
         groupBy, rateOverrides, markupPercent, cmMarkupPercent, dcGroupBy, cmGroupBy, title: coTitle
       });
       setPreviewMeta({ totalAmount: res.totalAmount, unlinkedCount: res.unlinkedCount, label: res.label });
@@ -1433,8 +1431,8 @@ export default function App({ user, onSignOut }) {
       setPreviewDcLines(res.dcLines.map(l => ({ ...l })));
       setPreviewCmLines((res.cmLines || []).map(l => ({ ...l })));
       setPreviewMtLines((res.mtLines || []).map(l => ({ ...l })));
-      // Direct cost and commitment lines get a revenue code picker.
-      if ((res.dcLines.length > 0 || (res.cmLines || []).length > 0) && budgetCodes == null && !budgetCodesLoading) loadBudgetCodes();
+      // Direct cost, commitment and material lines get a revenue code picker.
+      if ((res.dcLines.length > 0 || (res.cmLines || []).length > 0 || (res.mtLines || []).length > 0) && budgetCodes == null && !budgetCodesLoading) loadBudgetCodes();
       setPreviewOrder([
         ...res.tmLines.map((_, i) => `tm:${i}`),
         ...(res.mtLines || []).map((_, i) => `mt:${i}`),
@@ -1457,6 +1455,19 @@ export default function App({ user, onSignOut }) {
   function updatePreviewCmLine(index, field, value) {
     setPreviewCmLines(prev => prev.map((l, i) => (i === index ? { ...l, [field]: value } : l)));
   }
+  // A material's price, code and description, also kept by material id so a
+  // re-preview ("Back to settings" → preview again) keeps what was typed.
+  function updatePreviewMtLine(index, field, value) {
+    const line = previewMtLines?.[index];
+    setPreviewMtLines(prev => prev.map((l, i) => (i === index ? { ...l, [field]: value } : l)));
+    if (line) setMaterialInput(line.materialId, field, value);
+  }
+  // The preview's running total from its (possibly edited) lines — the worker's
+  // figure goes stale as soon as a rate or material price is typed.
+  const sumPreviewLines = ({ tmLines, mtLines, dcLines, cmLines }) => Math.round((
+    (tmLines || []).reduce((s, l) => s + (Number(l.hours) || 0) * (Number(l.rate) || 0), 0) +
+    [...(mtLines || []), ...(dcLines || []), ...(cmLines || [])].reduce((s, l) => s + (Number(l.amount) || 0), 0)
+  ) * 100) / 100;
 
   // Other half of the preview/edit popout handshake (see popOutPreview above
   // and PreviewEditPopout.jsx) — replies to the popup's 'ledger:ready' ping
@@ -1470,18 +1481,36 @@ export default function App({ user, onSignOut }) {
       if (event.origin !== window.location.origin) return;
       if (event.data?.type === 'ledger:ready') {
         if (!previewTmLines && !previewDcLines) return; // no preview open — nothing to hand it
+        // All four line types in invoice order, plus the revenue codes for the pickers
+        // (2026-11-20: it used to carry only T&M and direct costs, so materials and
+        // commitments were missing from the pop-out and its total).
         event.source?.postMessage(
-          { type: 'ledger:init', tmLines: previewTmLines, dcLines: previewDcLines, meta: previewMeta, kind: action },
+          {
+            type: 'ledger:init', kind: action, meta: previewMeta, order: previewOrder,
+            tmLines: previewTmLines, mtLines: previewMtLines, dcLines: previewDcLines, cmLines: previewCmLines,
+            codes: budgetCodes == null ? null : revenueCodes.map(c => ({ id: c.id, code: c.code, name: c.name }))
+          },
           window.location.origin
         );
       } else if (event.data?.type === 'ledger:result') {
-        setPreviewTmLines(event.data.tmLines);
-        setPreviewDcLines(event.data.dcLines);
+        const d = event.data;
+        if (d.tmLines) setPreviewTmLines(d.tmLines);
+        if (d.dcLines) setPreviewDcLines(d.dcLines);
+        if (d.cmLines) setPreviewCmLines(d.cmLines);
+        if (d.mtLines) {
+          setPreviewMtLines(d.mtLines);
+          for (const l of d.mtLines) {
+            setMaterialInput(l.materialId, 'amount', l.amount);
+            setMaterialInput(l.materialId, 'wbsCodeId', l.wbsCodeId);
+            setMaterialInput(l.materialId, 'description', l.description);
+          }
+        }
       }
     }
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [previewTmLines, previewDcLines, previewMeta, action]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewTmLines, previewDcLines, previewCmLines, previewMtLines, previewOrder, previewMeta, action, budgetCodes]);
 
   // Undo a draft-CO push — e.g. the PM deleted the Change Order in Procore
   // (LEDGER also self-heals this on the next load automatically, but not for
@@ -3517,7 +3546,7 @@ export default function App({ user, onSignOut }) {
                             const i = Number(idx);
                             const line = { tm: previewTmLines, mt: previewMtLines, dc: previewDcLines, cm: previewCmLines }[src]?.[i];
                             if (!line) return null;
-                            const updateDesc = { tm: updatePreviewTmLine, dc: updatePreviewDcLine, cm: updatePreviewCmLine }[src];
+                            const updateDesc = { tm: updatePreviewTmLine, mt: updatePreviewMtLine, dc: updatePreviewDcLine, cm: updatePreviewCmLine }[src];
                             return (
                               <div className="preview-line preview-line-numbered" key={key}>
                                 <input
@@ -3560,12 +3589,19 @@ export default function App({ user, onSignOut }) {
                                     )}
                                     {src === 'mt' && (
                                       <>
-                                        <span>T&amp;M material · {line.budgetCode} · lump sum</span>
-                                        <span className="preview-line-amount">{money(line.amount)}</span>
+                                        <span>T&amp;M material · lump sum $</span>
+                                        <input
+                                          type="number" min="0" step="0.01" placeholder="0.00"
+                                          className={Number(line.amount) > 0 ? '' : 'needs-code'}
+                                          value={line.amount ?? ''}
+                                          aria-label={`Amount for ${line.description}`}
+                                          onChange={e => updatePreviewMtLine(i, 'amount', e.target.value)}
+                                        />
+                                        <span className="preview-line-amount">{money(Number(line.amount) || 0)}</span>
                                       </>
                                     )}
                                   </div>
-                                  {(src === 'dc' || src === 'cm') && (
+                                  {(src === 'dc' || src === 'cm' || src === 'mt') && (
                                     <div className="preview-line-code">
                                       <select
                                         className={line.wbsCodeId ? '' : 'needs-code'}
@@ -3575,7 +3611,7 @@ export default function App({ user, onSignOut }) {
                                       >
                                         <option value="" disabled>{budgetCodes == null ? 'Loading codes…' : 'Pick a revenue cost code…'}</option>
                                         {line.wbsCodeId && !revenueCodes.some(c => c.id === String(line.wbsCodeId)) && (
-                                          <option value={line.wbsCodeId}>{line.code || 'Current code'}</option>
+                                          <option value={line.wbsCodeId}>{line.code || line.budgetCode || 'Current code'}</option>
                                         )}
                                         {revenueCodes.map(c => <option key={c.id} value={c.id}>{c.code} — {c.name}</option>)}
                                       </select>
@@ -3599,7 +3635,7 @@ export default function App({ user, onSignOut }) {
 
                     <div className="preview-total">
                       <span>Total</span>
-                      <strong>{money(previewMeta?.totalAmount ?? 0)}</strong>
+                      <strong>{money(sumPreviewLines({ tmLines: previewTmLines, mtLines: previewMtLines, dcLines: previewDcLines, cmLines: previewCmLines }))}</strong>
                     </div>
                   </>
                 )}

@@ -3402,8 +3402,10 @@ const costLinePreview = (l) => ({
 });
 
 // materialLines: [{ id, amount, wbsCodeId, description? }] from the sidebar.
-// Validates everything before anything touches Procore.
-async function computeMaterialLines(env, { tenantId, projectId, materialLines = [] }) {
+// Validates everything before anything touches Procore. The PM prices a
+// material and picks its code in the preview (Ben, 2026-11-20), so a preview
+// lets both be blank (amount 0, no code); the real build still requires them.
+async function computeMaterialLines(env, { tenantId, projectId, materialLines = [], preview = false }) {
   if (materialLines.length === 0) return null;
   const { mode, projectTypeName } = await resolveBillingMode(env, { tenantId, projectId });
   if (mode === 'non_billable') {
@@ -3429,17 +3431,17 @@ async function computeMaterialLines(env, { tenantId, projectId, materialLines = 
     if (!m) throw new Error(`T&M material ${sel.id} isn't on this project any more — it may have been deleted in Procore.`);
     const label = materialLabel(m);
     if (billed.has(String(m.id))) throw new Error(`"${label}" is already billed, written off, budgeted or on a draft Change Order.`);
-    const amount = round2(Number(sel.amount));
-    if (!(amount > 0)) throw new Error(`Enter an amount for "${label}".`);
-    const code = codeById.get(String(sel.wbsCodeId));
-    if (!code) throw new Error(`Pick a budget code for "${label}" — it has to be one on this project's budget.`);
-    const codeProblem = revenueCodeProblem(code.code);
+    const amount = round2(Number(sel.amount) || 0);
+    if (!(amount > 0) && !preview) throw new Error(`Enter an amount for "${label}".`);
+    const code = sel.wbsCodeId ? codeById.get(String(sel.wbsCodeId)) : null;
+    if (!code && (!preview || sel.wbsCodeId)) throw new Error(`Pick a budget code for "${label}" — it has to be one on this project's budget.`);
+    const codeProblem = code ? revenueCodeProblem(code.code) : null;
     if (codeProblem) throw new Error(`"${label}": ${codeProblem}. Pick a revenue cost code.`);
     const ticket = ticketNumber.get(String(m.time_and_material_entry_id));
     const description = String(sel.description || '').trim() || `${label}${ticket != null ? ` — T&M #${ticket}` : ''}`;
     return {
-      materialId: String(m.id), entryId: m.time_and_material_entry_id, description, amount,
-      quantity: 1, unitCost: amount, uom: 'LS', wbsCodeId: code.id, budgetCode: code.code
+      materialId: String(m.id), entryId: m.time_and_material_entry_id, ticketNumber: ticket ?? null, label, description, amount,
+      quantity: 1, unitCost: amount, uom: 'LS', wbsCodeId: code?.id || null, budgetCode: code?.code || null
     };
   });
   const totalAmount = round2(lines.reduce((s, l) => s + l.amount, 0));
@@ -4299,7 +4301,7 @@ async function computeCombinedSources(env, {
       commitmentIds.length === 0 && commitmentLineIds.length === 0 && materialLines.length === 0) {
     throw new Error('Nothing selected — pick at least one T&M ticket, material, direct cost, or commitment to bill.');
   }
-  const mt = await computeMaterialLines(env, { tenantId, projectId, materialLines });
+  const mt = await computeMaterialLines(env, { tenantId, projectId, materialLines, preview });
   const tm = entryIds.length > 0
     ? await computeCOLines(env, { tenantId, projectId, entryIds, groupBy, rateOverrides, editedLines: editedTmLines, confirmUnlinked, onProgress })
     : null;
@@ -4501,7 +4503,10 @@ export async function previewCombinedBilling(env, {
     // including a PM-typed override — display-only here, no Procore writes.
     label: title?.trim() ? title.trim() : [tm?.label, mt?.label, dc?.label, cm?.label].filter(Boolean).join(' + '),
     totalAmount: Math.round(((tm?.totalAmount || 0) + (mt?.totalAmount || 0) + (dc?.totalAmount || 0) + (cm?.totalAmount || 0)) * 100) / 100,
-    mtLines: (mt?.coLines || []).map(l => ({ materialId: l.materialId, description: l.description, amount: l.amount, budgetCode: l.budgetCode })),
+    mtLines: (mt?.coLines || []).map(l => ({
+      materialId: l.materialId, ticketNumber: l.ticketNumber, label: l.label, description: l.description,
+      amount: l.amount || '', wbsCodeId: l.wbsCodeId, budgetCode: l.budgetCode
+    })),
     unlinkedCount: tm?.unlinkedCount || 0,
     tmLines: (tm?.coLines || []).map(l => ({ description: l.description, hours: l.hours, rate: l.rate, amount: l.amount, timeType: l.timeType })),
     dcLines: (dc?.coLines || []).map(costLinePreview),

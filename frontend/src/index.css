@@ -1646,6 +1646,12 @@ body {
 .material-inputs input:focus,
 .material-inputs select:focus { outline: none; border-color: var(--accent); }
 .preview-line-static { padding: 4px 0; }
+.preview-line-nums input.needs-code { border-color: var(--danger); color: var(--ink); }
+.material-hint {
+  padding-left: 22px;
+  font-size: 11px;
+  color: var(--ink-dim);
+}
 
 
 /* A plain-information pop-up (no Prime Contract yet, 2026-10-26): same shell as
@@ -1670,6 +1676,10 @@ body {
   text-align: center;
 }
 .preview-line-pos:focus { outline: none; border-color: var(--accent); }
+.preview-line-pos-static { border-color: transparent; padding-top: 6px; }
+.preview-line-source {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-muted);
+}
 .preview-line-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 
 /* ---- invoice panel: LEDGER on an owner invoice in Procore (2026-11-11) ---- */
