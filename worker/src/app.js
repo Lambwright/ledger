@@ -3401,10 +3401,25 @@ const costLinePreview = (l) => ({
   wbsCodeId: l.wbsCodeId || null, code: l.wbsCodeId ? l.wbsFlatCode || null : null, codeProblem: l.codeProblem || null
 });
 
-// materialLines: [{ id, amount, wbsCodeId, description? }] from the sidebar.
-// Validates everything before anything touches Procore. The PM prices a
-// material and picks its code in the preview (Ben, 2026-11-20), so a preview
-// lets both be blank (amount 0, no code); the real build still requires them.
+// The company's units of measure, lowercase — what v2 Change Order lines are
+// matched against (see v2Uom). null when the list can't be read.
+async function companyUomNames(env) {
+  try {
+    const res = await requestWithRetry(env, 'GET', `/rest/v1.0/companies/${env.PROCORE_COMPANY_ID}/uoms`, null);
+    return Array.isArray(res.data) ? new Set(res.data.map(u => String(u.name || '').trim().toLowerCase()).filter(Boolean)) : null;
+  } catch {
+    return null;
+  }
+}
+
+// materialLines: [{ id, unitCost, wbsCodeId, description? }] from the sidebar.
+// Validates everything before anything touches Procore. The PM picks a
+// material's code and unit price in the preview (Ben, 2026-11-20); the
+// quantity and unit come from the T&M ticket, so the line is e.g. 6 ea × $40.
+// A preview lets the price and code be blank; the real build requires them.
+// A material with no quantity, or a unit Procore's CO lines wouldn't accept,
+// goes on as 1 lump sum of the same total. Older sidebars sent `amount` (a lump
+// sum) instead of unitCost; that still works.
 async function computeMaterialLines(env, { tenantId, projectId, materialLines = [], preview = false }) {
   if (materialLines.length === 0) return null;
   const { mode, projectTypeName } = await resolveBillingMode(env, { tenantId, projectId });
@@ -3416,11 +3431,12 @@ async function computeMaterialLines(env, { tenantId, projectId, materialLines = 
     err.code = 'NON_BILLABLE_PROJECT';
     throw err;
   }
-  const [materials, billed, codes, entriesRes] = await Promise.all([
+  const [materials, billed, codes, entriesRes, uomNames] = await Promise.all([
     fetchProjectMaterials(env, projectId),
     getBilledMaterialMap(env, tenantId, projectId),
     listBudgetCodes(env, { projectId }),
-    requestWithRetry(env, 'GET', `/rest/v1.0/projects/${projectId}/time_and_material_entries`, null)
+    requestWithRetry(env, 'GET', `/rest/v1.0/projects/${projectId}/time_and_material_entries`, null),
+    preview ? Promise.resolve(null) : companyUomNames(env) // the unit only matters when building
   ]);
   const byId = new Map(materials.map(m => [String(m.id), m]));
   const codeById = new Map(codes.map(c => [c.id, c]));
@@ -3431,8 +3447,14 @@ async function computeMaterialLines(env, { tenantId, projectId, materialLines = 
     if (!m) throw new Error(`T&M material ${sel.id} isn't on this project any more — it may have been deleted in Procore.`);
     const label = materialLabel(m);
     if (billed.has(String(m.id))) throw new Error(`"${label}" is already billed, written off, budgeted or on a draft Change Order.`);
-    const amount = round2(Number(sel.amount) || 0);
-    if (!(amount > 0) && !preview) throw new Error(`Enter an amount for "${label}".`);
+    const qty = Number(m.quantity) > 0 ? Number(m.quantity) : null;
+    const uom = String(m.uom || '').trim();
+    const byUnit = sel.unitCost !== undefined && sel.unitCost !== null && sel.unitCost !== '' && qty != null;
+    const unitCost = byUnit ? round2(Number(sel.unitCost) || 0) : null;
+    const amount = byUnit ? round2(qty * unitCost) : round2(Number(sel.amount ?? sel.unitCost) || 0);
+    if (!(amount > 0) && !preview) throw new Error(`Enter a unit price for "${label}".`);
+    // Quantity × unit price on the CO line when Procore will take the unit; otherwise one lump sum.
+    const unitOk = byUnit && uom && (preview || uomNames?.has(uom.toLowerCase()));
     const code = sel.wbsCodeId ? codeById.get(String(sel.wbsCodeId)) : null;
     if (!code && (!preview || sel.wbsCodeId)) throw new Error(`Pick a budget code for "${label}" — it has to be one on this project's budget.`);
     const codeProblem = code ? revenueCodeProblem(code.code) : null;
@@ -3441,7 +3463,9 @@ async function computeMaterialLines(env, { tenantId, projectId, materialLines = 
     const description = String(sel.description || '').trim() || `${label}${ticket != null ? ` — T&M #${ticket}` : ''}`;
     return {
       materialId: String(m.id), entryId: m.time_and_material_entry_id, ticketNumber: ticket ?? null, label, description, amount,
-      quantity: 1, unitCost: amount, uom: 'LS', wbsCodeId: code?.id || null, budgetCode: code?.code || null
+      ticketQuantity: qty, ticketUom: uom || null, priceEntered: byUnit ? unitCost : null,
+      quantity: unitOk ? qty : 1, unitCost: unitOk ? unitCost : amount, uom: unitOk ? uom.toLowerCase() : 'LS',
+      wbsCodeId: code?.id || null, budgetCode: code?.code || null
     };
   });
   const totalAmount = round2(lines.reduce((s, l) => s + l.amount, 0));
@@ -4504,8 +4528,11 @@ export async function previewCombinedBilling(env, {
     label: title?.trim() ? title.trim() : [tm?.label, mt?.label, dc?.label, cm?.label].filter(Boolean).join(' + '),
     totalAmount: Math.round(((tm?.totalAmount || 0) + (mt?.totalAmount || 0) + (dc?.totalAmount || 0) + (cm?.totalAmount || 0)) * 100) / 100,
     mtLines: (mt?.coLines || []).map(l => ({
+      // quantity/uom from the ticket; unitCost is what the PM types ('' until then). With no quantity
+      // on the ticket, unitCost is the lump sum itself (quantity null).
       materialId: l.materialId, ticketNumber: l.ticketNumber, label: l.label, description: l.description,
-      amount: l.amount || '', wbsCodeId: l.wbsCodeId, budgetCode: l.budgetCode
+      quantity: l.ticketQuantity, uom: l.ticketUom, unitCost: (l.ticketQuantity != null ? l.priceEntered : l.amount) || '',
+      amount: l.amount, wbsCodeId: l.wbsCodeId, budgetCode: l.budgetCode
     })),
     unlinkedCount: tm?.unlinkedCount || 0,
     tmLines: (tm?.coLines || []).map(l => ({ description: l.description, hours: l.hours, rate: l.rate, amount: l.amount, timeType: l.timeType })),

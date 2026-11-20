@@ -363,10 +363,10 @@ export function pushCommitmentToDraftCO({ tenantId, projectId, commitmentIds, co
 // Worker's combined functions handle all three the same way.
 // ============================================================
 
-// T&M materials (2026-10-23): [{id, amount, wbsCodeId, description?}] — lump sum + a budgeted code each,
-// set in the preview (2026-11-20); the preview itself is asked with just the ids.
+// T&M materials: [{id, unitCost, wbsCodeId, description?}] — the ticket's quantity × a unit price, and a
+// revenue code, both set in the preview (2026-11-20).
 const materialLines = (materials) => (materials?.length
-  ? { material_lines: materials.map(m => ({ id: m.id, amount: m.amount, wbs_code_id: m.wbsCodeId, description: m.description })) }
+  ? { material_lines: materials.map(m => ({ id: m.id, unit_cost: m.unitCost, wbs_code_id: m.wbsCodeId, description: m.description })) }
   : {});
 // Dispositions: [{id, amount}] — amount optional (0 when blank).
 const materialMarks = (materials) => (materials?.length ? { materials: materials.map(m => ({ id: m.id, amount: m.amount || 0 })) } : {});

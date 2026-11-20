@@ -9,6 +9,7 @@ import {
 } from './api';
 import { connectProcoreSidePanel, isEmbedded } from './procore';
 import { withTokenHash } from './auth';
+import { materialLineAmount } from './materials';
 import ProjectPicker, { recentProjects } from './ProjectPicker';
 import InvoicePanel from './InvoicePanel.jsx';
 import DeleteRunDialog from './DeleteRunDialog.jsx';
@@ -902,17 +903,17 @@ export default function App({ user, onSignOut }) {
   function materialProblem() {
     for (const l of previewMtLines || []) {
       const name = `the material "${l.label || l.description}"${l.ticketNumber != null ? ` (T&M #${l.ticketNumber})` : ''}`;
-      if (!(Number(l.amount) > 0)) return `Enter an amount for ${name} in the preview.`;
+      if (!(Number(l.unitCost) > 0)) return `Enter a unit price for ${name} in the preview.`;
       if (!l.wbsCodeId) return `Pick a revenue cost code for ${name} in the preview.`;
     }
     return null;
   }
   const materialPreviewRequest = () => checkedMaterials.map(m => ({
-    id: m.id, amount: Number(materialInputs[m.id]?.amount) || 0,
+    id: m.id, unitCost: materialInputs[m.id]?.unitCost ?? '',
     wbsCodeId: materialInputs[m.id]?.wbsCodeId || null, description: materialInputs[m.id]?.description
   }));
   const materialBillingPayload = () => (previewMtLines || []).map(l => ({
-    id: l.materialId, amount: Number(l.amount), wbsCodeId: l.wbsCodeId, description: l.description
+    id: l.materialId, unitCost: Number(l.unitCost), wbsCodeId: l.wbsCodeId, description: l.description
   }));
   const materialDispositionPayload = () => checkedMaterials.map(m => ({ id: m.id, amount: Number(materialInputs[m.id]?.amount) || 0 }));
   const materialUndoKind = (m) => m.status === 'draft_co' ? 'draft'
@@ -987,7 +988,7 @@ export default function App({ user, onSignOut }) {
                 )}
               </div>
               {pickable && checked && isBillingAction && (
-                <div className="material-hint">You'll price it and pick its code in the preview.</div>
+                <div className="material-hint">You'll set its unit price and code in the preview.</div>
               )}
               {pickable && checked && !isBillingAction && (
                 <div className="material-inputs">
@@ -1466,7 +1467,8 @@ export default function App({ user, onSignOut }) {
   // figure goes stale as soon as a rate or material price is typed.
   const sumPreviewLines = ({ tmLines, mtLines, dcLines, cmLines }) => Math.round((
     (tmLines || []).reduce((s, l) => s + (Number(l.hours) || 0) * (Number(l.rate) || 0), 0) +
-    [...(mtLines || []), ...(dcLines || []), ...(cmLines || [])].reduce((s, l) => s + (Number(l.amount) || 0), 0)
+    (mtLines || []).reduce((s, l) => s + materialLineAmount(l), 0) +
+    [...(dcLines || []), ...(cmLines || [])].reduce((s, l) => s + (Number(l.amount) || 0), 0)
   ) * 100) / 100;
 
   // Other half of the preview/edit popout handshake (see popOutPreview above
@@ -1500,7 +1502,7 @@ export default function App({ user, onSignOut }) {
         if (d.mtLines) {
           setPreviewMtLines(d.mtLines);
           for (const l of d.mtLines) {
-            setMaterialInput(l.materialId, 'amount', l.amount);
+            setMaterialInput(l.materialId, 'unitCost', l.unitCost);
             setMaterialInput(l.materialId, 'wbsCodeId', l.wbsCodeId);
             setMaterialInput(l.materialId, 'description', l.description);
           }
@@ -3589,15 +3591,15 @@ export default function App({ user, onSignOut }) {
                                     )}
                                     {src === 'mt' && (
                                       <>
-                                        <span>T&amp;M material · lump sum $</span>
+                                        <span>{line.quantity != null ? `${line.quantity}${line.uom ? ` ${line.uom}` : ''} @ $` : 'lump sum $'}</span>
                                         <input
                                           type="number" min="0" step="0.01" placeholder="0.00"
-                                          className={Number(line.amount) > 0 ? '' : 'needs-code'}
-                                          value={line.amount ?? ''}
-                                          aria-label={`Amount for ${line.description}`}
-                                          onChange={e => updatePreviewMtLine(i, 'amount', e.target.value)}
+                                          className={Number(line.unitCost) > 0 ? '' : 'needs-code'}
+                                          value={line.unitCost ?? ''}
+                                          aria-label={`${line.quantity != null ? 'Unit price' : 'Amount'} for ${line.description}`}
+                                          onChange={e => updatePreviewMtLine(i, 'unitCost', e.target.value)}
                                         />
-                                        <span className="preview-line-amount">{money(Number(line.amount) || 0)}</span>
+                                        <span className="preview-line-amount">{money(materialLineAmount(line))}</span>
                                       </>
                                     )}
                                   </div>

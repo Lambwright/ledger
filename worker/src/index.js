@@ -348,10 +348,10 @@ async function handleStreamingCombinedAction(env, body) {
   return response;
 }
 
-// T&M materials from the sidebar: [{id, amount, wbs_code_id, description?}].
+// T&M materials from the sidebar: [{id, unit_cost, wbs_code_id, description?}] (`amount` from older sidebars).
 function materialLinesFrom(list) {
   return (Array.isArray(list) ? list : []).map(m => ({
-    id: m?.id, amount: m?.amount, wbsCodeId: m?.wbs_code_id, description: m?.description
+    id: m?.id, amount: m?.amount, unitCost: m?.unit_cost, wbsCodeId: m?.wbs_code_id, description: m?.description
   }));
 }
 function materialAmountsFrom(list) {

@@ -1,5 +1,6 @@
 import Loading from './Loading.jsx';
 import { useState, useEffect, useRef } from 'react';
+import { materialLineAmount } from './materials';
 
 function money(n) {
   return (n ?? 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -26,8 +27,8 @@ function money(n) {
 // it used to carry only T&M and direct costs, so T&M materials and
 // commitments were missing here and from the total), each with the same
 // editable fields as the sidebar: T&M description + rate; direct cost and
-// commitment description + revenue code; material description, lump sum +
-// revenue code. Reordering stays in the sidebar.
+// commitment description + revenue code; material description, unit price
+// (× the ticket's quantity) + revenue code. Reordering stays in the sidebar.
 const SOURCE_LABEL = { tm: 'T&M', mt: 'T&M material', dc: 'Direct cost', cm: 'Commitment' };
 const LIST_KEY = { tm: 'tmLines', mt: 'mtLines', dc: 'dcLines', cm: 'cmLines' };
 
@@ -97,7 +98,8 @@ export default function PreviewEditPopout() {
   }
 
   const tmTotal = data.tmLines.reduce((s, l) => s + (Number(l.hours) || 0) * (Number(l.rate) || 0), 0);
-  const otherTotal = [...data.mtLines, ...data.dcLines, ...data.cmLines].reduce((s, l) => s + (Number(l.amount) || 0), 0);
+  const otherTotal = data.mtLines.reduce((s, l) => s + materialLineAmount(l), 0) +
+    [...data.dcLines, ...data.cmLines].reduce((s, l) => s + (Number(l.amount) || 0), 0);
   const codes = data.codes || [];
 
   function codePicker(src, i, line) {
@@ -178,15 +180,15 @@ export default function PreviewEditPopout() {
                       )}
                       {src === 'mt' && (
                         <>
-                          <span>lump sum $</span>
+                          <span>{line.quantity != null ? `${line.quantity}${line.uom ? ` ${line.uom}` : ''} @ $` : 'lump sum $'}</span>
                           <input
                             type="number" min="0" step="0.01" placeholder="0.00"
-                            className={Number(line.amount) > 0 ? '' : 'needs-code'}
-                            value={line.amount ?? ''}
-                            aria-label={`Amount for ${line.description}`}
-                            onChange={e => updateLine(src, i, 'amount', e.target.value)}
+                            className={Number(line.unitCost) > 0 ? '' : 'needs-code'}
+                            value={line.unitCost ?? ''}
+                            aria-label={`${line.quantity != null ? 'Unit price' : 'Amount'} for ${line.description}`}
+                            onChange={e => updateLine(src, i, 'unitCost', e.target.value)}
                           />
-                          <span className="preview-line-amount">{money(Number(line.amount) || 0)}</span>
+                          <span className="preview-line-amount">{money(materialLineAmount(line))}</span>
                         </>
                       )}
                     </div>
