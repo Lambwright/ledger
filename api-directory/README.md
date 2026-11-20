@@ -531,7 +531,7 @@ Read live on project 562949955464978 (2026_0373). Each file object is `{id, name
 
 - **Symptom:** every Change Order build failed with `422 {"error":{"code":"UNPROCESSABLE_ENTITY","message":"Units Invalid Unit of Measure",...,"source":"uom"}}` on the first line, around when Procore's Change Events tool changed look.
 - **Cause:** `POST /rest/v2.0/companies/{cid}/projects/{pid}/prime_change_orders/{id}/line_items` now matches `uom` against the company's unit list by its lowercase name. Tested on Test Project draft CO 562949958554401: `"Hours"` and `"LS"` get 422; `"hours"` and `"ls"` get 201. Lines added earlier still read back as `"LS"`. LEDGER sends lowercase on every v2 line POST, including unit Prime Contract lines (`v2Uom` in app.js). The Prime Contract line endpoint wasn't tested separately.
-- **Unit list:** `GET /rest/v1.0/companies/{cid}/uoms` (20, `name` like `hours`, `ls`, `ea`, `sf`), `GET /rest/v2.0/companies/{cid}/uoms` (`identity` is the value to send), and `GET /rest/v1.0/companies/{cid}/uom_categories`. `/units_of_measure` is a 404.
+- **Unit list:** `GET /rest/v1.0/companies/{cid}/uoms` (20 names, read 2026-11-20: days, hours, months, weeks, years, ea, ls, lf, m, mm, m², sf, sy, cy, m³, kg, lbs, t, ton, minutes). LEDGER checks a T&M material's `uom` against it before putting quantity × unit price on a CO line; it falls back to 1 LS. Other forms: `GET /rest/v2.0/companies/{cid}/uoms` (`identity` is the value to send), and `GET /rest/v1.0/companies/{cid}/uom_categories`. `/units_of_measure` is a 404.
 - **Change Events** (`POST /rest/v1.1/change_events`, `unit_of_measure: "Hours"`) still accepted the old spelling on 2026-11-10, so LEDGER left them alone.
 
 ## Prime Change Order ERP link (2026-11-06)
