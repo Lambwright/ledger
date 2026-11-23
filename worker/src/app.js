@@ -2669,11 +2669,22 @@ function directCostCategory(dc, rawLines = []) {
     || String(wbs.description || '').split('.')[0].trim()
     || DC_TYPE_LABEL[dc.direct_cost_type] || 'Direct cost';
 }
+// A company credit card is a vendor in Procore named after its payable account and card holder
+// ("2320 BMO MC PAYABLE - 7052 DANNY"). The client never sees that (Ben, 2026-11-23).
+function isCardAccountVendor(name) {
+  const n = String(name || '');
+  return /\bpayable\b/i.test(n) || (/\b(visa|mc|mastercard|amex|american express)\b/i.test(n) && /\b\d{4}\b/.test(n));
+}
+// Card expenses carry the receipt total in their description (" : EM PLASTICS $772.11"). The client's line is
+// marked up, so the cost never goes on it.
+function clientCostText(text) {
+  return String(text || '').replace(/(@\s*)?\$\s?\d[\d,]*(\.\d+)?/g, '').replace(/\s{2,}/g, ' ').replace(/^[\s:-]+|[\s:-]+$/g, '').trim();
+}
 function directCostLineDescription(dc, rawLines = []) {
   const parts = [directCostCategory(dc, rawLines)];
   const vendor = dc.vendor_name || dc.vendor?.name || null;
-  if (vendor) parts.push(vendor);
-  const desc = String(dc.description || '').trim();
+  if (vendor && !isCardAccountVendor(vendor)) parts.push(vendor);
+  const desc = clientCostText(dc.description);
   if (desc && !parts.includes(desc)) parts.push(desc);
   if (dc.invoice_number) parts.push(`#${String(dc.invoice_number).replace(/^#/, '')}`);
   return `${parts.join(' - ')}${dc.direct_cost_date ? ` (${dc.direct_cost_date})` : ''}`;
@@ -2745,8 +2756,9 @@ function buildDirectCostCOLines(lineItems, groupBy, markup) {
         }
         const cost = Number(raw.amount ?? 0);
         const amount = Math.round(cost * (1 + markup / 100) * 100) / 100;
+        const rawDescription = clientCostText(raw.description);
         coLines.push({
-          description: `${l.description}${raw.description ? ` - ${raw.description}` : ''}`,
+          description: `${l.description}${rawDescription ? ` - ${rawDescription}` : ''}`,
           cost, markupPercent: markup, amount, hours: 1, wbsCodeId, wbsFlatCode: raw.wbs_code?.flat_code || null, members: [l]
         });
       }
@@ -3199,7 +3211,7 @@ function einvoiceTimecardKey(line) {
 // What goes on the client's CO/invoice: Einvoice's "(Timecard #…)" is an
 // internal reference only (Ben, 2026-09-24). LEDGER's own UI keeps it.
 function clientLineDescription(line) {
-  return (line.description || '').replace(/\s*\(Timecard #\d+\)/g, '').trim();
+  return clientCostText((line.description || '').replace(/\s*\(Timecard #\d+\)/g, ''));
 }
 
 // A line with no real budget code can't go on a Prime CO. Old test-project
@@ -3217,7 +3229,8 @@ function commitmentLabel(c) {
 // which would make it easier for a client to go to the sub direct. commitmentLabel stays for LEDGER's own
 // messages. A PM swaps the company for the worker's name by hand where that's better.
 function commitmentClientName(c) {
-  return c.vendor_name || c.title || 'Subcontract';
+  if (!isCardAccountVendor(c.vendor_name)) return c.vendor_name || c.title || 'Subcontract';
+  return c.type === 'PurchaseOrderContract' ? 'Materials' : (c.title || 'Subcontract');
 }
 function commitmentClientDescription(c, rawLines) {
   const descs = [...new Set(rawLines.map(clientLineDescription).filter(Boolean))].join('; ');
