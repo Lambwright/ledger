@@ -594,6 +594,8 @@ export default function App({ user, onSignOut }) {
         setError(`Couldn't load the project's customer: ${e.message}`);
       });
   }, [noPcInvoice, loading, billingCtx, projectId]);
+  // The picked customer isn't in the project's Directory (2027_0037, 2026-11-23).
+  const billToNotInProject = (billingCtx?.vendors || []).find(v => v.id === ownerVendorId && v.notInProject) || null;
 
   // Once the contract list is in, default the picker: whatever Procore's
   // side-panel context gave us, else the single contract if there's only one,
@@ -3261,11 +3263,17 @@ export default function App({ user, onSignOut }) {
                             <option value="" disabled>{billingCtx ? 'Choose the customer…' : 'Loading…'}</option>
                             {(billingCtx?.vendors || []).map(v => (
                               <option key={v.id} value={v.id}>
-                                {v.name}{billingCtx?.customer?.id === v.id ? ' (project Customer)' : ''}
+                                {v.name}{billingCtx?.customer?.id === v.id ? ' (project Customer)' : ''}{v.notInProject ? ' — not on the project' : ''}
                               </option>
                             ))}
                           </select>
                         </label>
+                        {billToNotInProject && (
+                          <div className="banner banner-warning">
+                            {billToNotInProject.name} is the project's Customer but isn't in its Directory in Procore, so Procore
+                            won't put it on a contract. Add the company to the project (Directory → Companies), then reopen LEDGER.
+                          </div>
+                        )}
                         <label className="action-bar-field">
                           <span>Contractor</span>
                           <select value={contractorId} onChange={e => setContractorId(e.target.value)}>
@@ -3672,8 +3680,8 @@ export default function App({ user, onSignOut }) {
                   <div className="action-bar-buttons">
                     <button
                       className="generate-btn" onClick={loadPreview}
-                      disabled={previewLoading || noPcDraft || (noPcInvoice && !ownerVendorId) || (action === 'invoice' && standalone && !coTitle.trim())}
-                      title={noPcDraft ? 'No approved Prime Contract — use Create Invoice' : noPcInvoice && !ownerVendorId ? 'Choose who to bill' : action === 'invoice' && standalone && !coTitle.trim() ? 'Enter a title for the new Prime Contract' : undefined}
+                      disabled={previewLoading || noPcDraft || (noPcInvoice && (!ownerVendorId || billToNotInProject)) || (action === 'invoice' && standalone && !coTitle.trim())}
+                      title={noPcDraft ? 'No approved Prime Contract — use Create Invoice' : noPcInvoice && !ownerVendorId ? 'Choose who to bill' : noPcInvoice && billToNotInProject ? 'Add the customer to the project Directory in Procore first' : action === 'invoice' && standalone && !coTitle.trim() ? 'Enter a title for the new Prime Contract' : undefined}
                     >
                       {previewLoading ? <BusyLabel fallback="Loading preview…" /> : 'Preview →'}
                     </button>

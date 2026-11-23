@@ -1215,7 +1215,14 @@ export async function billingContext(env, { projectId }) {
     }
     if (res.data.length < 300) break;
   }
-  if (customer && !vendors.some(v => v.id === customer.id)) vendors.push(customer);
+  // The Customer field can name a company that was never added to the project's
+  // Directory — Procore then refuses the new contract ("Contract Company has not
+  // been added to this project", 2027_0037 on 2026-11-23). Still listed so the PM
+  // sees who it is, but flagged; the sidebar won't build with it.
+  if (customer && !vendors.some(v => v.id === customer.id)) {
+    customer.notInProject = true;
+    vendors.push({ ...customer });
+  }
   vendors.sort((a, b) => a.name.localeCompare(b.name));
   // The new contract's Contractor (always Einbau — Ben, 2026-11-02) is a
   // company; its Architect/Engineer is a PERSON from the project directory
@@ -4729,9 +4736,6 @@ export async function generateStandaloneInvoice(env, {
   const totalAmount = Math.round(lines.reduce((s, l) => s + l.amount, 0) * 100) / 100;
   const label = [tm?.label, mt?.label, dc?.label, cm?.label].filter(Boolean).join(' + ');
 
-  const billingPeriod = await findOrCreateBillingPeriod(env, projectId, billingPeriodId, newBillingPeriod);
-  onProgress({ message: `Billing period ready — id ${billingPeriod.id}` });
-
   // The client: the customer the PM picked (always, on a project with no
   // approved Prime Contract yet — Ben, 2026-10-26), else the main contract's
   // owner. The contractor is copied from the main contract when there is one.
@@ -4753,6 +4757,24 @@ export async function generateStandaloneInvoice(env, {
   // Contractor and Architect/Engineer: the PM's picks, else the main contract's.
   const contractorFor = contractorId || source.contractor?.id;
   const architectFor = architectId || source.architect?.id;
+
+  // Both companies have to be in the project's Directory or Procore refuses the
+  // contract — checked BEFORE the billing period, which used to get created and
+  // left behind when the contract then failed (2027_0037, 2026-11-23).
+  const directoryRes = await requestWithRetry(env, 'GET', `/rest/v1.0/projects/${projectId}/vendors?per_page=300`, null, onProgress);
+  if (directoryRes.status === 200 && Array.isArray(directoryRes.data) && directoryRes.data.length < 300) {
+    const onProject = new Set(directoryRes.data.map(v => String(v.id)));
+    const missing = [[vendorId, 'The company you\'re billing'], [contractorFor, 'The Contractor']].filter(([id]) => id && !onProject.has(String(id)));
+    if (missing.length > 0) {
+      throw new Error(
+        `${missing.map(([, who]) => who).join(' and ')} isn't in this project's Directory in Procore, so Procore won't put it on a contract. ` +
+        `Add the company to the project (Directory → Companies), then try again. Nothing was created.`
+      );
+    }
+  }
+
+  const billingPeriod = await findOrCreateBillingPeriod(env, projectId, billingPeriodId, newBillingPeriod);
+  onProgress({ message: `Billing period ready — id ${billingPeriod.id}` });
   const createRes = await requestWithRetry(env, 'POST', v2, {
     title: contractTitle,
     description: `LEDGER-generated standalone invoice: ${label}`,
