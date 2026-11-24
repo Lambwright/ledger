@@ -8,7 +8,6 @@ import {
   getProjectReconciliation, listLedgerRuns
 } from './api';
 import { connectProcoreSidePanel, isEmbedded } from './procore';
-import { withTokenHash } from './auth';
 import { materialLineAmount } from './materials';
 import ProjectPicker, { recentProjects } from './ProjectPicker';
 import InvoicePanel from './InvoicePanel.jsx';
@@ -727,11 +726,14 @@ export default function App({ user, onSignOut }) {
   // postMessage handshake (it isn't an iframe child of Procore's window —
   // window.opener isn't window.parent), so it carries context via the same
   // URL params App already supports for standalone use instead.
+  // No noopener on any pop-out: each one asks this window for the sign-in
+  // over postMessage (auth.js requestTokenFromOpener), same origin only. The
+  // token is never in a pop-out's URL (2026-11-24).
   function popOut() {
     const url = new URL(window.location.origin + window.location.pathname);
     if (projectId) url.searchParams.set('project_id', projectId);
     if (contractId) url.searchParams.set('contract_id', contractId);
-    window.open(withTokenHash(url).toString(), '_blank', 'noopener,noreferrer,width=1100,height=850');
+    window.open(url.toString(), '_blank', 'width=1100,height=850');
   }
 
   // T&M ticket URL — confirmed live 2026-09-14 (Ben pasted the real one from
@@ -761,7 +763,7 @@ export default function App({ user, onSignOut }) {
     url.searchParams.set('ticket_number', t.number);
     url.searchParams.set('billing_mode', billingMode || '');
     url.searchParams.set('procore_origin', procoreOrigin);
-    window.open(withTokenHash(url).toString(), `ledger_ticket_${t.id}`, 'noopener,noreferrer,width=700,height=800');
+    window.open(url.toString(), `ledger_ticket_${t.id}`, 'width=700,height=800');
   }
 
   // Direct cost's own "Full details" popout (Ben's ask 2026-09-22) — mirrors
@@ -773,7 +775,7 @@ export default function App({ user, onSignOut }) {
     url.searchParams.set('direct_cost_id', d.id);
     url.searchParams.set('vendor', d.vendor || '');
     url.searchParams.set('procore_origin', procoreOrigin);
-    window.open(withTokenHash(url).toString(), `ledger_dc_${d.id}`, 'noopener,noreferrer,width=700,height=800');
+    window.open(url.toString(), `ledger_dc_${d.id}`, 'width=700,height=800');
   }
 
   // Preview/edit popout (Ben's ask 2026-09-15: "pop out the summaries for a

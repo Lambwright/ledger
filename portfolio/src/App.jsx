@@ -1,6 +1,6 @@
 import Loading, { BusyLabel } from "./components/Loading.jsx";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getStoredToken, verify, hasLedgerAccess, logout as doLogout } from "./auth.js";
+import { authErrorMessage, getStoredToken, verify, hasLedgerAccess, logout as doLogout } from "./auth.js";
 import { api } from "./api.js";
 import Header from "./components/Header.jsx";
 import LoginScreen from "./components/LoginScreen.jsx";
@@ -341,6 +341,7 @@ const DEFAULT_SORT = { key: "invoicing_remaining", dir: "desc" };
 
 export default function App() {
   const [authState, setAuthState] = useState("checking"); // checking | out | noaccess | in
+  const [loginNotice, setLoginNotice] = useState(null);
   const [user, setUser] = useState(null);
 
   const [projects, setProjects] = useState([]);
@@ -436,7 +437,11 @@ export default function App() {
       setAuthState("out");
       return;
     }
-    verify(token).then((data) => (data.valid ? signIn(data.user) : setAuthState("out")));
+    verify(token).then((data) => {
+      if (data.valid) return signIn(data.user);
+      if (data.error === "blocked") setLoginNotice(authErrorMessage("blocked"));
+      setAuthState("out");
+    });
   }, []);
 
   const load = useCallback(() => {
@@ -856,7 +861,7 @@ export default function App() {
   if (authState === "checking") {
     return <div className="login-screen"><Loading /></div>;
   }
-  if (authState === "out") return <LoginScreen onLoggedIn={signIn} />;
+  if (authState === "out") return <LoginScreen onLoggedIn={signIn} notice={loginNotice} />;
   if (authState === "noaccess") {
     return (
       <>

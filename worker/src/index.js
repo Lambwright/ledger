@@ -899,6 +899,7 @@ async function handleAction(env, body, ctx) {
 async function handlePortfolio(request, env) {
   const session = await verifyEinbauSession(request, env);
   if (!session) return json({ error: 'unauthorized' }, 401);
+  if (session.blocked) return json({ error: 'Too many failed attempts from this network — try again later.', code: 'blocked' }, 429);
   if (session.denied) return json({ error: NO_ACCESS_MESSAGE, code: 'no_ledger_access' }, 403);
   const { user, level } = session;
   let body;
@@ -1072,6 +1073,9 @@ const worker = {
     const session = isFullAccess ? null : await verifyEinbauSession(request, env);
     if (!isFullAccess && !session) {
       return json({ error: 'unauthorized' }, 401);
+    }
+    if (session?.blocked) {
+      return json({ error: 'blocked' }, 429);
     }
     if (session?.denied) {
       return json({ error: NO_ACCESS_MESSAGE, code: 'no_ledger_access' }, 403);

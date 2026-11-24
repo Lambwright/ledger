@@ -936,6 +936,8 @@ export async function verifyEinbauSession(request, env) {
       body: '{}'
     });
     const data = await res.json().catch(() => ({}));
+    // auth-worker blocks an address that keeps sending bad tokens (2026-11-24).
+    if (res.status === 429 && data?.error === 'blocked') return { blocked: true };
     if (!data?.valid) return null;
     // Remembered for HELM's Security tab if this request ends up refused.
     if (data.user?.username) refusalUser.set(request, data.user.username);
@@ -949,7 +951,7 @@ export async function verifyEinbauSession(request, env) {
 
 export async function verifyEinbauUser(request, env) {
   const session = await verifyEinbauSession(request, env);
-  return session && !session.denied ? session.user : null;
+  return session && !session.denied && !session.blocked ? session.user : null;
 }
 
 // Stages the company page never shows (Ben, 2026-09-29): Overhead isn't a job

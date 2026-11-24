@@ -3,12 +3,14 @@
 // runs while at least one is. Each poll reads LEDGER's own count (worker
 // procore.js rateStatus) — it never calls Procore.
 import { getRateStatus } from './api';
+import { getToken } from './auth';
 
 const subscribers = new Set();
 let timer = null;
 let last = null;
 
 async function poll() {
+  if (!getToken()) return; // signed out: nothing to ask, and a refused call is noise in HELM's Security tab
   try {
     last = await getRateStatus();
     subscribers.forEach((fn) => fn(last));

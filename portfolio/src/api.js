@@ -6,9 +6,11 @@ import { getStoredToken } from "./auth.js";
 const WORKER_URL = import.meta.env.VITE_WORKER_URL || "https://ledger.ben-a90.workers.dev";
 
 async function call(action, payload = {}) {
+  const token = getStoredToken();
   const res = await fetch(`${WORKER_URL}/portfolio`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${getStoredToken()}` },
+    // No header at all when signed out (never "Bearer null").
+    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify({ action, ...payload }),
   });
   const data = await res.json().catch(() => ({}));

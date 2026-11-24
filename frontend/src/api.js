@@ -2,14 +2,14 @@
 // (see auth.js / AuthGate.jsx); the worker checks it, and LEDGER access in
 // HELM, on every request. Replaced the old "frontend key" 2026-09-28 — that
 // key sat in this public bundle, so anyone with the URL could bill.
-import { getToken, storeToken } from './auth';
+import { authErrorMessage, authHeader, storeToken } from './auth';
 
 const WORKER_URL = import.meta.env.VITE_WORKER_URL;
 
 async function post(action, payload) {
   const res = await fetch(WORKER_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
     body: JSON.stringify({ action, ...payload })
   });
   // The worker hands back a fresh token when the current one is getting old.
@@ -18,6 +18,13 @@ async function post(action, payload) {
   if (res.status === 401) {
     window.dispatchEvent(new Event('ledger:unauthorized'));
     throw new Error('Your session ended — sign in again.');
+  }
+  if (res.status === 429) {
+    const body = await res.clone().json().catch(() => ({}));
+    if (body.error === 'blocked') {
+      window.dispatchEvent(new Event('ledger:blocked'));
+      throw new Error(authErrorMessage('blocked'));
+    }
   }
   return res;
 }

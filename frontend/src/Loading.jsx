@@ -11,7 +11,10 @@ import { subscribeRate, describeRate } from './rateMeter';
 // LEDGER's Procore usage this hour shows under it (Ben, 2026-11-19): he sweats
 // and types faster as the 600 calls run low, and keels over when they're gone,
 // with the time fresh ones arrive (rateMeter.js).
-export default function Loading({ text, size = 140, className = 'loading' }) {
+// `meter={false}` for the sign-in check: the rate meter is a signed-in API
+// call, and polling it with an unchecked token filled HELM's Security tab with
+// refused rate_status calls (2026-11-24).
+export default function Loading({ text, size = 140, className = 'loading', meter = true }) {
   const ref = useRef(null);
   const loader = useRef(null);
   const festive = typeof window !== 'undefined' ? window.EinbauFestive : null;
@@ -19,7 +22,7 @@ export default function Loading({ text, size = 140, className = 'loading' }) {
   useEffect(() => {
     if (!festive || !ref.current) return undefined;
     loader.current = festive.loader(ref.current, { size, text });
-    const unsubscribe = subscribeRate((status) => {
+    const unsubscribe = !meter ? () => {} : subscribeRate((status) => {
       const l = loader.current;
       const d = describeRate(status);
       if (!l || !d || typeof l.meter !== 'function') return; // an older copy of the script
@@ -38,7 +41,7 @@ export default function Loading({ text, size = 140, className = 'loading' }) {
     };
     // The loader is created once per size; text changes go through setText.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [festive, size]);
+  }, [festive, size, meter]);
 
   useEffect(() => {
     if (loader.current && text) loader.current.setText?.(text);

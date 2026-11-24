@@ -1,6 +1,6 @@
 import Loading from './Loading.jsx';
 import { useCallback, useEffect, useState } from 'react';
-import { adoptTokenFromHash, authErrorMessage, clearToken, getToken, login, verify } from './auth';
+import { authErrorMessage, clearToken, dropTokenFromHash, getToken, login, requestTokenFromOpener, storeToken, verify } from './auth';
 import { applyAccentPreset } from './accentPresets';
 
 // Wraps the sidebar and its API-calling popouts: nothing renders until an
@@ -37,27 +37,50 @@ export default function AuthGate({ children }) {
     setState('in');
   }, [signOut]);
 
+  // auth-worker has blocked this network: show why, but keep the token (it
+  // isn't the token's fault).
+  const showBlocked = useCallback(() => {
+    setUser(null);
+    setNotice(authErrorMessage('blocked'));
+    setState('out');
+  }, []);
+
   useEffect(() => {
-    adoptTokenFromHash();
-    const token = getToken();
-    if (!token) {
-      setState('out');
-      return;
-    }
-    verify(token).then((data) => {
+    let cancelled = false;
+    (async () => {
+      dropTokenFromHash();
+      // A pop-out gets the session from the LEDGER window that opened it.
+      if (window.opener) {
+        const handed = await requestTokenFromOpener();
+        if (handed) storeToken(handed);
+      }
+      const token = getToken();
+      if (cancelled) return;
+      if (!token) {
+        setState('out');
+        return;
+      }
+      const data = await verify(token);
+      if (cancelled) return;
       if (data.valid) signIn(data.user);
+      else if (data.error === 'blocked') showBlocked();
       else signOut(data.error === 'no_ledger_access' ? authErrorMessage('no_ledger_access') : null);
-    });
-  }, [signIn, signOut]);
+    })();
+    return () => { cancelled = true; };
+  }, [signIn, signOut, showBlocked]);
 
   useEffect(() => {
     const onUnauthorized = () => signOut('Your session ended — sign in again.');
     window.addEventListener('ledger:unauthorized', onUnauthorized);
-    return () => window.removeEventListener('ledger:unauthorized', onUnauthorized);
-  }, [signOut]);
+    window.addEventListener('ledger:blocked', showBlocked);
+    return () => {
+      window.removeEventListener('ledger:unauthorized', onUnauthorized);
+      window.removeEventListener('ledger:blocked', showBlocked);
+    };
+  }, [signOut, showBlocked]);
 
   if (state === 'checking') {
-    return <div className="ledger"><Loading /></div>;
+    return <div className="ledger"><Loading meter={false} /></div>;
   }
   if (state === 'out') return <SignIn notice={notice} onSignedIn={signIn} />;
   return children(user, () => signOut());

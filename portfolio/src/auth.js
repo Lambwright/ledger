@@ -37,7 +37,13 @@ const LOGIN_ERROR_MESSAGES = {
   rate_limited: "Too many attempts — try again in a few minutes.",
   invalid_request: "Enter a username and password.",
   no_app_access: "Your account doesn't have access to any apps yet. Ask your admin to grant you access.",
+  // auth-worker blocks an address that keeps sending bad tokens (429, 2026-11-24).
+  blocked: "Too many failed attempts from this network — try again later.",
 };
+
+export function authErrorMessage(code) {
+  return LOGIN_ERROR_MESSAGES[code] || null;
+}
 
 export async function login(username, password) {
   const res = await fetch(`${AUTH_BASE}/auth/login`, {

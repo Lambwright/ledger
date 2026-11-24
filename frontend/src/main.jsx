@@ -6,6 +6,10 @@ import PreviewEditPopout from './PreviewEditPopout.jsx'
 import TicketDetailPopout from './TicketDetailPopout.jsx'
 import DirectCostDetailPopout from './DirectCostDetailPopout.jsx'
 import AuthGate from './AuthGate.jsx'
+import { serveTokenToPopouts } from './auth'
+
+// Pop-outs ask this window for the session (auth.js); it's never in their URL.
+serveTokenToPopouts()
 
 // Popped-out windows (Ben's ask 2026-09-15) load this SAME app bundle at the
 // same URL, distinguished only by a `view` param — there's no server-side
