@@ -20,3 +20,9 @@ service = "crm-worker"
 # sidebar always has headroom. Needs the paid Workers plan (cron slots).
 [triggers]
 crons = ["* * * * *"]
+
+# Workers Logs: keeps each request (address, path, status, user agent, Cloudflare
+# location) and anything the code logs, for incident review. Added 2026-11-24.
+[observability]
+enabled = true
+head_sampling_rate = 1
