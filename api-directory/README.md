@@ -522,6 +522,12 @@ Read live on project 562949955464978 (2026_0373). Each file object is `{id, name
 - **Commitments:** the list (`/rest/v1.0/work_order_contracts?project_id=`) has **no** attachments. The show (`/rest/v1.0/work_order_contracts/{id}?project_id=`, or `purchase_order_contracts`) has `attachments[]`, e.g. the PO PDF. v2.0 `commitment_contracts/{id}` only gives `prostore_file_ids`.
 - **Direct Costs:** `GET /rest/v1.0/projects/{pid}/direct_costs/{id}` gives `attachments[]`.
 - **T&M tickets:** `time_and_material_entry_attachments[]`, in the entries list.
+- **Prime Contracts (read live 2026-11-25, PC 562949959789814 on project 562949955397029):**
+  - `GET /rest/v1.0/prime_contracts/{id}?project_id=` → **404**.
+  - The v2.0 show (`/rest/v2.0/companies/{cid}/projects/{pid}/prime_contracts/{id}`) only gives `prostore_file_ids`.
+  - `GET .../prime_contracts/{id}/attachments` → 200 `{data:[{id, name, content_type, url, uuid}]}`. The `url` is a signed `storage.procore.com` link.
+  - That endpoint pages at **10 by default**. Pass `per_page=100`; 35 files came back in one page.
+  - These are the contract's General tab "Attachments". They don't reach the PC's export or its invoices.
 - **Commitment's company name:** a single commitment (`work_order_contracts/{id}`) names its sub as `vendor.company`, not `vendor.name`.
 - **Used by:**
   - LEDGER's invoice panel (`worker/src/invoicepanel.js`).

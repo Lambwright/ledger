@@ -38,16 +38,37 @@ async function callAction(action, payload) {
     const err = new Error(body.error || `Request failed with status ${res.status}`);
     err.code = body.code;
     err.unlinkedCount = body.unlinkedCount;
+    err.runs = body.runs;
     throw err;
   }
   return body;
+}
+
+// A billing run whose answer never arrived (2026-11-23, 562949955461743): the
+// work may have got partway in Procore, so never let it look like nothing
+// happened. Its items stay blocked on the worker until someone checks.
+function connectionLost() {
+  const err = new Error(
+    'The connection to LEDGER dropped before the run finished. It may already have created a Change Event, ' +
+    'Change Order or invoice in Procore. Check Procore before trying again: if this selection is still blocked, ' +
+    'LEDGER will show what that run left behind.'
+  );
+  err.code = 'CONNECTION_LOST';
+  return err;
 }
 
 // generate_invoice / push_to_draft_co stream NDJSON — one line per progress
 // event, ending in {type:'done', result} or {type:'error', ...}. Always a 200
 // HTTP response; success/failure lives in that final line, not res.ok.
 async function streamAction(action, payload, onProgress) {
-  const res = await post(action, payload);
+  let res;
+  try {
+    res = await post(action, payload);
+  } catch (e) {
+    // fetch itself failed: the request may still have reached the worker.
+    if (e instanceof TypeError) throw connectionLost();
+    throw e;
+  }
 
   if (!res.body) {
     // No streaming support (very old browser) — fall back to a plain read.
@@ -67,20 +88,24 @@ async function streamAction(action, payload, onProgress) {
   let result = null;
   let errorEvt = null;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    let idx;
-    while ((idx = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, idx);
-      buf = buf.slice(idx + 1);
-      if (!line.trim()) continue;
-      const evt = JSON.parse(line);
-      if (evt.type === 'done') result = evt.result;
-      else if (evt.type === 'error') errorEvt = evt;
-      else onProgress?.(evt);
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, idx);
+        buf = buf.slice(idx + 1);
+        if (!line.trim()) continue;
+        const evt = JSON.parse(line);
+        if (evt.type === 'done') result = evt.result;
+        else if (evt.type === 'error') errorEvt = evt;
+        else onProgress?.(evt);
+      }
     }
+  } catch {
+    if (!result && !errorEvt) throw connectionLost();
   }
 
   if (errorEvt) {
@@ -88,8 +113,11 @@ async function streamAction(action, payload, onProgress) {
     err.code = errorEvt.code;
     err.unlinkedCount = errorEvt.unlinkedCount;
     err.ticketNumbers = errorEvt.ticketNumbers;
+    err.runs = errorEvt.runs;
     throw err;
   }
+  // The stream ended with neither "done" nor "error": cut off, not cancelled.
+  if (result == null) throw connectionLost();
   return result;
 }
 
@@ -501,6 +529,12 @@ export function pushCombinedToDraftCO({
     ...(editedDcLines ? { edited_dc_lines: editedDcLines } : {}),
     ...(title ? { title } : {})
   }, onProgress);
+}
+
+// Frees the items of a billing run that failed or was cut off, once someone has
+// checked Procore (worker reservations.js).
+export function releaseBillingRun({ tenantId, projectId, runId }) {
+  return callAction('release_billing_run', { tenant_id: tenantId, project_id: projectId, run_id: runId });
 }
 
 // ============================================================

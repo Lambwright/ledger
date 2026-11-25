@@ -7,6 +7,7 @@ import { dbQuery } from './db.js';
 import { ensureBulkSchema, ensureMaterialSchema } from './schema.js';
 import { attachTicketBackup, attachChosenBackup } from './ticketbackup.js';
 import { headerStamp, loadLineCache, cachedLines, saveLineCache } from './linecache.js';
+import { billingRun, assertNotReserved } from './reservations.js';
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -4375,10 +4376,29 @@ async function computeCombinedSources(env, {
   return { tm, dc, cm, mt };
 }
 
+// Every item a billing run will write to billing_records, by the same keys —
+// what reservations.js reserves before the run touches Procore.
+function billingItemKeys({ tm, dc, cm, mt }) {
+  return [
+    ...(tm?.lineItems || []).map(l => ({ recordType: 'timecard', procoreRecordId: l.timecardEntryId })),
+    ...dcBillingRows(dc?.lineItems || []),
+    ...commitmentBillingRows(cm?.lineItems || []),
+    ...materialBillingRows(mt?.lineItems || [])
+  ].map(k => ({ recordType: k.recordType, procoreRecordId: k.procoreRecordId }));
+}
+
+// An error after which the run's own rollback removed everything it had made in
+// Procore, so its reservation can be dropped (reservations.js failed()).
+function nothingLeftError(message) {
+  const err = new Error(message);
+  err.nothingLeft = true;
+  return err;
+}
+
 async function buildCombinedChangeEventAndOrder(env, {
   tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [], materialLines = [],
   lineOrder = null, primeContractId, confirmUnlinked, groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines,
-  cmGroupBy, editedCmLines, title, onProgress = () => {}
+  cmGroupBy, editedCmLines, title, run = null, onProgress = () => {}
 }) {
   const { tm, dc, cm, mt } = await computeCombinedSources(env, {
     tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, materialLines,
@@ -4409,6 +4429,10 @@ async function buildCombinedChangeEventAndOrder(env, {
   // itself shows back), not just cosmetic on one side.
   const label = title?.trim() ? title.trim() : [tm?.label, mt?.label, dc?.label, cm?.label].filter(Boolean).join(' + ');
   const reason = [tm && 'T&M', mt && 'T&M materials', dc && 'Direct Cost', cm && 'Commitment'].filter(Boolean).join(' + ') + ' billing';
+
+  // Reserve every item before the first Procore write, so a second run on any
+  // of them is refused instead of building a duplicate (reservations.js).
+  if (run) await run.reserve(billingItemKeys({ tm, dc, cm, mt }), label);
 
   // 1. Build the Change Event — same shape as buildChangeEventAndOrder/
   // buildDirectCostChangeEventAndOrder above, just fed from the combined line
@@ -4475,9 +4499,8 @@ async function buildCombinedChangeEventAndOrder(env, {
   } catch (e) {
     onProgress({ message: 'Failed before the Change Order was ready — rolling back the Change Event…' });
     const rb = await rollbackChangeEventAndOrder(env, projectId, changeEventId, changeOrderId);
-    throw new Error(
-      `${e.message} ${rb.ceDeleted ? '(the Change Event was rolled back — nothing left behind)' : '(COULD NOT roll back the Change Event — check Procore manually, it may still exist)'}`
-    );
+    const message = `${e.message} ${rb.ceDeleted ? '(the Change Event was rolled back — nothing left behind)' : '(COULD NOT roll back the Change Event — check Procore manually, it may still exist)'}`;
+    throw rb.ceDeleted && (!changeOrderId || rb.coDeleted) ? nothingLeftError(message) : new Error(message);
   }
 
   // 3. Add every combined line item — same rollback-on-first-failure
@@ -4512,10 +4535,9 @@ async function buildCombinedChangeEventAndOrder(env, {
       ? 'Rolled back the Change Event and Change Order — nothing was left half-built.'
       : `Rollback ${rb.coDeleted ? 'removed' : 'could NOT remove'} the Change Order and ` +
         `${rb.ceDeleted ? 'removed' : 'could NOT remove'} the Change Event — check Procore manually if either failed.`;
-    throw new Error(
-      `Only added ${addedCount} of ${normalizedLines.length} line items to the Change Order, then failed on ` +
-      `"${lineFailure.description}": ${lineFailure.error}. ${rollbackNote}`
-    );
+    const message = `Only added ${addedCount} of ${normalizedLines.length} line items to the Change Order, then failed on ` +
+      `"${lineFailure.description}": ${lineFailure.error}. ${rollbackNote}`;
+    throw rb.coDeleted && rb.ceDeleted ? nothingLeftError(message) : new Error(message);
   }
   onProgress({ message: `All ${normalizedLines.length} line item(s) added — $${totalAmount.toLocaleString()} total` });
 
@@ -4541,6 +4563,9 @@ export async function previewCombinedBilling(env, {
     tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, materialLines,
     groupBy, rateOverrides, confirmUnlinked: true, markupPercent, cmMarkupPercent, dcGroupBy, cmGroupBy, preview: true
   });
+  // Say so now, not after the PM has set everything up, if any of it is in
+  // another billing run (running, failed, or cut off).
+  await assertNotReserved(env, { tenantId, projectId, keys: billingItemKeys({ tm, dc, cm, mt }) });
 
   return {
     // Ben's ask 2026-09-22: preview shows the real CO/CE name it'll get,
@@ -4568,24 +4593,33 @@ export async function pushCombinedToDraftCO(env, {
   lineOrder = null, userId, primeContractId, confirmUnlinked, groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines,
   cmGroupBy, editedCmLines, title, backupFiles = [], onProgress = () => {}
 }) {
-  const { tmEntries, tmLineItems, dcLineItems, cmLineItems, mtLineItems, contractId, changeEventId, changeOrderId, totalAmount, label } =
-    await buildCombinedChangeEventAndOrder(env, {
+  const run = billingRun(env, { tenantId, projectId, userId, action: 'push_combined_to_draft_co' });
+  onProgress = run.watch(onProgress);
+  let built, dcRows;
+  try {
+    built = await buildCombinedChangeEventAndOrder(env, {
       tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, materialLines, lineOrder, primeContractId, confirmUnlinked,
-      groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, title, onProgress
+      groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, title, run, onProgress
     });
-
-  const dcRows = [...dcBillingRows(dcLineItems), ...commitmentBillingRows(cmLineItems), ...materialBillingRows(mtLineItems)];
-  await insertBillingRecordsBatch(env, [
-    ...tmLineItems.map(line => ({
-      tenantId, projectId, procoreRecordId: line.timecardEntryId,
-      amount: line.amount, status: 'draft_co', reconciledBy: userId || 'ledger-system',
-      changeOrderId: String(changeOrderId), changeEventId: String(changeEventId)
-    })),
-    ...dcRows.map(row => ({
-      ...row, tenantId, projectId, status: 'draft_co', reconciledBy: userId || 'ledger-system',
-      changeOrderId: String(changeOrderId), changeEventId: String(changeEventId)
-    }))
-  ]);
+    const { tmLineItems, dcLineItems, cmLineItems, mtLineItems, changeEventId, changeOrderId } = built;
+    dcRows = [...dcBillingRows(dcLineItems), ...commitmentBillingRows(cmLineItems), ...materialBillingRows(mtLineItems)];
+    await insertBillingRecordsBatch(env, [
+      ...tmLineItems.map(line => ({
+        tenantId, projectId, procoreRecordId: line.timecardEntryId,
+        amount: line.amount, status: 'draft_co', reconciledBy: userId || 'ledger-system',
+        changeOrderId: String(changeOrderId), changeEventId: String(changeEventId)
+      })),
+      ...dcRows.map(row => ({
+        ...row, tenantId, projectId, status: 'draft_co', reconciledBy: userId || 'ledger-system',
+        changeOrderId: String(changeOrderId), changeEventId: String(changeEventId)
+      }))
+    ]);
+  } catch (e) {
+    await run.failed(e);
+    throw e;
+  }
+  await run.done();
+  const { tmEntries, tmLineItems, dcLineItems, cmLineItems, mtLineItems, contractId, changeEventId, changeOrderId, totalAmount, label } = built;
   onProgress({ message: `Recorded ${tmLineItems.length + dcRows.length} item(s) as pushed to draft` });
 
   // Last, for the same reason as generateCombinedInvoice.
@@ -4617,30 +4651,45 @@ export async function generateCombinedInvoice(env, {
   const billingPeriod = await findOrCreateBillingPeriod(env, projectId, billingPeriodId, newBillingPeriod);
   onProgress({ message: `Billing period ready — id ${billingPeriod.id}` });
 
-  const { tmEntries, tmLineItems, tmCoLines, dcLineItems, dcCoLines, cmLineItems, cmCoLines, mtLineItems, mtCoLines, contractId, changeEventId, changeOrderId, totalAmount, label } =
-    await buildCombinedChangeEventAndOrder(env, {
+  const run = billingRun(env, { tenantId, projectId, userId, action: 'generate_combined_invoice' });
+  onProgress = run.watch(onProgress);
+  let built, invoiced, dcRows;
+  try {
+    built = await buildCombinedChangeEventAndOrder(env, {
       tenantId, projectId, entryIds, directCostIds, directCostLineIds, commitmentIds, commitmentLineIds, materialLines, lineOrder, primeContractId, confirmUnlinked,
-      groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, title, onProgress
+      groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines, cmGroupBy, editedCmLines, title, run, onProgress
     });
+    const { tmLineItems, tmCoLines, dcLineItems, dcCoLines, cmLineItems, cmCoLines, mtLineItems, mtCoLines, contractId, changeEventId, changeOrderId } = built;
 
-  const { invoice, claimedCount, failedLines } = await approveAndInvoiceChangeOrder(env, {
-    projectId, contractId, changeOrderId, coLines: [...tmCoLines, ...mtCoLines, ...dcCoLines, ...cmCoLines], billingPeriod, invoiceNumber, billingDate, onProgress
-  });
+    invoiced = await approveAndInvoiceChangeOrder(env, {
+      projectId, contractId, changeOrderId, coLines: [...tmCoLines, ...mtCoLines, ...dcCoLines, ...cmCoLines], billingPeriod, invoiceNumber, billingDate, onProgress
+    });
+    const { invoice } = invoiced;
 
-  const dcRows = [...dcBillingRows(dcLineItems), ...commitmentBillingRows(cmLineItems), ...materialBillingRows(mtLineItems)];
-  await insertBillingRecordsBatch(env, [
-    ...tmLineItems.map(line => ({
-      tenantId, projectId, procoreRecordId: line.timecardEntryId,
-      invoiceId: String(invoice.id), invoiceNumber: invoice.invoice_number,
-      amount: line.amount, status: 'billed', reconciledBy: userId || 'ledger-system',
-      changeOrderId: String(changeOrderId), changeEventId: String(changeEventId)
-    })),
-    ...dcRows.map(row => ({
-      ...row, tenantId, projectId, invoiceId: String(invoice.id), invoiceNumber: invoice.invoice_number,
-      status: 'billed', reconciledBy: userId || 'ledger-system',
-      changeOrderId: String(changeOrderId), changeEventId: String(changeEventId)
-    }))
-  ]);
+    dcRows = [...dcBillingRows(dcLineItems), ...commitmentBillingRows(cmLineItems), ...materialBillingRows(mtLineItems)];
+    await insertBillingRecordsBatch(env, [
+      ...tmLineItems.map(line => ({
+        tenantId, projectId, procoreRecordId: line.timecardEntryId,
+        invoiceId: String(invoice.id), invoiceNumber: invoice.invoice_number,
+        amount: line.amount, status: 'billed', reconciledBy: userId || 'ledger-system',
+        changeOrderId: String(changeOrderId), changeEventId: String(changeEventId)
+      })),
+      ...dcRows.map(row => ({
+        ...row, tenantId, projectId, invoiceId: String(invoice.id), invoiceNumber: invoice.invoice_number,
+        status: 'billed', reconciledBy: userId || 'ledger-system',
+        changeOrderId: String(changeOrderId), changeEventId: String(changeEventId)
+      }))
+    ]);
+  } catch (e) {
+    await run.failed(e);
+    throw e;
+  }
+  await run.done();
+  const {
+    tmEntries, tmLineItems, tmCoLines, dcLineItems, dcCoLines, cmLineItems, cmCoLines, mtLineItems, mtCoLines,
+    contractId, changeEventId, changeOrderId, totalAmount, label
+  } = built;
+  const { invoice, claimedCount, failedLines } = invoiced;
   onProgress({ message: `Recorded ${tmLineItems.length + dcRows.length} item(s) as billed` });
 
   // T&M ticket backup on the invoice: a PDF per ticket + its own files (ticketbackup.js).
@@ -4716,12 +4765,22 @@ function standaloneLineDescription(line, method) {
   return line.description;
 }
 
-export async function generateStandaloneInvoice(env, {
+export async function generateStandaloneInvoice(env, args) {
+  const run = billingRun(env, { tenantId: args.tenantId, projectId: args.projectId, userId: args.userId, action: 'generate_standalone_invoice' });
+  try {
+    return await buildStandaloneInvoice(env, { ...args, onProgress: run.watch(args.onProgress || (() => {})) }, run);
+  } catch (e) {
+    await run.failed(e); // a no-op once its billing_records are written
+    throw e;
+  }
+}
+
+async function buildStandaloneInvoice(env, {
   tenantId, projectId, entryIds = [], directCostIds = [], directCostLineIds = [], commitmentIds = [], commitmentLineIds = [], materialLines = [],
   lineOrder = null, userId, primeContractId, confirmUnlinked, groupBy, rateOverrides, editedTmLines, markupPercent, cmMarkupPercent, dcGroupBy, editedDcLines,
   cmGroupBy, editedCmLines, title, billingPeriodId, newBillingPeriod, invoiceNumber, billingDate, ownerVendorId = null,
   accountingMethod = 'unit', contractorId = null, architectId = null, backupFiles = [], onProgress = () => {}
-}) {
+}, run) {
   if (!billingDate) {
     throw new Error('billingDate is required');
   }
@@ -4786,6 +4845,9 @@ export async function generateStandaloneInvoice(env, {
     }
   }
 
+  // Reserve every item before the first Procore write (reservations.js).
+  await run.reserve(billingItemKeys({ tm, dc, cm, mt }), contractTitle);
+
   const billingPeriod = await findOrCreateBillingPeriod(env, projectId, billingPeriodId, newBillingPeriod);
   onProgress({ message: `Billing period ready — id ${billingPeriod.id}` });
   const createRes = await requestWithRetry(env, 'POST', v2, {
@@ -4848,7 +4910,8 @@ export async function generateStandaloneInvoice(env, {
     invoice = invoiceRes.data;
   } catch (e) {
     const removed = await rollback('Failed before the invoice was created');
-    throw new Error(`${e.message} ${removed ? '(the new Prime Contract was removed — nothing left behind)' : '(COULD NOT remove the new Prime Contract — delete it in Procore)'}`);
+    const message = `${e.message} ${removed ? '(the new Prime Contract was removed — nothing left behind)' : '(COULD NOT remove the new Prime Contract — delete it in Procore)'}`;
+    throw removed ? nothingLeftError(message) : new Error(message);
   }
   onProgress({ message: `Invoice ${invoice.invoice_number} created`, invoiceId: invoice.id, invoiceNumber: invoice.invoice_number });
 
@@ -4902,6 +4965,7 @@ export async function generateStandaloneInvoice(env, {
       status: 'billed', reconciledBy: userId || 'ledger-system'
     }))
   ]);
+  await run.done();
   onProgress({ message: `Recorded ${tmLineItems.length + dcRows.length} item(s) as billed` });
 
   // Backup goes last, same as generateCombinedInvoice.

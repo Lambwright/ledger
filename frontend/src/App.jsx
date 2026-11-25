@@ -5,7 +5,7 @@ import {
   previewCombinedBilling, generateCombinedInvoice, pushCombinedToDraftCO, getProjectSettings, saveProjectSettings, revertToUnbilled,
   revertMaterial, listBudgetCodes, getBillingContext, listBackupFiles,
   revertDirectCost, queueReconcile, reconcileQueueState, cancelQueuedReconcile, directCostLineDetail, listCommitments, commitmentLineDetail, revertCommitment, saveProjectCounts,
-  getProjectReconciliation, listLedgerRuns
+  getProjectReconciliation, listLedgerRuns, releaseBillingRun
 } from './api';
 import { connectProcoreSidePanel, isEmbedded } from './procore';
 import { materialLineAmount } from './materials';
@@ -357,6 +357,10 @@ export default function App({ user, onSignOut }) {
   // switch, never touches which items are checked.
   const [pickerTab, setPickerTab] = useState('tm'); // 'tm' | 'dc' | 'cm'
   const [generating, setGenerating] = useState(false);
+  // Billing runs holding the selected items (worker reservations.js): shown
+  // with the error, with Release on the ones that failed or never finished.
+  const [stuckRuns, setStuckRuns] = useState(null);
+  const [releasingRun, setReleasingRun] = useState(null);
   const [progressLog, setProgressLog] = useState([]);
   const [result, setResult] = useState(null);
   const [revertingId, setRevertingId] = useState(null); // ticket entry id currently being undone
@@ -1372,6 +1376,7 @@ export default function App({ user, onSignOut }) {
     }
     setGenerating(true);
     setError(null);
+    setStuckRuns(null);
     setProgressLog([]);
     const onProgress = (evt) => setProgressLog(prev => [...prev, evt.message]);
     try {
@@ -1407,8 +1412,29 @@ export default function App({ user, onSignOut }) {
       await load(projectId, { preserveResult: true });
     } catch (e) {
       setError(e.message);
+      setStuckRuns(e.code === 'BILLING_IN_PROGRESS' ? (e.runs || []) : null);
     } finally {
       setGenerating(false);
+    }
+  }
+
+  // Release a failed / cut-off billing run's items, after the PM has checked
+  // Procore for what it left behind.
+  async function releaseStuckRun(run) {
+    if (!window.confirm(
+      `Release "${run.label}"?\n\nOnly do this once you've checked Procore and deleted (or finished by hand) ` +
+      `anything that run created. Its items will then show as unbilled and can be billed again.`
+    )) return;
+    setReleasingRun(run.runId);
+    try {
+      await releaseBillingRun({ tenantId: TENANT_ID, projectId, runId: run.runId });
+      const left = (stuckRuns || []).filter(r => r.runId !== run.runId);
+      setStuckRuns(left.length ? left : null);
+      if (!left.length) setError(null);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setReleasingRun(null);
     }
   }
 
@@ -1425,6 +1451,7 @@ export default function App({ user, onSignOut }) {
     if (entryIds.length === 0 && directCostIds.length === 0 && directCostLineIds.length === 0 && commitmentLineIds.length === 0 && checkedMaterials.length === 0) return;
     setPreviewLoading(true);
     setError(null);
+    setStuckRuns(null);
     try {
       const res = await previewCombinedBilling({
         tenantId: TENANT_ID, projectId, entryIds, directCostIds, directCostLineIds, commitmentLineIds,
@@ -1446,6 +1473,7 @@ export default function App({ user, onSignOut }) {
       ]);
     } catch (e) {
       setError(e.message);
+      setStuckRuns(e.code === 'BILLING_IN_PROGRESS' ? (e.runs || []) : null);
     } finally {
       setPreviewLoading(false);
     }
@@ -3247,6 +3275,15 @@ export default function App({ user, onSignOut }) {
                     like it did nothing because the error was rendering behind
                     the overlay. */}
                 {error && <div className="banner banner-error">{error}</div>}
+                {error && stuckRuns?.some(r => r.releasable) && (
+                  <div className="action-bar-buttons">
+                    {stuckRuns.filter(r => r.releasable).map(r => (
+                      <button key={r.runId} className="cancel-btn" disabled={releasingRun === r.runId} onClick={() => releaseStuckRun(r)}>
+                        {releasingRun === r.runId ? 'Releasing…' : `Release "${r.label}"`}
+                      </button>
+                    ))}
+                  </div>
+                )}
 
                 {/* Bolded, orange-underlined section headers (Ben's ask
                     2026-09-22) — General fields apply to the whole CO/invoice

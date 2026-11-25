@@ -20,6 +20,7 @@
 // anyone with the sidebar's URL bill.
 
 import { procoreRequest, flushRateCount, rateStatus } from './procore.js';
+import { releaseBillingRun } from './reservations.js';
 import { dbQuery } from './db.js';
 import {
   listPendingTickets, ticketDetail, generateInvoice, pushToDraftCO, previewBilling,
@@ -292,7 +293,7 @@ async function handleStreamingInvoiceExistingCoAction(env, body) {
 // the direct-cost one did: the param shape genuinely differs (both entry_ids
 // AND direct_cost_ids may be present together, plus group_by/rate_overrides
 // AND markup_percent may both matter on the same request).
-async function handleStreamingCombinedAction(env, body) {
+async function handleStreamingCombinedAction(env, body, ctx) {
   const {
     action, tenant_id, project_id, entry_ids, direct_cost_ids, direct_cost_line_ids, commitment_ids, commitment_line_ids, user_id,
     prime_contract_id, confirm_unlinked, group_by, rate_overrides, edited_tm_lines,
@@ -304,7 +305,7 @@ async function handleStreamingCombinedAction(env, body) {
     .some(a => Array.isArray(a) && a.length > 0);
   const { response, send, close } = ndjsonResponse(body);
 
-  (async () => {
+  const work = (async () => {
     try {
       if (!tenant_id || !project_id || !haveEntries) {
         throw new Error('tenant_id, project_id, and at least one T&M ticket, direct cost, or commitment are required');
@@ -339,11 +340,14 @@ async function handleStreamingCombinedAction(env, body) {
       });
       await send({ type: 'done', result });
     } catch (e) {
-      await send({ type: 'error', error: e.message, code: e.code, unlinkedCount: e.unlinkedCount, ticketNumbers: e.ticketNumbers });
+      await send({ type: 'error', error: e.message, code: e.code, unlinkedCount: e.unlinkedCount, ticketNumbers: e.ticketNumbers, runs: e.runs });
     } finally {
       await close();
     }
   })();
+  // If the browser drops mid-run, Cloudflare gives the run up to 30 more
+  // seconds instead of stopping it where it is (2026-11-23, 562949955461743).
+  ctx?.waitUntil?.(work);
 
   return response;
 }
@@ -882,12 +886,26 @@ async function handleAction(env, body, ctx) {
       });
       return json(preview, 200);
     } catch (e) {
-      return json({ error: e.message, code: e.code }, 400);
+      return json({ error: e.message, code: e.code, runs: e.runs }, 400);
     }
   }
 
   if (action === 'generate_combined_invoice' || action === 'push_combined_to_draft_co') {
-    return await handleStreamingCombinedAction(env, body);
+    return await handleStreamingCombinedAction(env, body, ctx);
+  }
+
+  // A failed or cut-off billing run's items stay blocked until a person has
+  // checked Procore and releases them (reservations.js). Needs write access.
+  if (action === 'release_billing_run') {
+    const { tenant_id, project_id, run_id } = body;
+    if (!tenant_id || !project_id || !/^[0-9a-f-]{36}$/i.test(String(run_id || ''))) {
+      return json({ error: 'tenant_id, project_id and run_id are required' }, 400);
+    }
+    try {
+      return json(await releaseBillingRun(env, { tenantId: tenant_id, projectId: project_id, runId: run_id, userId: body.user_id }), 200);
+    } catch (e) {
+      return json({ error: e.message }, 400);
+    }
   }
 
   return json({ error: `unknown action: ${action}` }, 400);
